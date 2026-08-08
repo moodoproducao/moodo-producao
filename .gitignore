@@ -1,0 +1,28 @@
+# dependências (não há nenhuma hoje — este é um app estático sem bundler —
+# mas mantido aqui como rede de segurança caso alguma ferramenta seja
+# adicionada no futuro)
+node_modules
+
+# build output (idem — não há passo de build hoje)
+dist
+
+# variáveis de ambiente / segredos — NUNCA versionar
+.env
+.env.local
+.env.*
+!.env.example
+
+# a configuração real do Supabase fica em js/supabase-config.js; o arquivo
+# em si é seguro de versionar (contém só as duas linhas em branco por
+# padrão — ver .env.example), mas se algum dia alguém colar uma chave
+# "service_role" nele por engano, esta linha impede o commit acidental.
+# Descomente se preferir manter supabase-config.js fora do repositório e
+# gerá-lo no deploy a partir das variáveis de ambiente da Vercel.
+# js/supabase-config.js
+
+# sistema operacional / editor
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/

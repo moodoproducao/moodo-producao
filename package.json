@@ -1,0 +1,10 @@
+{
+  "name": "moodo-producao",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Moodo Produção — sistema operacional de fábrica (HTML/CSS/JS estático, sem bundler).",
+  "scripts": {
+    "start": "npx --yes serve . -l 5173"
+  },
+  "license": "UNLICENSED"
+}
