@@ -85,7 +85,7 @@
     }).filter(Boolean).join(`<div style="width:12px;"></div>`);
 
     const board = etapasCols.map((e,i)=>`
-      <div class="column" ondragover="Act.allowDrop(event)" ondrop="Act.dropOnColumn(event,'${e.id}')">
+      <div class="column" ondragover="Act.allowDrop(event)" ondragenter="Act.columnDragEnter(event)" ondragleave="Act.columnDragLeave(event)" ondrop="Act.columnDragLeave(event);Act.dropOnColumn(event,'${e.id}')">
         <div class="column-head"><span class="name">${UI.esc(e.nomeCurto||e.nome)}</span><span class="count">${cols[i].length}</span></div>
         <div class="column-cards">${cols[i].join("")}</div>
       </div>

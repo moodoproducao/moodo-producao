@@ -137,11 +137,14 @@
 
       <div class="card pad">
         <div class="card-title">Fluxos padrão de pendência</div>
-        <p class="small muted" style="margin-bottom:10px;">O caminho operacional que cada categoria de pendência segue, do início até resolvida.</p>
+        <p class="small muted" style="margin-bottom:10px;">O caminho operacional que cada categoria de pendência segue, do início até resolvida. Editar aqui só afeta pendências novas — as que já estão em andamento mantêm o fluxo que tinham quando foram abertas.</p>
         ${Object.keys(fluxos).map(k=>`
-          <div style="margin-bottom:12px;">
-            <b class="small">${k.replace(/_/g," ")}</b>
-            <div class="small muted">${fluxos[k].join(" → ")}</div>
+          <div class="flex-between" style="margin-bottom:12px;align-items:flex-start;gap:10px;">
+            <div style="flex:1;min-width:0;">
+              <b class="small">${k.replace(/_/g," ")}</b>
+              <div class="small muted">${fluxos[k].join(" → ")}</div>
+            </div>
+            <button class="btn sm" style="flex-shrink:0;" onclick="Act.editarFluxoPadrao('${k}')">${UI.icon('edit',12)} Editar</button>
           </div>`).join("")}
       </div>`;
   }
@@ -253,6 +256,34 @@
         </div>
         <div class="modal-foot"><button type="button" class="btn" data-close>Cancelar</button><button class="btn primary" type="submit">Mover</button></div>
       </form>`;
+  };
+
+  // ---------- editor de fluxo padrão de pendência (item 12) ----------
+  // Trabalha em cima de um rascunho (M.UIState.fluxoDraft) que só vira de
+  // verdade no Store quando a pessoa clica em Salvar — cada clique em
+  // adicionar/mover/excluir passo só reabre o modal com o rascunho atualizado.
+  M.Pages.fluxoPadraoFormHtml = function(){
+    const draft = M.UIState.fluxoDraft;
+    if(!draft) return "";
+    const passos = draft.passos;
+    return `
+      <div class="modal-head"><h2>Fluxo padrão — ${UI.esc(draft.tipo.replace(/_/g," "))}</h2><button class="modal-close" data-close>✕</button></div>
+      <div class="modal-body">
+        <p class="small muted" style="margin-bottom:12px;">Esses são os passos que uma pendência nova dessa categoria segue, na ordem. Não afeta pendências já abertas.</p>
+        ${passos.map((p,i)=>`
+          <div class="flex-gap" style="margin-bottom:8px;align-items:center;">
+            <span class="small muted" style="width:18px;flex-shrink:0;">${i+1}.</span>
+            <input value="${UI.esc(p)}" style="flex:1;" oninput="Act.editarPassoFluxo(${i}, this.value)">
+            <button class="btn sm" ${i===0?'disabled':''} onclick="Act.moverPassoFluxo(${i},-1)" title="Mover para cima">${UI.icon('chevron-up',12)}</button>
+            <button class="btn sm" ${i===passos.length-1?'disabled':''} onclick="Act.moverPassoFluxo(${i},1)" title="Mover para baixo">${UI.icon('chevron-down',12)}</button>
+            <button class="btn sm danger" ${passos.length<=1?'disabled':''} onclick="Act.excluirPassoFluxo(${i})" title="Excluir passo">${UI.icon('trash',12)}</button>
+          </div>`).join("")}
+        <button class="btn sm" style="margin-top:6px;" onclick="Act.adicionarPassoFluxo()">${UI.icon('plus',12)} Adicionar passo</button>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" data-close onclick="Act.cancelarEdicaoFluxo()">Cancelar</button>
+        <button class="btn primary" onclick="Act.salvarFluxoPadrao()">Salvar fluxo</button>
+      </div>`;
   };
 
   function secIndicadores(){

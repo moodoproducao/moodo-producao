@@ -1,0 +1,251 @@
+From 23b2db56302744c81516adbd5be09ef4c1304e14 Mon Sep 17 00:00:00 2001
+From: Paulo Henrique <mdamoveis@gmail.com>
+Date: Sun, 9 Aug 2026 12:01:35 +0000
+Subject: [PATCH] Item 11 + item 12: drag-and-drop confirmado no Kanban +
+ editor de fluxo de pendencia
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Item 11 (Kanban):
+- Soltar um cartao numa coluna nao efetiva mais a mudanca na hora — abre
+  confirmacao ("Mover X de Y para Z?") antes de chamar moverEtapa. Depois
+  de confirmar, a checagem normal de requisitos/liberacao excepcional roda
+  igual antes.
+- Realce visual da coluna-alvo durante o arrasto (drag-over), com limpeza
+  de seguranca no dragEnd caso o arrasto seja cancelado.
+- Soltar na mesma coluna e' no-op (sem confirmar, sem mexer em nada).
+
+Item 12 (fluxo de pendencia):
+- Configuracoes -> Processos -> Fluxos padrao de pendencia agora tem botao
+  Editar por categoria, abrindo um editor com adicionar/reordenar/excluir
+  passo e edicao de texto inline.
+- Edicao trabalha num rascunho isolado (M.UIState.fluxoDraft) — so grava
+  no Store.setFluxoPadrao ao clicar Salvar. Confirmado que pendencias ja
+  abertas guardam sua propria copia de fluxoPassos e nao sao afetadas.
+
+Bump APP_VERSION/CACHE_NAME 2.1.0 -> 2.2.0.
+
+Testado com node --check e Playwright (drag simulado + confirmacao,
+edicao completa do fluxo via clique real no DOM, cancelar limpa o
+rascunho) — sem erros de console.
+---
+ css/styles.css            |  3 +-
+ js/actions.js             | 68 +++++++++++++++++++++++++++++++++++++--
+ js/main.js                |  2 +-
+ js/pages/configuracoes.js | 39 +++++++++++++++++++---
+ js/pages/producao.js      |  2 +-
+ service-worker.js         |  2 +-
+ 6 files changed, 106 insertions(+), 10 deletions(-)
+
+diff --git a/css/styles.css b/css/styles.css
+index 15a6599..e3a72ff 100644
+--- a/css/styles.css
++++ b/css/styles.css
+@@ -249,7 +249,8 @@ table.tbl tr:hover td{ background:var(--surface-alt); }
+ /* ============ kanban ============ */
+ .board-wrap{ overflow-x:auto; padding-bottom:12px; }
+ .board{ display:flex; gap:12px; min-width:max-content; align-items:flex-start;}
+-.column{ width:242px; flex:0 0 242px; background:var(--surface-alt); border:1px solid var(--border); border-radius:var(--radius); padding:10px; display:flex; flex-direction:column;}
++.column{ width:242px; flex:0 0 242px; background:var(--surface-alt); border:1px solid var(--border); border-radius:var(--radius); padding:10px; display:flex; flex-direction:column; transition:background .1s, border-color .1s;}
++.column.drag-over{ background:var(--brand-wash); border-color:var(--brand); border-style:dashed; }
+ .column-head{ display:flex; align-items:center; justify-content:space-between; padding:2px 4px 10px;}
+ .column-head .name{ font-size:11.5px; font-weight:800; text-transform:uppercase; letter-spacing:.02em;}
+ .column-head .count{ font-size:10.5px; color:var(--ink-mute); background:var(--surface); border:1px solid var(--border); border-radius:20px; padding:1px 7px;}
+diff --git a/js/actions.js b/js/actions.js
+index 5e8bf18..fdbe5cb 100644
+--- a/js/actions.js
++++ b/js/actions.js
+@@ -23,6 +23,7 @@
+     assistFiltro: {status:""},
+     assistExpandido: null,
+     tvWidgets: null, // preenchido a partir de M.Store.state se necessário
++    fluxoDraft: null, // {tipo, passos:[]} — rascunho em edição do editor de fluxo padrão de pendência (item 12)
+   };
+ 
+   // ---------- upload de arquivos/fotos (Supabase Storage) ----------
+@@ -109,12 +110,35 @@
+     // ---------- kanban ----------
+     setKanbanView(v){ M.UIState.kanbanView = v; Act.rerender(); },
+     dragStart(ev, movelId){ ev.dataTransfer.setData("text/plain", movelId); ev.target.classList.add("dragging"); },
+-    dragEnd(ev){ ev.target.classList.remove("dragging"); },
++    dragEnd(ev){
++      ev.target.classList.remove("dragging");
++      // rede de segurança: se o drag foi cancelado (ex.: Esc) em cima de uma
++      // coluna, garante que nenhum destaque "drag-over" fique preso na tela.
++      document.querySelectorAll(".column.drag-over").forEach(c=>c.classList.remove("drag-over"));
++    },
+     allowDrop(ev){ ev.preventDefault(); },
++    // feedback visual de onde o cartão vai cair — sem isto, arrastar num board
++    // de várias colunas fica "cego" (não dá pra saber se soltar ali vai contar).
++    columnDragEnter(ev){ ev.preventDefault(); ev.currentTarget.classList.add("drag-over"); },
++    columnDragLeave(ev){ ev.currentTarget.classList.remove("drag-over"); },
++    // CORREÇÃO/melhoria (item 11 da lista): antes, soltar o cartão numa coluna
++    // já efetivava a mudança de etapa na hora — um deslize sem querer no drag
++    // já bastava pra mexer na produção de verdade. Agora solta = pedido, não
++    // efetivação: sempre pede confirmação antes de chamar Store.moverEtapa
++    // (a checagem de requisitos/liberação excepcional continua rodando normal
++    // depois que a pessoa confirma, dentro de tentarMoverEtapa).
+     dropOnColumn(ev, etapaId){
+       ev.preventDefault();
+       const movelId = ev.dataTransfer.getData("text/plain");
+-      Act.tentarMoverEtapa(movelId, etapaId);
++      const f = M.Store.findMovel(movelId); if(!f) return;
++      if(f.m.etapa===etapaId) return; // soltou na mesma coluna: nada a fazer
++      const etapaDestino = M.Store.etapaById(etapaId);
++      const etapaAtual = M.Store.etapaById(f.m.etapa);
++      const indoParaFrente = M.Store.posicaoEtapa(etapaId) > M.Store.posicaoEtapa(f.m.etapa);
++      UI.confirm(
++        `Mover "${f.m.nome}" de "${etapaAtual.nome}" para "${etapaDestino.nome}"${indoParaFrente?'':' (voltar etapa)'}?`,
++        ()=> Act.tentarMoverEtapa(movelId, etapaId)
++      );
+     },
+     moveStageBtn(movelId, delta){
+       const f = M.Store.findMovel(movelId); if(!f) return;
+@@ -575,6 +599,46 @@
+         M.Store.excluirTarefaPadrao(etapaId, tarefaPadraoId); UI.toast("Tarefa padrão removida.");
+       });
+     },
++
++    // ---------- editor de fluxo padrão de pendência (item 12) ----------
++    editarFluxoPadrao(tipo){
++      const atual = M.Store.state.fluxosPadrao[tipo] || [];
++      M.UIState.fluxoDraft = { tipo, passos: atual.slice() }; // rascunho isolado — não mexe no Store até Salvar
++      UI.openModal(M.Pages.fluxoPadraoFormHtml());
++    },
++    // digitar num passo não precisa reabrir o modal (perderia o foco/cursor) —
++    // só atualiza o rascunho em memória; o valor já aparece no próprio input.
++    editarPassoFluxo(idx, valor){
++      if(!M.UIState.fluxoDraft) return;
++      M.UIState.fluxoDraft.passos[idx] = valor;
++    },
++    moverPassoFluxo(idx, delta){
++      const d = M.UIState.fluxoDraft; if(!d) return;
++      const novo = idx+delta; if(novo<0 || novo>=d.passos.length) return;
++      const [item] = d.passos.splice(idx,1);
++      d.passos.splice(novo,0,item);
++      UI.openModal(M.Pages.fluxoPadraoFormHtml());
++    },
++    excluirPassoFluxo(idx){
++      const d = M.UIState.fluxoDraft; if(!d || d.passos.length<=1) return;
++      d.passos.splice(idx,1);
++      UI.openModal(M.Pages.fluxoPadraoFormHtml());
++    },
++    adicionarPassoFluxo(){
++      const d = M.UIState.fluxoDraft; if(!d) return;
++      d.passos.push("Novo passo");
++      UI.openModal(M.Pages.fluxoPadraoFormHtml());
++    },
++    cancelarEdicaoFluxo(){ M.UIState.fluxoDraft = null; },
++    salvarFluxoPadrao(){
++      const d = M.UIState.fluxoDraft; if(!d) return;
++      const passos = d.passos.map(p=>(p||"").trim()).filter(Boolean);
++      if(!passos.length){ UI.toast("O fluxo precisa ter pelo menos um passo."); return; }
++      M.Store.setFluxoPadrao(d.tipo, passos);
++      M.UIState.fluxoDraft = null;
++      UI.closeModal();
++      UI.toast("Fluxo padrão atualizado — pendências novas dessa categoria já seguem o novo caminho.");
++    },
+   };
+ 
+   M.Act = Act;
+diff --git a/js/main.js b/js/main.js
+index 1aed92b..de8edae 100644
+--- a/js/main.js
++++ b/js/main.js
+@@ -5,7 +5,7 @@
+   "use strict";
+   const M = window.M;
+   const UI = M.UI;
+-  const APP_VERSION = "2.1.0";
++  const APP_VERSION = "2.2.0";
+ 
+   function usuarioAtualColab(){
+     return M.colabByNome(M.Store.state.usuarioAtual) || M.COLABORADORES[9];
+diff --git a/js/pages/configuracoes.js b/js/pages/configuracoes.js
+index c683892..7f751aa 100644
+--- a/js/pages/configuracoes.js
++++ b/js/pages/configuracoes.js
+@@ -137,11 +137,14 @@
+ 
+       <div class="card pad">
+         <div class="card-title">Fluxos padrão de pendência</div>
+-        <p class="small muted" style="margin-bottom:10px;">O caminho operacional que cada categoria de pendência segue, do início até resolvida.</p>
++        <p class="small muted" style="margin-bottom:10px;">O caminho operacional que cada categoria de pendência segue, do início até resolvida. Editar aqui só afeta pendências novas — as que já estão em andamento mantêm o fluxo que tinham quando foram abertas.</p>
+         ${Object.keys(fluxos).map(k=>`
+-          <div style="margin-bottom:12px;">
+-            <b class="small">${k.replace(/_/g," ")}</b>
+-            <div class="small muted">${fluxos[k].join(" → ")}</div>
++          <div class="flex-between" style="margin-bottom:12px;align-items:flex-start;gap:10px;">
++            <div style="flex:1;min-width:0;">
++              <b class="small">${k.replace(/_/g," ")}</b>
++              <div class="small muted">${fluxos[k].join(" → ")}</div>
++            </div>
++            <button class="btn sm" style="flex-shrink:0;" onclick="Act.editarFluxoPadrao('${k}')">${UI.icon('edit',12)} Editar</button>
+           </div>`).join("")}
+       </div>`;
+   }
+@@ -255,6 +258,34 @@
+       </form>`;
+   };
+ 
++  // ---------- editor de fluxo padrão de pendência (item 12) ----------
++  // Trabalha em cima de um rascunho (M.UIState.fluxoDraft) que só vira de
++  // verdade no Store quando a pessoa clica em Salvar — cada clique em
++  // adicionar/mover/excluir passo só reabre o modal com o rascunho atualizado.
++  M.Pages.fluxoPadraoFormHtml = function(){
++    const draft = M.UIState.fluxoDraft;
++    if(!draft) return "";
++    const passos = draft.passos;
++    return `
++      <div class="modal-head"><h2>Fluxo padrão — ${UI.esc(draft.tipo.replace(/_/g," "))}</h2><button class="modal-close" data-close>✕</button></div>
++      <div class="modal-body">
++        <p class="small muted" style="margin-bottom:12px;">Esses são os passos que uma pendência nova dessa categoria segue, na ordem. Não afeta pendências já abertas.</p>
++        ${passos.map((p,i)=>`
++          <div class="flex-gap" style="margin-bottom:8px;align-items:center;">
++            <span class="small muted" style="width:18px;flex-shrink:0;">${i+1}.</span>
++            <input value="${UI.esc(p)}" style="flex:1;" oninput="Act.editarPassoFluxo(${i}, this.value)">
++            <button class="btn sm" ${i===0?'disabled':''} onclick="Act.moverPassoFluxo(${i},-1)" title="Mover para cima">${UI.icon('chevron-up',12)}</button>
++            <button class="btn sm" ${i===passos.length-1?'disabled':''} onclick="Act.moverPassoFluxo(${i},1)" title="Mover para baixo">${UI.icon('chevron-down',12)}</button>
++            <button class="btn sm danger" ${passos.length<=1?'disabled':''} onclick="Act.excluirPassoFluxo(${i})" title="Excluir passo">${UI.icon('trash',12)}</button>
++          </div>`).join("")}
++        <button class="btn sm" style="margin-top:6px;" onclick="Act.adicionarPassoFluxo()">${UI.icon('plus',12)} Adicionar passo</button>
++      </div>
++      <div class="modal-foot">
++        <button class="btn" data-close onclick="Act.cancelarEdicaoFluxo()">Cancelar</button>
++        <button class="btn primary" onclick="Act.salvarFluxoPadrao()">Salvar fluxo</button>
++      </div>`;
++  };
++
+   function secIndicadores(){
+     const etapas = M.Store.etapasOrdenadas();
+     const somaPesoEtapas = etapas.reduce((s,e)=>s+(e.pesoValorProcessado||0),0);
+diff --git a/js/pages/producao.js b/js/pages/producao.js
+index d9e7dd5..ba78fb7 100644
+--- a/js/pages/producao.js
++++ b/js/pages/producao.js
+@@ -85,7 +85,7 @@
+     }).filter(Boolean).join(`<div style="width:12px;"></div>`);
+ 
+     const board = etapasCols.map((e,i)=>`
+-      <div class="column" ondragover="Act.allowDrop(event)" ondrop="Act.dropOnColumn(event,'${e.id}')">
++      <div class="column" ondragover="Act.allowDrop(event)" ondragenter="Act.columnDragEnter(event)" ondragleave="Act.columnDragLeave(event)" ondrop="Act.columnDragLeave(event);Act.dropOnColumn(event,'${e.id}')">
+         <div class="column-head"><span class="name">${UI.esc(e.nomeCurto||e.nome)}</span><span class="count">${cols[i].length}</span></div>
+         <div class="column-cards">${cols[i].join("")}</div>
+       </div>
+diff --git a/service-worker.js b/service-worker.js
+index 70b01f8..ee4cd51 100644
+--- a/service-worker.js
++++ b/service-worker.js
+@@ -5,7 +5,7 @@
+    evolução futura — aqui o objetivo é permitir abrir o app e ver a
+    última tela mesmo sem internet, e sinalizar quando há versão nova.
+    ============================================================ */
+-const CACHE_NAME = "moodo-producao-v2.1.0";
++const CACHE_NAME = "moodo-producao-v2.2.0";
+ const SHELL_FILES = [
+   "./",
+   "./index.html",
+-- 
+2.43.0
+

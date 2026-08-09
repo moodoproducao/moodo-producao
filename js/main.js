@@ -5,7 +5,7 @@
   "use strict";
   const M = window.M;
   const UI = M.UI;
-  const APP_VERSION = "2.1.0";
+  const APP_VERSION = "2.2.0";
 
   function usuarioAtualColab(){
     return M.colabByNome(M.Store.state.usuarioAtual) || M.COLABORADORES[9];

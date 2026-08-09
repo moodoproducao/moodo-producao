@@ -23,6 +23,7 @@
     assistFiltro: {status:""},
     assistExpandido: null,
     tvWidgets: null, // preenchido a partir de M.Store.state se necessário
+    fluxoDraft: null, // {tipo, passos:[]} — rascunho em edição do editor de fluxo padrão de pendência (item 12)
   };
 
   // ---------- upload de arquivos/fotos (Supabase Storage) ----------
@@ -109,12 +110,35 @@
     // ---------- kanban ----------
     setKanbanView(v){ M.UIState.kanbanView = v; Act.rerender(); },
     dragStart(ev, movelId){ ev.dataTransfer.setData("text/plain", movelId); ev.target.classList.add("dragging"); },
-    dragEnd(ev){ ev.target.classList.remove("dragging"); },
+    dragEnd(ev){
+      ev.target.classList.remove("dragging");
+      // rede de segurança: se o drag foi cancelado (ex.: Esc) em cima de uma
+      // coluna, garante que nenhum destaque "drag-over" fique preso na tela.
+      document.querySelectorAll(".column.drag-over").forEach(c=>c.classList.remove("drag-over"));
+    },
     allowDrop(ev){ ev.preventDefault(); },
+    // feedback visual de onde o cartão vai cair — sem isto, arrastar num board
+    // de várias colunas fica "cego" (não dá pra saber se soltar ali vai contar).
+    columnDragEnter(ev){ ev.preventDefault(); ev.currentTarget.classList.add("drag-over"); },
+    columnDragLeave(ev){ ev.currentTarget.classList.remove("drag-over"); },
+    // CORREÇÃO/melhoria (item 11 da lista): antes, soltar o cartão numa coluna
+    // já efetivava a mudança de etapa na hora — um deslize sem querer no drag
+    // já bastava pra mexer na produção de verdade. Agora solta = pedido, não
+    // efetivação: sempre pede confirmação antes de chamar Store.moverEtapa
+    // (a checagem de requisitos/liberação excepcional continua rodando normal
+    // depois que a pessoa confirma, dentro de tentarMoverEtapa).
     dropOnColumn(ev, etapaId){
       ev.preventDefault();
       const movelId = ev.dataTransfer.getData("text/plain");
-      Act.tentarMoverEtapa(movelId, etapaId);
+      const f = M.Store.findMovel(movelId); if(!f) return;
+      if(f.m.etapa===etapaId) return; // soltou na mesma coluna: nada a fazer
+      const etapaDestino = M.Store.etapaById(etapaId);
+      const etapaAtual = M.Store.etapaById(f.m.etapa);
+      const indoParaFrente = M.Store.posicaoEtapa(etapaId) > M.Store.posicaoEtapa(f.m.etapa);
+      UI.confirm(
+        `Mover "${f.m.nome}" de "${etapaAtual.nome}" para "${etapaDestino.nome}"${indoParaFrente?'':' (voltar etapa)'}?`,
+        ()=> Act.tentarMoverEtapa(movelId, etapaId)
+      );
     },
     moveStageBtn(movelId, delta){
       const f = M.Store.findMovel(movelId); if(!f) return;
@@ -574,6 +598,46 @@
       UI.confirm("Excluir esta tarefa padrão da biblioteca?", ()=>{
         M.Store.excluirTarefaPadrao(etapaId, tarefaPadraoId); UI.toast("Tarefa padrão removida.");
       });
+    },
+
+    // ---------- editor de fluxo padrão de pendência (item 12) ----------
+    editarFluxoPadrao(tipo){
+      const atual = M.Store.state.fluxosPadrao[tipo] || [];
+      M.UIState.fluxoDraft = { tipo, passos: atual.slice() }; // rascunho isolado — não mexe no Store até Salvar
+      UI.openModal(M.Pages.fluxoPadraoFormHtml());
+    },
+    // digitar num passo não precisa reabrir o modal (perderia o foco/cursor) —
+    // só atualiza o rascunho em memória; o valor já aparece no próprio input.
+    editarPassoFluxo(idx, valor){
+      if(!M.UIState.fluxoDraft) return;
+      M.UIState.fluxoDraft.passos[idx] = valor;
+    },
+    moverPassoFluxo(idx, delta){
+      const d = M.UIState.fluxoDraft; if(!d) return;
+      const novo = idx+delta; if(novo<0 || novo>=d.passos.length) return;
+      const [item] = d.passos.splice(idx,1);
+      d.passos.splice(novo,0,item);
+      UI.openModal(M.Pages.fluxoPadraoFormHtml());
+    },
+    excluirPassoFluxo(idx){
+      const d = M.UIState.fluxoDraft; if(!d || d.passos.length<=1) return;
+      d.passos.splice(idx,1);
+      UI.openModal(M.Pages.fluxoPadraoFormHtml());
+    },
+    adicionarPassoFluxo(){
+      const d = M.UIState.fluxoDraft; if(!d) return;
+      d.passos.push("Novo passo");
+      UI.openModal(M.Pages.fluxoPadraoFormHtml());
+    },
+    cancelarEdicaoFluxo(){ M.UIState.fluxoDraft = null; },
+    salvarFluxoPadrao(){
+      const d = M.UIState.fluxoDraft; if(!d) return;
+      const passos = d.passos.map(p=>(p||"").trim()).filter(Boolean);
+      if(!passos.length){ UI.toast("O fluxo precisa ter pelo menos um passo."); return; }
+      M.Store.setFluxoPadrao(d.tipo, passos);
+      M.UIState.fluxoDraft = null;
+      UI.closeModal();
+      UI.toast("Fluxo padrão atualizado — pendências novas dessa categoria já seguem o novo caminho.");
     },
   };
 
