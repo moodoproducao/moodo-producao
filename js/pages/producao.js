@@ -10,7 +10,11 @@
     const bloq = m.bloqueio;
     const dias = C.diasDesde(m.dataEntradaEtapa);
     const check = M.Store.checarRequisitos(m);
-    const done = m.checklist.filter(c=>c.concluido).length;
+    // item 9 do backlog: checklist de componentes virou Tarefa — a barrinha de
+    // progresso do cartão agora conta as tarefas reais do móvel, não mais um
+    // checklist separado.
+    const tarefasDoMovel = M.Store.state.tarefas.filter(t=>t.movelId===m.id);
+    const done = tarefasDoMovel.filter(t=>t.status==="CONCLUIDA").length;
     const ressalva = !!m.ressalvaAberta;
     return `<div class="kcard" draggable="true"
         ondragstart="Act.dragStart(event,'${m.id}')" ondragend="Act.dragEnd(event)"
@@ -18,8 +22,8 @@
       <div class="kproj"><span>${UI.esc(o.cliente)}</span><span>${UI.esc(a.nome)}</span></div>
       <div class="ktitle">${UI.esc(m.nome)}</div>
       <div class="krow">${UI.person(m.responsavel)}${UI.stageDaysChip(dias)}</div>
-      ${m.checklist.length? `<div style="margin-top:7px;">${UI.progressBar(done/m.checklist.length*100)}</div>
-      <div class="small muted" style="margin-top:3px;">${done}/${m.checklist.length} itens do checklist</div>`:""}
+      ${tarefasDoMovel.length? `<div style="margin-top:7px;">${UI.progressBar(done/tarefasDoMovel.length*100)}</div>
+      <div class="small muted" style="margin-top:3px;">${done}/${tarefasDoMovel.length} tarefas concluídas</div>`:""}
       ${ressalva? `<div class="kblocked" style="color:var(--warning);background:var(--warning-bg);">${UI.icon('alert',11)} avançou com ressalva</div>`:""}
       ${!check.liberado && !ressalva? `<div class="kblocked">${UI.icon('lock',11)} requisito pendente p/ avançar</div>`:""}
       ${bloq? `<div class="kblocked">${UI.icon('clock',11)} ${UI.esc(bloq.categoria)}</div>`:""}
@@ -124,11 +128,18 @@
   M.Pages.movelModalHtml = function(f){
     const {o,a,m} = f;
     const check = M.Store.checarRequisitos(m);
-    const checklistHtml = m.checklist.map(c=>`
-      <div class="check-row ${c.concluido?'done':''}">
-        <input type="checkbox" ${c.concluido?'checked':''} onchange="Act.toggleChecklist('${m.id}','${c.id}')">
-        <span class="label">${UI.esc(c.nome)}</span>
-      </div>`).join("") || `<p class="small muted">Nenhum item de checklist cadastrado.</p>`;
+    // item 9 do backlog de melhorias: aqui era um checklist de checkbox isolado
+    // (sem Iniciar/Concluir, sem aparecer em Tarefas). Agora mostra as tarefas
+    // de verdade do móvel — mesmo botão Iniciar/Concluir de qualquer tarefa,
+    // em qualquer tela do app.
+    const tarefasDoMovel = M.Store.state.tarefas.filter(t=>t.movelId===m.id)
+      .sort((x,y)=> (x.status==="EM_ANDAMENTO"?0:x.status==="PLANEJADA"?1:2) - (y.status==="EM_ANDAMENTO"?0:y.status==="PLANEJADA"?1:2));
+    const tarefasHtml = tarefasDoMovel.length ? tarefasDoMovel.map(t=>`
+      <div class="check-row ${t.status==='CONCLUIDA'?'done':''}" style="cursor:pointer;" onclick="Act.abrirDetalheTarefa('${t.id}')">
+        <span class="dot ${t.status==='CONCLUIDA'?'good':t.status==='EM_ANDAMENTO'?'warning':'neutral'}"></span>
+        <span class="label" style="flex:1;">${UI.esc(t.titulo)} ${UI.tarefaStatusChip(t.status)}</span>
+        <span onclick="event.stopPropagation()">${UI.tarefaAcoesHtml(t, m.id)}</span>
+      </div>`).join("") : `<p class="small muted">Nenhuma tarefa cadastrada para este móvel ainda.</p>`;
 
     const compHtml = m.componentesCriticos.map(c=>`
       <div class="check-row">
@@ -174,12 +185,16 @@
           <div style="margin-top:6px;"><button class="btn sm" onclick="Act.resolverRessalva('${m.id}')">${UI.icon('check',12)} Marcar itens pendentes como resolvidos</button></div>
         </div>` : ""}
 
-        <label style="font-size:11.5px;font-weight:700;color:var(--ink-soft);">Checklist de componentes</label>
-        <div style="margin:6px 0 14px;">${checklistHtml}</div>
+        <div class="flex-between" style="margin-bottom:4px;">
+          <label style="font-size:11.5px;font-weight:700;color:var(--ink-soft);">Tarefas do móvel</label>
+          <button class="btn sm" onclick="Act.openTarefaForm('${o.id}')">${UI.icon('plus',12)} tarefa</button>
+        </div>
+        <div style="margin:6px 0 14px;">${tarefasHtml}</div>
 
         ${compHtml? `<label style="font-size:11.5px;font-weight:700;color:var(--ink-soft);">Componentes críticos / exceções</label><div style="margin:6px 0 14px;">${compHtml}</div>`:""}
 
         <label style="font-size:11.5px;font-weight:700;color:var(--ink-soft);">Requisitos da etapa "${UI.esc(M.Store.etapaById(m.etapa).nome)}"</label>
+        <p class="small muted" style="margin:2px 0 6px;">São condições pra liberar a etapa (material disponível, aprovação etc.) — clique no chip pra marcar como atendido/pendente. Não é uma tarefa.</p>
         <div style="margin:6px 0 4px;">${reqHtml}</div>
       </div>
       <div class="modal-foot" style="justify-content:space-between;">

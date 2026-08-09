@@ -147,8 +147,10 @@
           if(c.status==="REFACAO") itens.push(`Refazer "${c.nome}" de "${m.nome}" (retrabalho)`);
         });
         if(!movelConcluido(m) && !m.bloqueio){
-          const missing = m.checklist.filter(c=>!c.concluido);
-          if(missing.length) itens.push(`Concluir em "${m.nome}": ${missing.map(x=>x.nome).join(", ")}`);
+          // checklist de componentes virou Tarefa (item 9) — o que falta aqui
+          // agora é olhar as tarefas do móvel ainda não concluídas.
+          const missing = M.Store.state.tarefas.filter(t=>t.movelId===m.id && t.status!=="CONCLUIDA");
+          if(missing.length) itens.push(`Concluir em "${m.nome}": ${missing.map(x=>x.titulo).join(", ")}`);
         }
         // "concluída com pendências" continua aparecendo aqui até alguém
         // resolver de verdade — encerrar a montagem não some com a pendência.

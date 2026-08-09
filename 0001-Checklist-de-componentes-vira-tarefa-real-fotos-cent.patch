@@ -1,0 +1,540 @@
+From 4425459b9ea050f51a10ed12e1ac14edb972761d Mon Sep 17 00:00:00 2001
+From: Paulo Henrique <mdamoveis@gmail.com>
+Date: Sun, 9 Aug 2026 12:56:40 +0000
+Subject: [PATCH] Checklist de componentes vira tarefa real + fotos
+ centralizadas na obra
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Checklist de componentes do móvel (Corpo MDF, Ferragens, materiais
+  especiais) deixa de ser uma lista de checkbox isolada e passa a ser
+  Tarefa de verdade, com o mesmo Iniciar/Concluir de qualquer tarefa —
+  visível no modal do móvel, em Tarefas geral e na aba Tarefas da obra.
+  Migração automática converte o checklist de obras já existentes
+  (inclusive as já marcadas como concluídas) sem perder nada.
+- Modal do móvel agora mostra as tarefas de verdade em vez do checklist
+  desconectado — resolve a confusão de clicar 'Iniciar' numa etapa
+  (ex: Medição em campo, Gerar plano de corte) e nada acontecer: esses
+  itens não apareciam ali antes, só os requisitos/checklist separados.
+  Requisitos da etapa continuam como estavam (pré-condição, não tarefa),
+  agora com uma frase explicando a diferença.
+- Botão Iniciar/Concluir de tarefa centralizado num único helper
+  (UI.tarefaAcoesHtml), usado em Tarefas geral, aba Tarefas da obra e no
+  modal do móvel — evita as 3 versões divergindo entre si.
+- Tarefas geral ganha filtro por obra; aba Tarefas da obra ganha atalho
+  'Ver em Tarefas geral' já filtrado.
+- Fotos de pendência agora aparecem direto na aba Pendências da obra
+  (antes só na tela geral de Pendências); aba Arquivos da obra reúne
+  todas as fotos (pendências, tarefas, assistências) num só lugar,
+  inclusive de itens já resolvidos/concluídos.
+
+Testado com Playwright: migração de checklist antigo, Iniciar/Concluir
+dentro do modal do móvel (com volta pro mesmo modal atualizado), avanço
+de etapa não bloqueado por tarefa de checklist (comportamento antigo
+preservado), filtro de obra em Tarefas, galeria de fotos em Pendências
+e Arquivos, e regressão completa dos testes de permissão/rota do lote
+anterior. node --check limpo em todos os arquivos alterados.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013KosEJZQn2LJLEwqimExYG
+---
+ js/actions.js          | 36 ++++++++++++++---------
+ js/calc.js             |  6 ++--
+ js/main.js             |  2 +-
+ js/pages/novaObra.js   |  6 +++-
+ js/pages/obraDetail.js | 47 ++++++++++++++++++++++++------
+ js/pages/producao.js   | 35 +++++++++++++++-------
+ js/pages/tarefas.js    | 17 +++++++----
+ js/store.js            | 66 +++++++++++++++++++++++++++++++++++++-----
+ js/ui.js               | 14 ++++++++-
+ service-worker.js      |  2 +-
+ 10 files changed, 180 insertions(+), 51 deletions(-)
+
+diff --git a/js/actions.js b/js/actions.js
+index 2229315..d362f16 100644
+--- a/js/actions.js
++++ b/js/actions.js
+@@ -14,7 +14,7 @@
+     novaObra: {osFile:null, orcFile:null, lido:false, ambientesAjuste:{}},
+     pendFiltro: {categoria:"", status:""},
+     pendExpandido: null,
+-    tarefaFiltro: {responsavel:"", status:""},
++    tarefaFiltro: {responsavel:"", status:"", obraId:""},
+     calMonth: M.TODAY.getMonth(), calYear: M.TODAY.getFullYear(),
+     calFiltros: new Set(["PRODUCAO","ENTREGAS","MONTAGENS","PENDENCIAS","FORNECEDORES","ASSISTENCIAS"]),
+     desempenhoSel: null,
+@@ -103,8 +103,7 @@
+       }catch(err){ UI.toast("Erro ao reativar: "+(err.message||"tente de novo")); }
+     },
+ 
+-    // ---------- checklist / responsável ----------
+-    toggleChecklist(movelId, itemId){ M.Store.toggleChecklistItem(movelId, itemId); },
++    // ---------- responsável ----------
+     setResponsavel(movelId, sel){ M.Store.setResponsavel(movelId, sel.value); UI.toast("Responsável atualizado."); },
+ 
+     // ---------- kanban ----------
+@@ -278,13 +277,19 @@
+         UI.closeModal();
+       });
+     },
+-    abrirDetalheTarefa(id){
++    abrirDetalheTarefa(id, voltarMovelId){
+       const t = M.Store.state.tarefas.find(x=>x.id===id); if(!t) return;
+-      UI.openModal(M.Pages.tarefaDetalheModalHtml(t));
+-    },
+-    iniciarTarefa(id){ M.Store.iniciarTarefa(id); UI.toast("Tarefa iniciada."); },
++      UI.openModal(M.Pages.tarefaDetalheModalHtml(t, voltarMovelId));
++    },
++    // voltarMovelId (opcional): quando a tarefa é aberta/concluída de dentro do
++    // modal do móvel (checklist de componentes virou tarefa — item 9), depois da
++    // ação a gente volta pro MESMO modal do móvel atualizado, em vez de fechar
++    // tudo — o modal do móvel não se re-renderiza sozinho quando o estado muda
++    // (é um overlay à parte do resto da tela), então precisa disto explicitamente.
++    _voltar(voltarMovelId){ voltarMovelId ? Act.openMovel(voltarMovelId, true) : UI.closeModal(); },
++    iniciarTarefa(id, voltarMovelId){ M.Store.iniciarTarefa(id); UI.toast("Tarefa iniciada."); Act._voltar(voltarMovelId); },
+     pausarTarefa(id){ M.Store.pausarTarefa(id); UI.toast("Tarefa pausada."); },
+-    pedirResultado(id){
++    pedirResultado(id, voltarMovelId){
+       const t = M.Store.state.tarefas.find(x=>x.id===id);
+       UI.openModal(`
+         <div class="modal-head"><h2>Concluir tarefa</h2><button class="modal-close" data-close>✕</button></div>
+@@ -297,11 +302,11 @@
+           </div>
+         </div>
+       `);
+-      document.getElementById("rOk").addEventListener("click", ()=>{ M.Store.concluirTarefa(id,"OK"); UI.closeModal(); UI.toast("Tarefa concluída."); });
+-      document.getElementById("rRessalva").addEventListener("click", ()=>{ M.Store.concluirTarefa(id,"COM_RESSALVA"); UI.closeModal(); UI.toast("Tarefa concluída com ressalva."); });
+-      document.getElementById("rRefacao").addEventListener("click", ()=> Act.reportarProblema(id));
++      document.getElementById("rOk").addEventListener("click", ()=>{ M.Store.concluirTarefa(id,"OK"); Act._voltar(voltarMovelId); UI.toast("Tarefa concluída."); });
++      document.getElementById("rRessalva").addEventListener("click", ()=>{ M.Store.concluirTarefa(id,"COM_RESSALVA"); Act._voltar(voltarMovelId); UI.toast("Tarefa concluída com ressalva."); });
++      document.getElementById("rRefacao").addEventListener("click", ()=> Act.reportarProblema(id, voltarMovelId));
+     },
+-    reportarProblema(tarefaId){
++    reportarProblema(tarefaId, voltarMovelId){
+       UI.openModal(`
+         <div class="modal-head"><h2>Reportar problema</h2><button class="modal-close" data-close>✕</button></div>
+         <form id="formProblema">
+@@ -320,10 +325,15 @@
+         const fd = new FormData(e.target);
+         const fotos = await uploadArquivos(fd.getAll("fotos").filter(x=>x && x.size), tarefaId+"/problema");
+         M.Store.concluirTarefa(tarefaId,"GEROU_REFACAO",{observacao:fd.get("descricao"), origemProblema:fd.get("origem"), fotos});
+-        UI.closeModal(); UI.toast("Retrabalho registrado e visível em Auditoria.");
++        Act._voltar(voltarMovelId); UI.toast("Retrabalho registrado e visível em Auditoria.");
+       });
+     },
+     setTarefaFiltro(campo,val){ M.UIState.tarefaFiltro[campo]=val; Act.rerender(); },
++    // item 9 do backlog: atalho da aba Tarefas da obra pra a tela geral, já filtrada.
++    verTarefasDaObra(obraId){
++      M.UIState.tarefaFiltro = {responsavel:"", status:"", obraId};
++      location.hash = "#/tarefas";
++    },
+ 
+     // ---------- assistências ----------
+     openAssistenciaForm(obraId){
+diff --git a/js/calc.js b/js/calc.js
+index 73558fc..f576a3e 100644
+--- a/js/calc.js
++++ b/js/calc.js
+@@ -147,8 +147,10 @@
+           if(c.status==="REFACAO") itens.push(`Refazer "${c.nome}" de "${m.nome}" (retrabalho)`);
+         });
+         if(!movelConcluido(m) && !m.bloqueio){
+-          const missing = m.checklist.filter(c=>!c.concluido);
+-          if(missing.length) itens.push(`Concluir em "${m.nome}": ${missing.map(x=>x.nome).join(", ")}`);
++          // checklist de componentes virou Tarefa (item 9) — o que falta aqui
++          // agora é olhar as tarefas do móvel ainda não concluídas.
++          const missing = M.Store.state.tarefas.filter(t=>t.movelId===m.id && t.status!=="CONCLUIDA");
++          if(missing.length) itens.push(`Concluir em "${m.nome}": ${missing.map(x=>x.titulo).join(", ")}`);
+         }
+         // "concluída com pendências" continua aparecendo aqui até alguém
+         // resolver de verdade — encerrar a montagem não some com a pendência.
+diff --git a/js/main.js b/js/main.js
+index e561c51..41e99f4 100644
+--- a/js/main.js
++++ b/js/main.js
+@@ -5,7 +5,7 @@
+   "use strict";
+   const M = window.M;
+   const UI = M.UI;
+-  const APP_VERSION = "2.3.0";
++  const APP_VERSION = "2.4.0";
+ 
+   function usuarioAtualColab(){
+     return M.colabByNome(M.Store.state.usuarioAtual) || M.COLABORADORES[9];
+diff --git a/js/pages/novaObra.js b/js/pages/novaObra.js
+index 618c98e..8edf8a7 100644
+--- a/js/pages/novaObra.js
++++ b/js/pages/novaObra.js
+@@ -174,7 +174,11 @@
+         const valorItem = itemOrc ? Math.round(itemOrc.valorBruto*fator*(liquidoAmb/Math.max(1,liquidoAmbAuto))) : Math.round(liquidoAmb/a.itens.length);
+         return {
+           id:M.uid("mov"), nome:it.item, etapa:0, responsavel:MOCK_OS.responsavel,
+-          checklist:["Corpo MDF","Ferragens"].concat(it.materiaisEspeciais||[]).map(n=>({id:M.uid("chk"),nome:n,concluido:false})),
++          // item 9 do backlog de melhorias (checklist vira tarefa): a lista de componentes
++          // do móvel (MDF, ferragens, materiais especiais) não fica mais como um checklist
++          // separado e desconectado — Store.criarObra() transforma cada item aqui numa
++          // Tarefa de verdade (mesma tela de Iniciar/Concluir de qualquer outra tarefa).
++          checklistInicial:["Corpo MDF","Ferragens"].concat(it.materiaisEspeciais||[]),
+           componentesCriticos:[], bloqueio:null, dataEntradaEtapa:M.todayISO(),
+           dataPrevista:M.dOff(20), dataReal:null, valorLiquido:valorItem, requisitosOverride:{},
+         };
+diff --git a/js/pages/obraDetail.js b/js/pages/obraDetail.js
+index f31aef7..f10e4fb 100644
+--- a/js/pages/obraDetail.js
++++ b/js/pages/obraDetail.js
+@@ -83,22 +83,26 @@
+   function tabTarefas(o){
+     const tarefas = M.Store.state.tarefas.filter(t=>t.obraId===o.id);
+     return `
+-      <div class="flex-between" style="margin-bottom:10px;"><span class="small muted">${tarefas.length} tarefa(s)</span>
+-        <button class="btn sm primary" onclick="Act.openTarefaForm('${o.id}')">+ Nova tarefa</button></div>
++      <div class="flex-between" style="margin-bottom:10px;flex-wrap:wrap;gap:8px;">
++        <span class="small muted">${tarefas.length} tarefa(s)</span>
++        <div class="flex-gap">
++          <button class="btn sm" onclick="Act.verTarefasDaObra('${o.id}')">${UI.icon('list',12)} Ver em Tarefas geral</button>
++          <button class="btn sm primary" onclick="Act.openTarefaForm('${o.id}')">+ Nova tarefa</button>
++        </div>
++      </div>
+       <div class="card pad">
+         <table class="tbl">
+           <thead><tr><th>Tarefa</th><th>Local</th><th>Responsável</th><th>Executor</th><th>Status</th><th>Resultado</th><th></th></tr></thead>
+-          <tbody>${tarefas.map(t=>`
+-            <tr>
+-              <td>${UI.esc(t.titulo)}${t.tipo==='REFACAO'?' <span class="chip critical">retrabalho</span>':''}</td>
++          <tbody>${tarefas.length? tarefas.map(t=>`
++            <tr style="cursor:pointer;" onclick="Act.abrirDetalheTarefa('${t.id}')">
++              <td>${UI.esc(t.titulo)}${t.tipo==='REFACAO'?' <span class="chip critical">retrabalho</span>':''}${t.origemChecklist?' <span class="chip neutral">componente</span>':''}</td>
+               <td class="small muted">${t.movelNome||t.ambienteNome||"—"}</td>
+               <td>${UI.person(t.responsavelPlanejado)}</td>
+               <td>${t.executadoPor? UI.person(t.executadoPor) : '<span class="small muted">—</span>'}</td>
+               <td>${UI.tarefaStatusChip(t.status)}</td>
+               <td>${UI.resultadoChip(t.resultado)}</td>
+-              <td>${t.status==='PLANEJADA'? `<button class="btn sm" onclick="Act.iniciarTarefa('${t.id}')">Iniciar</button>`
+-                  : t.status==='EM_ANDAMENTO'? `<button class="btn sm primary" onclick="Act.pedirResultado('${t.id}')">Concluir</button>` : ""}</td>
+-            </tr>`).join("")}</tbody>
++              <td onclick="event.stopPropagation()">${UI.tarefaAcoesHtml(t)}</td>
++            </tr>`).join("") : `<tr><td colspan="7" class="small muted" style="text-align:center;padding:16px;">Nenhuma tarefa nesta obra ainda.</td></tr>`}</tbody>
+         </table>
+       </div>`;
+   }
+@@ -109,7 +113,8 @@
+     return `<div class="card pad"><table class="tbl">
+       <thead><tr><th>Categoria</th><th>Local</th><th>Responsável</th><th>Prazo</th><th>Status</th><th></th></tr></thead>
+       <tbody>${pend.map(p=>`
+-        <tr><td>${UI.esc(p.categoria)}<div class="small muted">${UI.esc(p.descricao)}</div></td>
++        <tr><td>${UI.esc(p.categoria)}<div class="small muted">${UI.esc(p.descricao)}</div>
++            ${p.fotos&&p.fotos.length? UI.fotosGaleriaHtml(p.fotos) : ""}</td>
+           <td class="small muted">${UI.esc(p.ambienteNome)} · ${UI.esc(p.movelNome)}</td>
+           <td>${UI.person(p.responsavel)}</td><td>${C.fmtDate(p.prazo)}</td><td>${UI.statusPendenciaChip(p.status)}</td>
+           <td>${p.status!=='RESOLVIDA'? `<button class="btn sm primary" onclick="Act.setPendenciaStatus('${p.id}','RESOLVIDA')">Resolver</button>`:""}</td>
+@@ -129,12 +134,36 @@
+       }).join("")}</tbody></table></div>`;
+   }
+ 
++  // reúne, num só lugar, as fotos tiradas em pendências/tarefas/assistências
++  // desta obra — inclusive de itens já resolvidos/concluídos, que continuam
++  // aparecendo aqui mesmo depois de fechados (pedido explícito: a foto do que
++  // foi resolvido não pode sumir).
++  function fotosDaObra(o){
++    const itens = [];
++    M.Store.state.pendencias.filter(p=>p.obraId===o.id && p.fotos&&p.fotos.length)
++      .forEach(p=> itens.push({fotos:p.fotos, origem:`Pendência — ${p.categoria}`, local:[p.ambienteNome,p.movelNome].filter(Boolean).join(" · "), data:p.abertura}));
++    M.Store.state.tarefas.filter(t=>t.obraId===o.id && t.fotos&&t.fotos.length)
++      .forEach(t=> itens.push({fotos:t.fotos, origem:`Tarefa — ${t.titulo}`, local:t.movelNome||t.ambienteNome||"", data:t.data}));
++    M.Store.state.assistencias.filter(a=>a.obraId===o.id && a.fotos&&a.fotos.length)
++      .forEach(a=> itens.push({fotos:a.fotos, origem:`Assistência — ${a.categoria}`, local:[a.ambienteNome,a.movelNome].filter(Boolean).join(" · "), data:a.data}));
++    return itens.sort((x,y)=> (y.data||"").localeCompare(x.data||""));
++  }
++
+   function tabArquivos(o){
++    const grupos = fotosDaObra(o);
+     return `<div class="card pad">
+       <div class="check-row"><span>${UI.icon('file-text',15)}</span><span class="label">${o.numeroOS.replace(/\s/g,"_")}.pdf <span class="small muted">— Ordem de Serviço original</span></span></div>
+       <div class="check-row"><span>${UI.icon('file-text',15)}</span><span class="label">Orcamento_${o.numeroOS.replace(/[^\d]/g,"")}.pdf <span class="small muted">— Orçamento aprovado</span></span></div>
+       <div class="hr"></div>
+       <p class="small muted">Lista de materiais / lista de compras em PDF é uma integração de fase futura — quando disponível, aparecerá aqui vinculada à obra.</p>
++      <div class="hr" style="margin:16px 0;"></div>
++      <label style="font-size:11.5px;font-weight:700;color:var(--ink-soft);">${UI.icon('image',13)} Fotos desta obra (${grupos.reduce((s,g)=>s+g.fotos.length,0)})</label>
++      <p class="small muted" style="margin:4px 0 10px;">Fotos anexadas em pendências, tarefas e assistências — ficam aqui mesmo depois de resolvidas/concluídas.</p>
++      ${grupos.length ? grupos.map(g=>`
++        <div style="margin-bottom:14px;">
++          <div class="small"><b>${UI.esc(g.origem)}</b>${g.local? ` <span class="muted">· ${UI.esc(g.local)}</span>`:""} <span class="muted">· ${C.fmtDate(g.data)}</span></div>
++          ${UI.fotosGaleriaHtml(g.fotos)}
++        </div>`).join("") : `<p class="small muted">Nenhuma foto anexada ainda nesta obra.</p>`}
+     </div>`;
+   }
+ 
+diff --git a/js/pages/producao.js b/js/pages/producao.js
+index ef69cae..518f85d 100644
+--- a/js/pages/producao.js
++++ b/js/pages/producao.js
+@@ -10,7 +10,11 @@
+     const bloq = m.bloqueio;
+     const dias = C.diasDesde(m.dataEntradaEtapa);
+     const check = M.Store.checarRequisitos(m);
+-    const done = m.checklist.filter(c=>c.concluido).length;
++    // item 9 do backlog: checklist de componentes virou Tarefa — a barrinha de
++    // progresso do cartão agora conta as tarefas reais do móvel, não mais um
++    // checklist separado.
++    const tarefasDoMovel = M.Store.state.tarefas.filter(t=>t.movelId===m.id);
++    const done = tarefasDoMovel.filter(t=>t.status==="CONCLUIDA").length;
+     const ressalva = !!m.ressalvaAberta;
+     return `<div class="kcard" draggable="true"
+         ondragstart="Act.dragStart(event,'${m.id}')" ondragend="Act.dragEnd(event)"
+@@ -18,8 +22,8 @@
+       <div class="kproj"><span>${UI.esc(o.cliente)}</span><span>${UI.esc(a.nome)}</span></div>
+       <div class="ktitle">${UI.esc(m.nome)}</div>
+       <div class="krow">${UI.person(m.responsavel)}${UI.stageDaysChip(dias)}</div>
+-      ${m.checklist.length? `<div style="margin-top:7px;">${UI.progressBar(done/m.checklist.length*100)}</div>
+-      <div class="small muted" style="margin-top:3px;">${done}/${m.checklist.length} itens do checklist</div>`:""}
++      ${tarefasDoMovel.length? `<div style="margin-top:7px;">${UI.progressBar(done/tarefasDoMovel.length*100)}</div>
++      <div class="small muted" style="margin-top:3px;">${done}/${tarefasDoMovel.length} tarefas concluídas</div>`:""}
+       ${ressalva? `<div class="kblocked" style="color:var(--warning);background:var(--warning-bg);">${UI.icon('alert',11)} avançou com ressalva</div>`:""}
+       ${!check.liberado && !ressalva? `<div class="kblocked">${UI.icon('lock',11)} requisito pendente p/ avançar</div>`:""}
+       ${bloq? `<div class="kblocked">${UI.icon('clock',11)} ${UI.esc(bloq.categoria)}</div>`:""}
+@@ -124,11 +128,18 @@
+   M.Pages.movelModalHtml = function(f){
+     const {o,a,m} = f;
+     const check = M.Store.checarRequisitos(m);
+-    const checklistHtml = m.checklist.map(c=>`
+-      <div class="check-row ${c.concluido?'done':''}">
+-        <input type="checkbox" ${c.concluido?'checked':''} onchange="Act.toggleChecklist('${m.id}','${c.id}')">
+-        <span class="label">${UI.esc(c.nome)}</span>
+-      </div>`).join("") || `<p class="small muted">Nenhum item de checklist cadastrado.</p>`;
++    // item 9 do backlog de melhorias: aqui era um checklist de checkbox isolado
++    // (sem Iniciar/Concluir, sem aparecer em Tarefas). Agora mostra as tarefas
++    // de verdade do móvel — mesmo botão Iniciar/Concluir de qualquer tarefa,
++    // em qualquer tela do app.
++    const tarefasDoMovel = M.Store.state.tarefas.filter(t=>t.movelId===m.id)
++      .sort((x,y)=> (x.status==="EM_ANDAMENTO"?0:x.status==="PLANEJADA"?1:2) - (y.status==="EM_ANDAMENTO"?0:y.status==="PLANEJADA"?1:2));
++    const tarefasHtml = tarefasDoMovel.length ? tarefasDoMovel.map(t=>`
++      <div class="check-row ${t.status==='CONCLUIDA'?'done':''}" style="cursor:pointer;" onclick="Act.abrirDetalheTarefa('${t.id}')">
++        <span class="dot ${t.status==='CONCLUIDA'?'good':t.status==='EM_ANDAMENTO'?'warning':'neutral'}"></span>
++        <span class="label" style="flex:1;">${UI.esc(t.titulo)} ${UI.tarefaStatusChip(t.status)}</span>
++        <span onclick="event.stopPropagation()">${UI.tarefaAcoesHtml(t, m.id)}</span>
++      </div>`).join("") : `<p class="small muted">Nenhuma tarefa cadastrada para este móvel ainda.</p>`;
+ 
+     const compHtml = m.componentesCriticos.map(c=>`
+       <div class="check-row">
+@@ -174,12 +185,16 @@
+           <div style="margin-top:6px;"><button class="btn sm" onclick="Act.resolverRessalva('${m.id}')">${UI.icon('check',12)} Marcar itens pendentes como resolvidos</button></div>
+         </div>` : ""}
+ 
+-        <label style="font-size:11.5px;font-weight:700;color:var(--ink-soft);">Checklist de componentes</label>
+-        <div style="margin:6px 0 14px;">${checklistHtml}</div>
++        <div class="flex-between" style="margin-bottom:4px;">
++          <label style="font-size:11.5px;font-weight:700;color:var(--ink-soft);">Tarefas do móvel</label>
++          <button class="btn sm" onclick="Act.openTarefaForm('${o.id}')">${UI.icon('plus',12)} tarefa</button>
++        </div>
++        <div style="margin:6px 0 14px;">${tarefasHtml}</div>
+ 
+         ${compHtml? `<label style="font-size:11.5px;font-weight:700;color:var(--ink-soft);">Componentes críticos / exceções</label><div style="margin:6px 0 14px;">${compHtml}</div>`:""}
+ 
+         <label style="font-size:11.5px;font-weight:700;color:var(--ink-soft);">Requisitos da etapa "${UI.esc(M.Store.etapaById(m.etapa).nome)}"</label>
++        <p class="small muted" style="margin:2px 0 6px;">São condições pra liberar a etapa (material disponível, aprovação etc.) — clique no chip pra marcar como atendido/pendente. Não é uma tarefa.</p>
+         <div style="margin:6px 0 4px;">${reqHtml}</div>
+       </div>
+       <div class="modal-foot" style="justify-content:space-between;">
+diff --git a/js/pages/tarefas.js b/js/pages/tarefas.js
+index f4994ee..263f557 100644
+--- a/js/pages/tarefas.js
++++ b/js/pages/tarefas.js
+@@ -15,11 +15,19 @@
+     if(somenteMinhas) tarefas = tarefas.filter(t=>t.responsavelPlanejado===nome || t.executadoPor===nome);
+     if(f.responsavel) tarefas = tarefas.filter(t=>t.responsavelPlanejado===f.responsavel);
+     if(f.status) tarefas = tarefas.filter(t=>t.status===f.status);
++    if(f.obraId) tarefas = tarefas.filter(t=>t.obraId===f.obraId);
+ 
+     const respOptions = ["",...M.COLABORADORES.map(c=>c.nome)];
++    // item 9 do backlog: dá pra ver as tarefas de uma obra específica sem sair
++    // desta tela — mesma lista de sempre, só filtrada.
++    const obrasOptions = M.Store.state.obras.slice().sort((a,b)=>a.cliente.localeCompare(b.cliente));
+     const html = `
+       <div class="card pad" style="margin-bottom:14px;">
+         <div class="flex-gap" style="flex-wrap:wrap;">
++          <select onchange="Act.setTarefaFiltro('obraId',this.value)">
++            <option value="" ${!f.obraId?'selected':''}>Todas as obras</option>
++            ${obrasOptions.map(o=>`<option value="${o.id}" ${f.obraId===o.id?'selected':''}>${UI.esc(o.cliente)} — ${o.numeroOS}</option>`).join("")}
++          </select>
+           <select onchange="Act.setTarefaFiltro('responsavel',this.value)">
+             ${respOptions.map(r=>`<option value="${r}" ${f.responsavel===r?'selected':''}>${r||"Todos os responsáveis"}</option>`).join("")}
+           </select>
+@@ -43,8 +51,7 @@
+               <td class="small muted">${t.inicio||"—"} ${t.fim?"– "+t.fim:""}</td>
+               <td>${UI.tarefaStatusChip(t.status)}</td>
+               <td>${UI.resultadoChip(t.resultado)}</td>
+-              <td onclick="event.stopPropagation()">${t.status==='PLANEJADA'? `<button class="btn sm" onclick="Act.iniciarTarefa('${t.id}')">Iniciar</button>`
+-                  : t.status==='EM_ANDAMENTO'? `<button class="btn sm primary" onclick="Act.pedirResultado('${t.id}')">Concluir</button>` : ""}</td>
++              <td onclick="event.stopPropagation()">${UI.tarefaAcoesHtml(t)}</td>
+             </tr>`).join("")}</tbody>
+         </table>
+       </div>
+@@ -84,7 +91,7 @@
+ 
+   // Modal de detalhe — aberto ao clicar numa tarefa em qualquer lista (título/local
+   // continuam clicáveis separadamente; o clique na linha inteira abre isto).
+-  M.Pages.tarefaDetalheModalHtml = function(t){
++  M.Pages.tarefaDetalheModalHtml = function(t, voltarMovelId){
+     return `
+       <div class="modal-head"><h2>${UI.esc(t.titulo)}</h2><button class="modal-close" data-close>✕</button></div>
+       <div class="modal-body">
+@@ -98,8 +105,8 @@
+         ${t.motivoRefacao? `<div class="card pad" style="margin-top:10px;"><div class="card-title">Motivo do retrabalho</div><p style="margin:0;">${UI.esc(t.motivoRefacao)}</p></div>`:""}
+         ${t.fotos&&t.fotos.length? `<div style="margin-top:10px;"><div class="card-title">Fotos</div>${UI.fotosGaleriaHtml(t.fotos)}</div>`:""}
+         <div class="flex-gap" style="margin-top:14px;flex-wrap:wrap;">
+-          ${t.status==='PLANEJADA'? `<button class="btn primary" onclick="UI.closeModal(); Act.iniciarTarefa('${t.id}')">${UI.icon('play',14)} Iniciar</button>`:""}
+-          ${t.status==='EM_ANDAMENTO'? `<button class="btn primary" onclick="UI.closeModal(); Act.pedirResultado('${t.id}')">${UI.icon('check',14)} Concluir</button>`:""}
++          ${t.status==='PLANEJADA'? `<button class="btn primary" onclick="Act.iniciarTarefa('${t.id}'${voltarMovelId?`,'${voltarMovelId}'`:''})">${UI.icon('play',14)} Iniciar</button>`:""}
++          ${t.status==='EM_ANDAMENTO'? `<button class="btn primary" onclick="Act.pedirResultado('${t.id}'${voltarMovelId?`,'${voltarMovelId}'`:''})">${UI.icon('check',14)} Concluir</button>`:""}
+         </div>
+       </div>
+     `;
+diff --git a/js/store.js b/js/store.js
+index a27a3bb..df73f6f 100644
+--- a/js/store.js
++++ b/js/store.js
+@@ -112,6 +112,34 @@
+   const state = load();
+   const listeners = [];
+ 
++  // ---------- migração: checklist de componentes (dado antigo) vira Tarefa real ----------
++  // Antes desta versão, o "checklist de componentes" do móvel (Corpo MDF, Ferragens,
++  // materiais especiais) era uma lista de checkbox isolada, sem Iniciar/Concluir e sem
++  // aparecer em Tarefas — um dos 3 lugares diferentes que faziam a mesma coisa (item 9
++  // do backlog de melhorias). Obras já salvas (localStorage/Supabase) de antes dessa
++  // mudança ainda têm esse checklist antigo — esta função roda uma vez por carregamento,
++  // converte cada item num registro real em state.tarefas (preservando o que já estava
++  // marcado como concluído) e esvazia m.checklist. É idempotente: se já rodou antes
++  // (não sobra item em m.checklist), não faz nada.
++  function migrarChecklistLegado(){
++    let mudou = false;
++    (state.obras||[]).forEach(o=>{
++      (o.ambientes||[]).forEach(a=>{
++        (a.moveis||[]).forEach(m=>{
++          if(m.checklist && m.checklist.length){
++            m.checklist.forEach(c=>{
++              const jaExiste = state.tarefas.some(t=>t.movelId===m.id && t.titulo===c.nome && t.origemChecklist);
++              if(!jaExiste){ Store.criarTarefaDeChecklist({o,a,m}, c.nome, {concluida: !!c.concluido}); mudou = true; }
++            });
++            m.checklist = [];
++            mudou = true;
++          }
++        });
++      });
++    });
++    if(mudou) emit();
++  }
++
+   function persist(){
+     try{ localStorage.setItem(LS_KEY, JSON.stringify(state)); }catch(e){ /* quota etc: ignora */ }
+   }
+@@ -557,13 +585,6 @@
+       emit();
+     },
+ 
+-    // ---------- checklist ----------
+-    toggleChecklistItem(movelId, itemId){
+-      const f = Store.findMovel(movelId); if(!f) return;
+-      const it = f.m.checklist.find(c=>c.id===itemId); if(!it) return;
+-      it.concluido = !it.concluido;
+-      emit();
+-    },
+     setResponsavel(movelId, nome){
+       const f = Store.findMovel(movelId); if(!f) return;
+       const anterior = f.m.responsavel;
+@@ -752,13 +773,39 @@
+         a.valorBruto = Math.round(processed.valorBruto * a.valorBrutoPct);
+         a.valorLiquido = Math.round(a.valorBruto * processed.fatorLiquido);
+         a.obraId = processed.id;
+-        a.moveis.forEach(m=>{ m.ambienteId=a.id; m.obraId=processed.id; m.checklist=m.checklist||[]; m.componentesCriticos=m.componentesCriticos||[]; m.requisitosOverride={}; m.dataEntradaEtapa=M.todayISO(); });
++        a.moveis.forEach(m=>{
++          m.ambienteId=a.id; m.obraId=processed.id; m.componentesCriticos=m.componentesCriticos||[];
++          m.requisitosOverride={}; m.dataEntradaEtapa=M.todayISO();
++          // checklist de componentes vira tarefa de verdade (item 9 do backlog de
++          // melhorias) — cada item do checklist inicial (Corpo MDF, Ferragens,
++          // materiais especiais) passa a ser uma Tarefa com Iniciar/Concluir,
++          // visível no móvel, em Tarefas geral e na aba Tarefas da obra.
++          const titulos = m.checklistInicial || [];
++          delete m.checklistInicial;
++          m.checklist = [];
++          titulos.forEach(titulo=> Store.criarTarefaDeChecklist({o:processed, a, m}, titulo));
++        });
+       });
+       state.obras.push(processed);
+       Store.log(processed.id, "OBRA_CRIADA", `Obra ${processed.numeroOS} criada a partir da importação.`);
+       emit();
+       return processed;
+     },
++    // tarefa gerada a partir de um item de checklist de componente (ver criarObra
++    // e migrarChecklistLegado) — não é obrigatória para avançar de etapa (nunca foi,
++    // como checklist também não bloqueava), só precisa aparecer e poder ser concluída.
++    criarTarefaDeChecklist(f, titulo, opts){
++      opts = opts || {};
++      state.tarefas.push({
++        id:M.uid("tsk"), obraId:f.o.id, obraNome:f.o.cliente, ambienteId:f.a.id, ambienteNome:f.a.nome,
++        movelId:f.m.id, movelNome:f.m.nome, titulo, etapa:null, tipo:"PRODUCAO",
++        obrigatorio:"RECOMENDADO", responsavelPlanejado:f.m.responsavel,
++        executadoPor: opts.concluida? f.m.responsavel : null, conferidoPor:null, instrucoes:"",
++        prazo:null, permiteAvancoExcepcional:true, exigeConferencia:false, origemChecklist:true,
++        inicio:null, fim: opts.concluida? M.todayISO(): null, data:M.todayISO(),
++        status: opts.concluida? "CONCLUIDA":"PLANEJADA", resultado: opts.concluida? "OK": null,
++      });
++    },
+ 
+     // ---------- montagem: encerramento (seção 32) ----------
+     // CORREÇÃO (auditoria funcional #82): antes, "tem pendências?" era só uma
+@@ -814,6 +861,9 @@
+   };
+ 
+   M.Store = Store;
++  // upgrade transparente de dados antigos (ver função acima) — precisa rodar
++  // depois que Store existe (usa Store.criarTarefaDeChecklist).
++  migrarChecklistLegado();
+   // primeira gravação (local — instantânea)
+   persist();
+   // SUPABASE: dispara a sincronização em segundo plano (não bloqueia o boot)
+diff --git a/js/ui.js b/js/ui.js
+index 5cf31b5..956a347 100644
+--- a/js/ui.js
++++ b/js/ui.js
+@@ -228,10 +228,22 @@
+       : `<span class="small muted" title="Seu perfil não vê valores financeiros">•••••</span>`;
+   }
+ 
++  // botão de ação de uma tarefa (Iniciar/Concluir) — ponto único usado em
++  // Tarefas geral, na aba Tarefas da obra e no modal do móvel, pra não ter
++  // 3 versões que podem ir ficando diferentes entre si. voltarMovelId (opcional):
++  // passe o id do móvel quando a lista está dentro do modal do móvel, pra
++  // voltar pro mesmo modal (atualizado) depois de Iniciar/Concluir.
++  function tarefaAcoesHtml(t, voltarMovelId){
++    const v = voltarMovelId? `,'${voltarMovelId}'` : "";
++    if(t.status==="PLANEJADA") return `<button class="btn sm" onclick="Act.iniciarTarefa('${t.id}'${v})">${icon('play',12)} Iniciar</button>`;
++    if(t.status==="EM_ANDAMENTO") return `<button class="btn sm primary" onclick="Act.pedirResultado('${t.id}'${v})">${icon('check',12)} Concluir</button>`;
++    return "";
++  }
++
+   const UI = {
+     esc, initials, avatar, person, riscoChip, statusPendenciaChip, prioridadeChip,
+     tarefaStatusChip, resultadoChip, progressBar, stageDaysChip, icon, ICONS,
+-    assistenciaStatusChip, perfilChip, valorOuOculto,
++    assistenciaStatusChip, perfilChip, valorOuOculto, tarefaAcoesHtml,
+     statTile, card, progressRow, attentionItem, pageSearchInput, attachQuickSearch,
+     fotoFieldHtml, fotosGaleriaHtml,
+ 
+diff --git a/service-worker.js b/service-worker.js
+index 4af5bc2..5a34e60 100644
+--- a/service-worker.js
++++ b/service-worker.js
+@@ -5,7 +5,7 @@
+    evolução futura — aqui o objetivo é permitir abrir o app e ver a
+    última tela mesmo sem internet, e sinalizar quando há versão nova.
+    ============================================================ */
+-const CACHE_NAME = "moodo-producao-v2.3.0";
++const CACHE_NAME = "moodo-producao-v2.4.0";
+ const SHELL_FILES = [
+   "./",
+   "./index.html",
+-- 
+2.43.0
+

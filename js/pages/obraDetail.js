@@ -83,22 +83,26 @@
   function tabTarefas(o){
     const tarefas = M.Store.state.tarefas.filter(t=>t.obraId===o.id);
     return `
-      <div class="flex-between" style="margin-bottom:10px;"><span class="small muted">${tarefas.length} tarefa(s)</span>
-        <button class="btn sm primary" onclick="Act.openTarefaForm('${o.id}')">+ Nova tarefa</button></div>
+      <div class="flex-between" style="margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+        <span class="small muted">${tarefas.length} tarefa(s)</span>
+        <div class="flex-gap">
+          <button class="btn sm" onclick="Act.verTarefasDaObra('${o.id}')">${UI.icon('list',12)} Ver em Tarefas geral</button>
+          <button class="btn sm primary" onclick="Act.openTarefaForm('${o.id}')">+ Nova tarefa</button>
+        </div>
+      </div>
       <div class="card pad">
         <table class="tbl">
           <thead><tr><th>Tarefa</th><th>Local</th><th>Responsável</th><th>Executor</th><th>Status</th><th>Resultado</th><th></th></tr></thead>
-          <tbody>${tarefas.map(t=>`
-            <tr>
-              <td>${UI.esc(t.titulo)}${t.tipo==='REFACAO'?' <span class="chip critical">retrabalho</span>':''}</td>
+          <tbody>${tarefas.length? tarefas.map(t=>`
+            <tr style="cursor:pointer;" onclick="Act.abrirDetalheTarefa('${t.id}')">
+              <td>${UI.esc(t.titulo)}${t.tipo==='REFACAO'?' <span class="chip critical">retrabalho</span>':''}${t.origemChecklist?' <span class="chip neutral">componente</span>':''}</td>
               <td class="small muted">${t.movelNome||t.ambienteNome||"—"}</td>
               <td>${UI.person(t.responsavelPlanejado)}</td>
               <td>${t.executadoPor? UI.person(t.executadoPor) : '<span class="small muted">—</span>'}</td>
               <td>${UI.tarefaStatusChip(t.status)}</td>
               <td>${UI.resultadoChip(t.resultado)}</td>
-              <td>${t.status==='PLANEJADA'? `<button class="btn sm" onclick="Act.iniciarTarefa('${t.id}')">Iniciar</button>`
-                  : t.status==='EM_ANDAMENTO'? `<button class="btn sm primary" onclick="Act.pedirResultado('${t.id}')">Concluir</button>` : ""}</td>
-            </tr>`).join("")}</tbody>
+              <td onclick="event.stopPropagation()">${UI.tarefaAcoesHtml(t)}</td>
+            </tr>`).join("") : `<tr><td colspan="7" class="small muted" style="text-align:center;padding:16px;">Nenhuma tarefa nesta obra ainda.</td></tr>`}</tbody>
         </table>
       </div>`;
   }
@@ -109,7 +113,8 @@
     return `<div class="card pad"><table class="tbl">
       <thead><tr><th>Categoria</th><th>Local</th><th>Responsável</th><th>Prazo</th><th>Status</th><th></th></tr></thead>
       <tbody>${pend.map(p=>`
-        <tr><td>${UI.esc(p.categoria)}<div class="small muted">${UI.esc(p.descricao)}</div></td>
+        <tr><td>${UI.esc(p.categoria)}<div class="small muted">${UI.esc(p.descricao)}</div>
+            ${p.fotos&&p.fotos.length? UI.fotosGaleriaHtml(p.fotos) : ""}</td>
           <td class="small muted">${UI.esc(p.ambienteNome)} · ${UI.esc(p.movelNome)}</td>
           <td>${UI.person(p.responsavel)}</td><td>${C.fmtDate(p.prazo)}</td><td>${UI.statusPendenciaChip(p.status)}</td>
           <td>${p.status!=='RESOLVIDA'? `<button class="btn sm primary" onclick="Act.setPendenciaStatus('${p.id}','RESOLVIDA')">Resolver</button>`:""}</td>
@@ -129,12 +134,36 @@
       }).join("")}</tbody></table></div>`;
   }
 
+  // reúne, num só lugar, as fotos tiradas em pendências/tarefas/assistências
+  // desta obra — inclusive de itens já resolvidos/concluídos, que continuam
+  // aparecendo aqui mesmo depois de fechados (pedido explícito: a foto do que
+  // foi resolvido não pode sumir).
+  function fotosDaObra(o){
+    const itens = [];
+    M.Store.state.pendencias.filter(p=>p.obraId===o.id && p.fotos&&p.fotos.length)
+      .forEach(p=> itens.push({fotos:p.fotos, origem:`Pendência — ${p.categoria}`, local:[p.ambienteNome,p.movelNome].filter(Boolean).join(" · "), data:p.abertura}));
+    M.Store.state.tarefas.filter(t=>t.obraId===o.id && t.fotos&&t.fotos.length)
+      .forEach(t=> itens.push({fotos:t.fotos, origem:`Tarefa — ${t.titulo}`, local:t.movelNome||t.ambienteNome||"", data:t.data}));
+    M.Store.state.assistencias.filter(a=>a.obraId===o.id && a.fotos&&a.fotos.length)
+      .forEach(a=> itens.push({fotos:a.fotos, origem:`Assistência — ${a.categoria}`, local:[a.ambienteNome,a.movelNome].filter(Boolean).join(" · "), data:a.data}));
+    return itens.sort((x,y)=> (y.data||"").localeCompare(x.data||""));
+  }
+
   function tabArquivos(o){
+    const grupos = fotosDaObra(o);
     return `<div class="card pad">
       <div class="check-row"><span>${UI.icon('file-text',15)}</span><span class="label">${o.numeroOS.replace(/\s/g,"_")}.pdf <span class="small muted">— Ordem de Serviço original</span></span></div>
       <div class="check-row"><span>${UI.icon('file-text',15)}</span><span class="label">Orcamento_${o.numeroOS.replace(/[^\d]/g,"")}.pdf <span class="small muted">— Orçamento aprovado</span></span></div>
       <div class="hr"></div>
       <p class="small muted">Lista de materiais / lista de compras em PDF é uma integração de fase futura — quando disponível, aparecerá aqui vinculada à obra.</p>
+      <div class="hr" style="margin:16px 0;"></div>
+      <label style="font-size:11.5px;font-weight:700;color:var(--ink-soft);">${UI.icon('image',13)} Fotos desta obra (${grupos.reduce((s,g)=>s+g.fotos.length,0)})</label>
+      <p class="small muted" style="margin:4px 0 10px;">Fotos anexadas em pendências, tarefas e assistências — ficam aqui mesmo depois de resolvidas/concluídas.</p>
+      ${grupos.length ? grupos.map(g=>`
+        <div style="margin-bottom:14px;">
+          <div class="small"><b>${UI.esc(g.origem)}</b>${g.local? ` <span class="muted">· ${UI.esc(g.local)}</span>`:""} <span class="muted">· ${C.fmtDate(g.data)}</span></div>
+          ${UI.fotosGaleriaHtml(g.fotos)}
+        </div>`).join("") : `<p class="small muted">Nenhuma foto anexada ainda nesta obra.</p>`}
     </div>`;
   }
 

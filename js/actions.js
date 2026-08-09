@@ -14,7 +14,7 @@
     novaObra: {osFile:null, orcFile:null, lido:false, ambientesAjuste:{}},
     pendFiltro: {categoria:"", status:""},
     pendExpandido: null,
-    tarefaFiltro: {responsavel:"", status:""},
+    tarefaFiltro: {responsavel:"", status:"", obraId:""},
     calMonth: M.TODAY.getMonth(), calYear: M.TODAY.getFullYear(),
     calFiltros: new Set(["PRODUCAO","ENTREGAS","MONTAGENS","PENDENCIAS","FORNECEDORES","ASSISTENCIAS"]),
     desempenhoSel: null,
@@ -103,8 +103,7 @@
       }catch(err){ UI.toast("Erro ao reativar: "+(err.message||"tente de novo")); }
     },
 
-    // ---------- checklist / responsável ----------
-    toggleChecklist(movelId, itemId){ M.Store.toggleChecklistItem(movelId, itemId); },
+    // ---------- responsável ----------
     setResponsavel(movelId, sel){ M.Store.setResponsavel(movelId, sel.value); UI.toast("Responsável atualizado."); },
 
     // ---------- kanban ----------
@@ -278,13 +277,19 @@
         UI.closeModal();
       });
     },
-    abrirDetalheTarefa(id){
+    abrirDetalheTarefa(id, voltarMovelId){
       const t = M.Store.state.tarefas.find(x=>x.id===id); if(!t) return;
-      UI.openModal(M.Pages.tarefaDetalheModalHtml(t));
+      UI.openModal(M.Pages.tarefaDetalheModalHtml(t, voltarMovelId));
     },
-    iniciarTarefa(id){ M.Store.iniciarTarefa(id); UI.toast("Tarefa iniciada."); },
+    // voltarMovelId (opcional): quando a tarefa é aberta/concluída de dentro do
+    // modal do móvel (checklist de componentes virou tarefa — item 9), depois da
+    // ação a gente volta pro MESMO modal do móvel atualizado, em vez de fechar
+    // tudo — o modal do móvel não se re-renderiza sozinho quando o estado muda
+    // (é um overlay à parte do resto da tela), então precisa disto explicitamente.
+    _voltar(voltarMovelId){ voltarMovelId ? Act.openMovel(voltarMovelId, true) : UI.closeModal(); },
+    iniciarTarefa(id, voltarMovelId){ M.Store.iniciarTarefa(id); UI.toast("Tarefa iniciada."); Act._voltar(voltarMovelId); },
     pausarTarefa(id){ M.Store.pausarTarefa(id); UI.toast("Tarefa pausada."); },
-    pedirResultado(id){
+    pedirResultado(id, voltarMovelId){
       const t = M.Store.state.tarefas.find(x=>x.id===id);
       UI.openModal(`
         <div class="modal-head"><h2>Concluir tarefa</h2><button class="modal-close" data-close>✕</button></div>
@@ -297,11 +302,11 @@
           </div>
         </div>
       `);
-      document.getElementById("rOk").addEventListener("click", ()=>{ M.Store.concluirTarefa(id,"OK"); UI.closeModal(); UI.toast("Tarefa concluída."); });
-      document.getElementById("rRessalva").addEventListener("click", ()=>{ M.Store.concluirTarefa(id,"COM_RESSALVA"); UI.closeModal(); UI.toast("Tarefa concluída com ressalva."); });
-      document.getElementById("rRefacao").addEventListener("click", ()=> Act.reportarProblema(id));
+      document.getElementById("rOk").addEventListener("click", ()=>{ M.Store.concluirTarefa(id,"OK"); Act._voltar(voltarMovelId); UI.toast("Tarefa concluída."); });
+      document.getElementById("rRessalva").addEventListener("click", ()=>{ M.Store.concluirTarefa(id,"COM_RESSALVA"); Act._voltar(voltarMovelId); UI.toast("Tarefa concluída com ressalva."); });
+      document.getElementById("rRefacao").addEventListener("click", ()=> Act.reportarProblema(id, voltarMovelId));
     },
-    reportarProblema(tarefaId){
+    reportarProblema(tarefaId, voltarMovelId){
       UI.openModal(`
         <div class="modal-head"><h2>Reportar problema</h2><button class="modal-close" data-close>✕</button></div>
         <form id="formProblema">
@@ -320,10 +325,15 @@
         const fd = new FormData(e.target);
         const fotos = await uploadArquivos(fd.getAll("fotos").filter(x=>x && x.size), tarefaId+"/problema");
         M.Store.concluirTarefa(tarefaId,"GEROU_REFACAO",{observacao:fd.get("descricao"), origemProblema:fd.get("origem"), fotos});
-        UI.closeModal(); UI.toast("Retrabalho registrado e visível em Auditoria.");
+        Act._voltar(voltarMovelId); UI.toast("Retrabalho registrado e visível em Auditoria.");
       });
     },
     setTarefaFiltro(campo,val){ M.UIState.tarefaFiltro[campo]=val; Act.rerender(); },
+    // item 9 do backlog: atalho da aba Tarefas da obra pra a tela geral, já filtrada.
+    verTarefasDaObra(obraId){
+      M.UIState.tarefaFiltro = {responsavel:"", status:"", obraId};
+      location.hash = "#/tarefas";
+    },
 
     // ---------- assistências ----------
     openAssistenciaForm(obraId){

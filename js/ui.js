@@ -228,10 +228,22 @@
       : `<span class="small muted" title="Seu perfil não vê valores financeiros">•••••</span>`;
   }
 
+  // botão de ação de uma tarefa (Iniciar/Concluir) — ponto único usado em
+  // Tarefas geral, na aba Tarefas da obra e no modal do móvel, pra não ter
+  // 3 versões que podem ir ficando diferentes entre si. voltarMovelId (opcional):
+  // passe o id do móvel quando a lista está dentro do modal do móvel, pra
+  // voltar pro mesmo modal (atualizado) depois de Iniciar/Concluir.
+  function tarefaAcoesHtml(t, voltarMovelId){
+    const v = voltarMovelId? `,'${voltarMovelId}'` : "";
+    if(t.status==="PLANEJADA") return `<button class="btn sm" onclick="Act.iniciarTarefa('${t.id}'${v})">${icon('play',12)} Iniciar</button>`;
+    if(t.status==="EM_ANDAMENTO") return `<button class="btn sm primary" onclick="Act.pedirResultado('${t.id}'${v})">${icon('check',12)} Concluir</button>`;
+    return "";
+  }
+
   const UI = {
     esc, initials, avatar, person, riscoChip, statusPendenciaChip, prioridadeChip,
     tarefaStatusChip, resultadoChip, progressBar, stageDaysChip, icon, ICONS,
-    assistenciaStatusChip, perfilChip, valorOuOculto,
+    assistenciaStatusChip, perfilChip, valorOuOculto, tarefaAcoesHtml,
     statTile, card, progressRow, attentionItem, pageSearchInput, attachQuickSearch,
     fotoFieldHtml, fotosGaleriaHtml,
 

@@ -15,11 +15,19 @@
     if(somenteMinhas) tarefas = tarefas.filter(t=>t.responsavelPlanejado===nome || t.executadoPor===nome);
     if(f.responsavel) tarefas = tarefas.filter(t=>t.responsavelPlanejado===f.responsavel);
     if(f.status) tarefas = tarefas.filter(t=>t.status===f.status);
+    if(f.obraId) tarefas = tarefas.filter(t=>t.obraId===f.obraId);
 
     const respOptions = ["",...M.COLABORADORES.map(c=>c.nome)];
+    // item 9 do backlog: dá pra ver as tarefas de uma obra específica sem sair
+    // desta tela — mesma lista de sempre, só filtrada.
+    const obrasOptions = M.Store.state.obras.slice().sort((a,b)=>a.cliente.localeCompare(b.cliente));
     const html = `
       <div class="card pad" style="margin-bottom:14px;">
         <div class="flex-gap" style="flex-wrap:wrap;">
+          <select onchange="Act.setTarefaFiltro('obraId',this.value)">
+            <option value="" ${!f.obraId?'selected':''}>Todas as obras</option>
+            ${obrasOptions.map(o=>`<option value="${o.id}" ${f.obraId===o.id?'selected':''}>${UI.esc(o.cliente)} — ${o.numeroOS}</option>`).join("")}
+          </select>
           <select onchange="Act.setTarefaFiltro('responsavel',this.value)">
             ${respOptions.map(r=>`<option value="${r}" ${f.responsavel===r?'selected':''}>${r||"Todos os responsáveis"}</option>`).join("")}
           </select>
@@ -43,8 +51,7 @@
               <td class="small muted">${t.inicio||"—"} ${t.fim?"– "+t.fim:""}</td>
               <td>${UI.tarefaStatusChip(t.status)}</td>
               <td>${UI.resultadoChip(t.resultado)}</td>
-              <td onclick="event.stopPropagation()">${t.status==='PLANEJADA'? `<button class="btn sm" onclick="Act.iniciarTarefa('${t.id}')">Iniciar</button>`
-                  : t.status==='EM_ANDAMENTO'? `<button class="btn sm primary" onclick="Act.pedirResultado('${t.id}')">Concluir</button>` : ""}</td>
+              <td onclick="event.stopPropagation()">${UI.tarefaAcoesHtml(t)}</td>
             </tr>`).join("")}</tbody>
         </table>
       </div>
@@ -84,7 +91,7 @@
 
   // Modal de detalhe — aberto ao clicar numa tarefa em qualquer lista (título/local
   // continuam clicáveis separadamente; o clique na linha inteira abre isto).
-  M.Pages.tarefaDetalheModalHtml = function(t){
+  M.Pages.tarefaDetalheModalHtml = function(t, voltarMovelId){
     return `
       <div class="modal-head"><h2>${UI.esc(t.titulo)}</h2><button class="modal-close" data-close>✕</button></div>
       <div class="modal-body">
@@ -98,8 +105,8 @@
         ${t.motivoRefacao? `<div class="card pad" style="margin-top:10px;"><div class="card-title">Motivo do retrabalho</div><p style="margin:0;">${UI.esc(t.motivoRefacao)}</p></div>`:""}
         ${t.fotos&&t.fotos.length? `<div style="margin-top:10px;"><div class="card-title">Fotos</div>${UI.fotosGaleriaHtml(t.fotos)}</div>`:""}
         <div class="flex-gap" style="margin-top:14px;flex-wrap:wrap;">
-          ${t.status==='PLANEJADA'? `<button class="btn primary" onclick="UI.closeModal(); Act.iniciarTarefa('${t.id}')">${UI.icon('play',14)} Iniciar</button>`:""}
-          ${t.status==='EM_ANDAMENTO'? `<button class="btn primary" onclick="UI.closeModal(); Act.pedirResultado('${t.id}')">${UI.icon('check',14)} Concluir</button>`:""}
+          ${t.status==='PLANEJADA'? `<button class="btn primary" onclick="Act.iniciarTarefa('${t.id}'${voltarMovelId?`,'${voltarMovelId}'`:''})">${UI.icon('play',14)} Iniciar</button>`:""}
+          ${t.status==='EM_ANDAMENTO'? `<button class="btn primary" onclick="Act.pedirResultado('${t.id}'${voltarMovelId?`,'${voltarMovelId}'`:''})">${UI.icon('check',14)} Concluir</button>`:""}
         </div>
       </div>
     `;

@@ -174,7 +174,11 @@
         const valorItem = itemOrc ? Math.round(itemOrc.valorBruto*fator*(liquidoAmb/Math.max(1,liquidoAmbAuto))) : Math.round(liquidoAmb/a.itens.length);
         return {
           id:M.uid("mov"), nome:it.item, etapa:0, responsavel:MOCK_OS.responsavel,
-          checklist:["Corpo MDF","Ferragens"].concat(it.materiaisEspeciais||[]).map(n=>({id:M.uid("chk"),nome:n,concluido:false})),
+          // item 9 do backlog de melhorias (checklist vira tarefa): a lista de componentes
+          // do móvel (MDF, ferragens, materiais especiais) não fica mais como um checklist
+          // separado e desconectado — Store.criarObra() transforma cada item aqui numa
+          // Tarefa de verdade (mesma tela de Iniciar/Concluir de qualquer outra tarefa).
+          checklistInicial:["Corpo MDF","Ferragens"].concat(it.materiaisEspeciais||[]),
           componentesCriticos:[], bloqueio:null, dataEntradaEtapa:M.todayISO(),
           dataPrevista:M.dOff(20), dataReal:null, valorLiquido:valorItem, requisitosOverride:{},
         };

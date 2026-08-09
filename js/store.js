@@ -112,6 +112,34 @@
   const state = load();
   const listeners = [];
 
+  // ---------- migração: checklist de componentes (dado antigo) vira Tarefa real ----------
+  // Antes desta versão, o "checklist de componentes" do móvel (Corpo MDF, Ferragens,
+  // materiais especiais) era uma lista de checkbox isolada, sem Iniciar/Concluir e sem
+  // aparecer em Tarefas — um dos 3 lugares diferentes que faziam a mesma coisa (item 9
+  // do backlog de melhorias). Obras já salvas (localStorage/Supabase) de antes dessa
+  // mudança ainda têm esse checklist antigo — esta função roda uma vez por carregamento,
+  // converte cada item num registro real em state.tarefas (preservando o que já estava
+  // marcado como concluído) e esvazia m.checklist. É idempotente: se já rodou antes
+  // (não sobra item em m.checklist), não faz nada.
+  function migrarChecklistLegado(){
+    let mudou = false;
+    (state.obras||[]).forEach(o=>{
+      (o.ambientes||[]).forEach(a=>{
+        (a.moveis||[]).forEach(m=>{
+          if(m.checklist && m.checklist.length){
+            m.checklist.forEach(c=>{
+              const jaExiste = state.tarefas.some(t=>t.movelId===m.id && t.titulo===c.nome && t.origemChecklist);
+              if(!jaExiste){ Store.criarTarefaDeChecklist({o,a,m}, c.nome, {concluida: !!c.concluido}); mudou = true; }
+            });
+            m.checklist = [];
+            mudou = true;
+          }
+        });
+      });
+    });
+    if(mudou) emit();
+  }
+
   function persist(){
     try{ localStorage.setItem(LS_KEY, JSON.stringify(state)); }catch(e){ /* quota etc: ignora */ }
   }
@@ -557,13 +585,6 @@
       emit();
     },
 
-    // ---------- checklist ----------
-    toggleChecklistItem(movelId, itemId){
-      const f = Store.findMovel(movelId); if(!f) return;
-      const it = f.m.checklist.find(c=>c.id===itemId); if(!it) return;
-      it.concluido = !it.concluido;
-      emit();
-    },
     setResponsavel(movelId, nome){
       const f = Store.findMovel(movelId); if(!f) return;
       const anterior = f.m.responsavel;
@@ -752,12 +773,38 @@
         a.valorBruto = Math.round(processed.valorBruto * a.valorBrutoPct);
         a.valorLiquido = Math.round(a.valorBruto * processed.fatorLiquido);
         a.obraId = processed.id;
-        a.moveis.forEach(m=>{ m.ambienteId=a.id; m.obraId=processed.id; m.checklist=m.checklist||[]; m.componentesCriticos=m.componentesCriticos||[]; m.requisitosOverride={}; m.dataEntradaEtapa=M.todayISO(); });
+        a.moveis.forEach(m=>{
+          m.ambienteId=a.id; m.obraId=processed.id; m.componentesCriticos=m.componentesCriticos||[];
+          m.requisitosOverride={}; m.dataEntradaEtapa=M.todayISO();
+          // checklist de componentes vira tarefa de verdade (item 9 do backlog de
+          // melhorias) — cada item do checklist inicial (Corpo MDF, Ferragens,
+          // materiais especiais) passa a ser uma Tarefa com Iniciar/Concluir,
+          // visível no móvel, em Tarefas geral e na aba Tarefas da obra.
+          const titulos = m.checklistInicial || [];
+          delete m.checklistInicial;
+          m.checklist = [];
+          titulos.forEach(titulo=> Store.criarTarefaDeChecklist({o:processed, a, m}, titulo));
+        });
       });
       state.obras.push(processed);
       Store.log(processed.id, "OBRA_CRIADA", `Obra ${processed.numeroOS} criada a partir da importação.`);
       emit();
       return processed;
+    },
+    // tarefa gerada a partir de um item de checklist de componente (ver criarObra
+    // e migrarChecklistLegado) — não é obrigatória para avançar de etapa (nunca foi,
+    // como checklist também não bloqueava), só precisa aparecer e poder ser concluída.
+    criarTarefaDeChecklist(f, titulo, opts){
+      opts = opts || {};
+      state.tarefas.push({
+        id:M.uid("tsk"), obraId:f.o.id, obraNome:f.o.cliente, ambienteId:f.a.id, ambienteNome:f.a.nome,
+        movelId:f.m.id, movelNome:f.m.nome, titulo, etapa:null, tipo:"PRODUCAO",
+        obrigatorio:"RECOMENDADO", responsavelPlanejado:f.m.responsavel,
+        executadoPor: opts.concluida? f.m.responsavel : null, conferidoPor:null, instrucoes:"",
+        prazo:null, permiteAvancoExcepcional:true, exigeConferencia:false, origemChecklist:true,
+        inicio:null, fim: opts.concluida? M.todayISO(): null, data:M.todayISO(),
+        status: opts.concluida? "CONCLUIDA":"PLANEJADA", resultado: opts.concluida? "OK": null,
+      });
     },
 
     // ---------- montagem: encerramento (seção 32) ----------
@@ -814,6 +861,9 @@
   };
 
   M.Store = Store;
+  // upgrade transparente de dados antigos (ver função acima) — precisa rodar
+  // depois que Store existe (usa Store.criarTarefaDeChecklist).
+  migrarChecklistLegado();
   // primeira gravação (local — instantânea)
   persist();
   // SUPABASE: dispara a sincronização em segundo plano (não bloqueia o boot)
