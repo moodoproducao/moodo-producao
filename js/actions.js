@@ -21,13 +21,86 @@
     selecaoLote: new Set(),
     auditoriaFiltro: {periodo:30, categoria:"", somenteExcecoes:false},
     assistFiltro: {status:""},
+    assistExpandido: null,
     tvWidgets: null, // preenchido a partir de M.Store.state se necessário
   };
+
+  // ---------- upload de arquivos/fotos (Supabase Storage) ----------
+  // Compartilhado por: Arquivos do projeto (obra), fotos de pendência/tarefa/assistência.
+  // Organiza automaticamente em pastas por obra dentro do bucket "arquivos-obra".
+  async function uploadArquivos(fileList, pastaPrefix, max){
+    const arquivos = [];
+    if(!fileList || !fileList.length) return arquivos;
+    if(!(M.Supa && M.Supa.habilitado)){
+      UI.toast("Envio de arquivos precisa da nuvem conectada — configure o Supabase antes de anexar arquivos.");
+      return arquivos;
+    }
+    const ok = await M.Supa.ready;
+    if(!ok){ UI.toast("Não consegui conectar à nuvem agora — tente enviar o arquivo de novo em instantes."); return arquivos; }
+    const arquivosSelecionados = Array.from(fileList).slice(0, max||fileList.length);
+    for(const file of arquivosSelecionados){
+      const path = `${pastaPrefix}/${Date.now()}_${file.name}`.replace(/\s+/g,"_");
+      const { error } = await M.Supa.client.storage.from("arquivos-obra").upload(path, file);
+      if(error){ UI.toast("Erro ao enviar "+file.name+": "+error.message); continue; }
+      const { data: urlData } = M.Supa.client.storage.from("arquivos-obra").getPublicUrl(path);
+      arquivos.push({nome:file.name, url:urlData.publicUrl, tipo:file.type, tamanho:file.size, enviadoPor:M.Store.state.usuarioAtual});
+    }
+    return arquivos;
+  }
 
   const Act = {
     go(route){ location.hash = route; },
     rerender(){ M.render(); },
     trocarUsuario(nome){ M.Store.setUsuarioAtual(nome); UI.toast("Agora navegando como "+nome+"."); location.hash = "#/dashboard"; },
+
+    // ---------- equipe (grava direto na tabela colaboradores do Supabase) ----------
+    openColaboradorForm(id){
+      if(!(M.Supa && M.Supa.habilitado)){ UI.toast("Cadastro de equipe precisa da nuvem conectada — configure o Supabase antes."); return; }
+      const c = id ? M.COLABORADORES.find(x=>x.id===id) : null;
+      UI.openModal(M.Pages.colaboradorFormHtml(c), {});
+      const form = document.getElementById("formColaborador");
+      form.addEventListener("submit", async (e)=>{
+        e.preventDefault();
+        const fd = new FormData(form);
+        const nome = (fd.get("nome")||"").trim();
+        const dados = {
+          nome, cargo: fd.get("cargo")||null, telefone: fd.get("telefone")||null, perfil: fd.get("perfil"),
+          iniciais: nome.split(/\s+/).filter(Boolean).slice(0,2).map(p=>p[0].toUpperCase()).join(""),
+        };
+        const submitBtn = form.querySelector('button[type=submit]');
+        if(submitBtn) submitBtn.disabled = true;
+        try{
+          if(c){
+            const atualizado = await M.Supa.atualizarColaborador(c.id, dados);
+            Object.assign(c, atualizado);
+          } else {
+            const criado = await M.Supa.criarColaborador(dados);
+            M.COLABORADORES.push(criado);
+          }
+          M.Store.notify();
+          UI.closeModal(); UI.toast(c? "Colaborador atualizado.":"Colaborador criado.");
+        }catch(err){
+          UI.toast("Erro ao salvar: "+(err.message||"tente de novo"));
+          if(submitBtn) submitBtn.disabled = false;
+        }
+      });
+    },
+    async desativarColaborador(id){
+      const c = M.COLABORADORES.find(x=>x.id===id); if(!c) return;
+      try{
+        const atualizado = await M.Supa.atualizarColaborador(id, {ativo:false});
+        Object.assign(c, atualizado);
+        M.Store.notify(); UI.toast("Colaborador desativado.");
+      }catch(err){ UI.toast("Erro ao desativar: "+(err.message||"tente de novo")); }
+    },
+    async reativarColaborador(id){
+      const c = M.COLABORADORES.find(x=>x.id===id); if(!c) return;
+      try{
+        const atualizado = await M.Supa.atualizarColaborador(id, {ativo:true});
+        Object.assign(c, atualizado);
+        M.Store.notify(); UI.toast("Colaborador reativado.");
+      }catch(err){ UI.toast("Erro ao reativar: "+(err.message||"tente de novo")); }
+    },
 
     // ---------- checklist / responsável ----------
     toggleChecklist(movelId, itemId){ M.Store.toggleChecklistItem(movelId, itemId); },
@@ -122,18 +195,21 @@
     openPendenciaForm(obraId, ambienteId, movelId){
       UI.openModal(M.Pages.pendenciaFormHtml(obraId, ambienteId, movelId), {});
       const form = document.getElementById("formPendencia");
-      form.addEventListener("submit", (e)=>{
+      form.addEventListener("submit", async (e)=>{
         e.preventDefault();
         const fd = new FormData(form);
         const mv = fd.get("movelId");
         const f = mv ? M.Store.findMovel(mv) : null;
+        const submitBtn = form.querySelector('button[type=submit]');
+        if(submitBtn) submitBtn.disabled = true;
+        const fotos = await uploadArquivos(fd.getAll("fotos").filter(x=>x && x.size), (fd.get("obraId")||"avulsas")+"/pendencias");
         M.Store.criarPendencia({
           obraId: fd.get("obraId"), ambienteId: fd.get("ambienteId")||null, movelId: mv||null,
           obraNome: f? f.o.cliente : (M.Store.getObra(fd.get("obraId"))||{}).cliente,
           ambienteNome: f? f.a.nome : "", movelNome: f? f.m.nome : (fd.get("descricaoLivre")||"Item avulso"),
           categoria: fd.get("categoria"), descricao: fd.get("descricao"), responsavel: fd.get("responsavel"),
           fornecedor: fd.get("fornecedor"), prazo: fd.get("prazo")||null, prioridade: fd.get("prioridade"),
-          origem: fd.get("origem")||null,
+          origem: fd.get("origem")||null, fotos,
         });
         UI.closeModal(); UI.toast("Pendência criada — fluxo iniciado.");
       });
@@ -148,12 +224,13 @@
     openTarefaForm(obraId){
       UI.openModal(M.Pages.tarefaFormHtml(obraId), {});
       const form = document.getElementById("formTarefa");
-      form.addEventListener("submit",(e)=>{
+      form.addEventListener("submit", async (e)=>{
         e.preventDefault();
         const fd = new FormData(form);
         const mv = fd.get("movelId");
         const f = mv ? M.Store.findMovel(mv) : null;
         const etapa = fd.get("etapa")||null;
+        const fotos = await uploadArquivos(fd.getAll("fotos").filter(x=>x && x.size), (fd.get("obraId")||"geral")+"/tarefas");
         const t = M.Store.criarTarefa({
           obraId: fd.get("obraId"), obraNome:(M.Store.getObra(fd.get("obraId"))||{}).cliente,
           ambienteId: f? f.a.id: null, ambienteNome: f? f.a.nome: null,
@@ -161,7 +238,7 @@
           titulo: fd.get("titulo"), etapa: etapa,
           obrigatorio: fd.get("obrigatorio")||"OPCIONAL",
           responsavelPlanejado: fd.get("responsavel"), tipo: fd.get("tipo")||"COMPLEMENTAR",
-          instrucoes: fd.get("instrucoes")||"",
+          instrucoes: fd.get("instrucoes")||"", fotos,
         });
         if(fd.get("salvarPadrao")==="on" && etapa){
           M.Store.salvarTarefaComoPadrao(t);
@@ -171,6 +248,10 @@
         }
         UI.closeModal();
       });
+    },
+    abrirDetalheTarefa(id){
+      const t = M.Store.state.tarefas.find(x=>x.id===id); if(!t) return;
+      UI.openModal(M.Pages.tarefaDetalheModalHtml(t));
     },
     iniciarTarefa(id){ M.Store.iniciarTarefa(id); UI.toast("Tarefa iniciada."); },
     pausarTarefa(id){ M.Store.pausarTarefa(id); UI.toast("Tarefa pausada."); },
@@ -196,7 +277,7 @@
         <div class="modal-head"><h2>Reportar problema</h2><button class="modal-close" data-close>✕</button></div>
         <form id="formProblema">
           <div class="modal-body">
-            <div class="field"><label>${UI.icon('camera',14)} Foto (opcional)</label><input type="file" accept="image/*" capture="environment" name="foto"></div>
+            ${UI.fotoFieldHtml("fotos")}
             <div class="field"><label>Origem do problema</label>
               <select name="origem">${M.ORIGENS_PROBLEMA.map(o=>`<option>${o}</option>`).join("")}</select>
             </div>
@@ -205,10 +286,11 @@
           <div class="modal-foot"><button type="button" class="btn" data-close>Cancelar</button><button class="btn danger" type="submit">Criar retrabalho</button></div>
         </form>
       `);
-      document.getElementById("formProblema").addEventListener("submit",(e)=>{
+      document.getElementById("formProblema").addEventListener("submit", async (e)=>{
         e.preventDefault();
         const fd = new FormData(e.target);
-        M.Store.concluirTarefa(tarefaId,"GEROU_REFACAO",{observacao:fd.get("descricao"), origemProblema:fd.get("origem")});
+        const fotos = await uploadArquivos(fd.getAll("fotos").filter(x=>x && x.size), tarefaId+"/problema");
+        M.Store.concluirTarefa(tarefaId,"GEROU_REFACAO",{observacao:fd.get("descricao"), origemProblema:fd.get("origem"), fotos});
         UI.closeModal(); UI.toast("Retrabalho registrado e visível em Auditoria.");
       });
     },
@@ -218,21 +300,23 @@
     openAssistenciaForm(obraId){
       UI.openModal(M.Pages.assistenciaFormHtml(obraId), {});
       const form = document.getElementById("formAssistencia");
-      form.addEventListener("submit",(e)=>{
+      form.addEventListener("submit", async (e)=>{
         e.preventDefault();
         const fd = new FormData(form);
         const obra = M.Store.getObra(fd.get("obraId"));
+        const fotos = await uploadArquivos(fd.getAll("fotos").filter(x=>x && x.size), (fd.get("obraId")||"avulsas")+"/assistencias");
         M.Store.criarAssistencia({
           obraId: fd.get("obraId"), obraNome: obra? obra.cliente: "", cliente: obra? obra.cliente: fd.get("clienteLivre"),
           ambienteNome: fd.get("ambienteNome"), movelNome: fd.get("movelNome"),
           descricao: fd.get("descricao"), categoria: fd.get("categoria"), origem: fd.get("origem"),
-          prioridade: fd.get("prioridade"), responsavel: fd.get("responsavel"), prazo: fd.get("prazo")||null,
+          prioridade: fd.get("prioridade"), responsavel: fd.get("responsavel"), prazo: fd.get("prazo")||null, fotos,
         });
         UI.closeModal(); UI.toast("Assistência registrada.");
       });
     },
     setAssistenciaStatus(id, status){ M.Store.atualizarAssistencia(id,{status}); UI.toast("Status da assistência atualizado."); },
     setAssistFiltro(campo,val){ M.UIState.assistFiltro[campo]=val; Act.rerender(); },
+    toggleAssistExpandido(id){ M.UIState.assistExpandido = (M.UIState.assistExpandido===id)?null:id; Act.rerender(); },
 
     // ---------- montagem ----------
     abrirEncerramentoMontagem(movelId){
@@ -250,6 +334,15 @@
 
     // ---------- obra detail ----------
     setObraTab(obraId, tab){ M.UIState.obraTab[obraId]=tab; Act.rerender(); },
+    async enviarArquivoObra(obraId, inputEl){
+      const arquivos = await uploadArquivos(Array.from(inputEl.files||[]), obraId+"/arquivos", 5);
+      arquivos.forEach(a=> M.Store.adicionarArquivo(obraId, a));
+      if(arquivos.length) UI.toast(arquivos.length>1? "Arquivos enviados.":"Arquivo enviado.");
+      inputEl.value = "";
+    },
+    removerArquivo(obraId, arquivoId){
+      UI.confirm("Remover este arquivo da obra?", ()=>{ M.Store.removerArquivo(obraId, arquivoId); UI.toast("Arquivo removido."); });
+    },
 
     // ---------- nova obra (tela única — seção 6) ----------
     novaObraDropFile(kind, name){
@@ -282,14 +375,15 @@
       if(m<0){ m=11; y--; } if(m>11){ m=0; y++; }
       M.UIState.calMonth = m; M.UIState.calYear = y; Act.rerender();
     },
-   toggleCalFiltro(tipo){
-  const s = M.UIState.calFiltros;
-  if(s.has(tipo)) s.delete(tipo); else s.add(tipo);
-  Act.rerender();
-},
-abrirDiaCalendario(iso){
-  UI.openModal(M.Pages.calendarioDiaModalHtml(iso));
-},
+    toggleCalFiltro(tipo){
+      const s = M.UIState.calFiltros;
+      if(s.has(tipo)) s.delete(tipo); else s.add(tipo);
+      Act.rerender();
+    },
+    abrirDiaCalendario(iso){
+      UI.openModal(M.Pages.calendarioDiaModalHtml(iso));
+    },
+
     // ---------- lotes ----------
     toggleSelecaoLote(id){
       const s = M.UIState.selecaoLote;

@@ -31,15 +31,15 @@
         <table class="tbl">
           <thead><tr><th>Tarefa</th><th>Obra / local</th><th>Responsável</th><th>Executor</th><th>Início–Fim</th><th>Status</th><th>Resultado</th><th></th></tr></thead>
           <tbody>${tarefas.map(t=>`
-            <tr>
-              <td>${UI.esc(t.titulo)} ${t.tipo==='REFACAO'?'<span class="chip critical">retrabalho</span>':t.tipo==='COMPLEMENTAR'?'<span class="chip neutral">complementar</span>':''}</td>
-              <td class="small muted"><a href="#/obra/${t.obraId}">${UI.esc(t.obraNome)}</a>${t.movelNome? " · "+UI.esc(t.movelNome):""}</td>
+            <tr style="cursor:pointer;" onclick="Act.abrirDetalheTarefa('${t.id}')">
+              <td>${UI.esc(t.titulo)} ${t.tipo==='REFACAO'?'<span class="chip critical">retrabalho</span>':t.tipo==='COMPLEMENTAR'?'<span class="chip neutral">complementar</span>':''} ${(t.fotos&&t.fotos.length)||t.instrucoes? `<span class="chip neutral">${UI.icon('file-text',10)}</span>`:""}</td>
+              <td class="small muted"><a href="#/obra/${t.obraId}" onclick="event.stopPropagation()">${UI.esc(t.obraNome)}</a>${t.movelNome? " · "+UI.esc(t.movelNome):""}</td>
               <td>${UI.person(t.responsavelPlanejado)}</td>
               <td>${t.executadoPor? UI.person(t.executadoPor):'<span class="small muted">—</span>'}</td>
               <td class="small muted">${t.inicio||"—"} ${t.fim?"– "+t.fim:""}</td>
               <td>${UI.tarefaStatusChip(t.status)}</td>
               <td>${UI.resultadoChip(t.resultado)}</td>
-              <td>${t.status==='PLANEJADA'? `<button class="btn sm" onclick="Act.iniciarTarefa('${t.id}')">Iniciar</button>`
+              <td onclick="event.stopPropagation()">${t.status==='PLANEJADA'? `<button class="btn sm" onclick="Act.iniciarTarefa('${t.id}')">Iniciar</button>`
                   : t.status==='EM_ANDAMENTO'? `<button class="btn sm primary" onclick="Act.pedirResultado('${t.id}')">Concluir</button>` : ""}</td>
             </tr>`).join("")}</tbody>
         </table>
@@ -71,8 +71,33 @@
             <div class="field"><label>Responsável</label><select name="responsavel">${M.COLABORADORES.map(c=>`<option>${c.nome}</option>`).join("")}</select></div>
             <div class="field"><label>Tipo</label><select name="tipo"><option value="COMPLEMENTAR">Complementar</option><option value="PRODUCAO">Produção</option></select></div>
           </div>
+          <div class="field"><label>Instruções (opcional)</label><textarea name="instrucoes" placeholder="Detalhes de como executar, cuidados especiais, etc."></textarea></div>
+          ${UI.fotoFieldHtml("fotos")}
         </div>
         <div class="modal-foot"><button type="button" class="btn" data-close>Cancelar</button><button class="btn primary" type="submit">Criar tarefa</button></div>
       </form>`;
+  };
+
+  // Modal de detalhe — aberto ao clicar numa tarefa em qualquer lista (título/local
+  // continuam clicáveis separadamente; o clique na linha inteira abre isto).
+  M.Pages.tarefaDetalheModalHtml = function(t){
+    return `
+      <div class="modal-head"><h2>${UI.esc(t.titulo)}</h2><button class="modal-close" data-close>✕</button></div>
+      <div class="modal-body">
+        <div class="flex-gap" style="gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+          ${UI.tarefaStatusChip(t.status)} ${UI.resultadoChip(t.resultado)}
+          ${t.tipo==='REFACAO'?'<span class="chip critical">retrabalho</span>':''}
+        </div>
+        <p class="small muted">${t.obraId?`<a href="#/obra/${t.obraId}" onclick="UI.closeModal()">${UI.esc(t.obraNome||"")}</a>`:UI.esc(t.obraNome||"")}${t.ambienteNome?" · "+UI.esc(t.ambienteNome):""}${t.movelNome?" · "+UI.esc(t.movelNome):""}</p>
+        <p class="small">Responsável: ${UI.person(t.responsavelPlanejado)}${t.executadoPor?" · Executor: "+UI.person(t.executadoPor):""}</p>
+        ${t.instrucoes? `<div class="card pad" style="margin-top:10px;"><div class="card-title">Instruções</div><p style="white-space:pre-wrap;margin:0;">${UI.esc(t.instrucoes)}</p></div>`:""}
+        ${t.motivoRefacao? `<div class="card pad" style="margin-top:10px;"><div class="card-title">Motivo do retrabalho</div><p style="margin:0;">${UI.esc(t.motivoRefacao)}</p></div>`:""}
+        ${t.fotos&&t.fotos.length? `<div style="margin-top:10px;"><div class="card-title">Fotos</div>${UI.fotosGaleriaHtml(t.fotos)}</div>`:""}
+        <div class="flex-gap" style="margin-top:14px;flex-wrap:wrap;">
+          ${t.status==='PLANEJADA'? `<button class="btn primary" onclick="UI.closeModal(); Act.iniciarTarefa('${t.id}')">${UI.icon('play',14)} Iniciar</button>`:""}
+          ${t.status==='EM_ANDAMENTO'? `<button class="btn primary" onclick="UI.closeModal(); Act.pedirResultado('${t.id}')">${UI.icon('check',14)} Concluir</button>`:""}
+        </div>
+      </div>
+    `;
   };
 })();

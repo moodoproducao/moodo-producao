@@ -42,11 +42,13 @@
             ${UI.prioridadeChip(p.prioridade)}
             ${UI.statusPendenciaChip(p.status)}
             <span class="chip ${dias>=5?'critical':dias>=2?'warning':'neutral'}">${dias}d em aberto</span>
+            ${p.fotos&&p.fotos.length? `<span class="chip neutral">${UI.icon('image',11)} ${p.fotos.length}</span>`:""}
           </div>
         </div>
         ${proximaAcao? `<div class="next-action"><div class="lbl">Próxima ação</div><div class="txt">${UI.esc(proximaAcao)} — ${UI.person(p.responsavel)} ${p.prazo?" · prazo "+C.fmtDate(p.prazo):""}</div></div>`:""}
         ${expandido ? `
           ${fluxoStepsHtml(p,false)}
+          ${UI.fotosGaleriaHtml(p.fotos)}
           <div class="flex-gap" style="margin-top:12px;flex-wrap:wrap;" onclick="event.stopPropagation()">
             ${p.status!=="RESOLVIDA"? `<button class="btn sm primary" onclick="Act.avancarFluxo('${p.id}')">${UI.icon('chevron-right',12)} Continuar fluxo</button>`:""}
             ${p.status!=="RESOLVIDA"? `<button class="btn sm" onclick="Act.setPendenciaStatus('${p.id}','RESOLVIDA')">Marcar resolvida</button>`:""}
@@ -115,6 +117,7 @@
             <div class="field"><label>Prazo</label><input type="date" name="prazo"></div>
             <div class="field"><label>Prioridade</label><select name="prioridade"><option value="ALTA">Alta</option><option value="MEDIA" selected>Média</option><option value="BAIXA">Baixa</option></select></div>
           </div>
+          ${UI.fotoFieldHtml("fotos")}
         </div>
         <div class="modal-foot"><button type="button" class="btn" data-close>Cancelar</button><button class="btn primary" type="submit">Criar pendência</button></div>
       </form>`;

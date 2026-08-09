@@ -59,8 +59,8 @@
           <td>${e.exigeConferencia? `<span class="chip warning">sim</span>`:`<span class="chip neutral">não</span>`}</td>
           <td>
             <div class="flex-gap" style="flex-wrap:wrap;gap:4px;">
-              <button class="btn sm" onclick="Act.moverEtapaOrdem('${e.id}','up')" title="Mover para cima">${UI.icon('chevron-left',12)}</button>
-              <button class="btn sm" onclick="Act.moverEtapaOrdem('${e.id}','down')" title="Mover para baixo">${UI.icon('chevron-right',12)}</button>
+              <button class="btn sm" onclick="Act.moverEtapaOrdem('${e.id}','up')" title="Mover para cima">${UI.icon('chevron-up',12)}</button>
+              <button class="btn sm" onclick="Act.moverEtapaOrdem('${e.id}','down')" title="Mover para baixo">${UI.icon('chevron-down',12)}</button>
               <button class="btn sm" onclick="Act.editarEtapaForm('${e.id}')" title="Editar">${UI.icon('edit',12)}</button>
               <button class="btn sm" onclick="Act.duplicarEtapa('${e.id}')" title="Duplicar">Duplicar</button>
               ${e.ativa

@@ -34,6 +34,8 @@
     clock:           `<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>`,
     "chevron-left":  `<path d="M15 5l-7 7 7 7"/>`,
     "chevron-right": `<path d="M9 5l7 7-7 7"/>`,
+    "chevron-up":    `<path d="M5 15l7-7 7 7"/>`,
+    "chevron-down":  `<path d="M5 9l7 7 7-7"/>`,
     x:               `<path d="M6 6l12 12M18 6L6 18"/>`,
     plus:            `<path d="M12 5v14M5 12h14"/>`,
     filter:          `<path d="M4 5h16l-6 8v6l-4-2v-4L4 5z"/>`,
@@ -53,6 +55,9 @@
     circle:          `<circle cx="12" cy="12" r="8"/>`,
     link:            `<path d="M9 15l6-6"/><path d="M8 16l-2 2a3 3 0 0 1-4-4l4-4a3 3 0 0 1 4 0"/><path d="M16 8l2-2a3 3 0 0 1 4 4l-4 4a3 3 0 0 1-4 0"/>`,
     "file-text":     `<path d="M7 3h7l4 4v14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 15.5h6M9 8.5h2"/>`,
+    upload:          `<path d="M12 15V4M8 8l4-4 4 4"/><path d="M5 19h14"/>`,
+    "map-pin":       `<path d="M12 21s7-7.5 7-12a7 7 0 0 0-14 0c0 4.5 7 12 7 12z"/><circle cx="12" cy="9" r="2.5"/>`,
+    image:           `<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16l-5.5-5.5L4 21"/>`,
   };
   function icon(name, size){
     const s = size||16;
@@ -178,6 +183,21 @@
     return `<span class="chip ${cls}">${dias}d na etapa</span>`;
   }
 
+  // ---------- fotos (formulários de pendência/tarefa/assistência) ----------
+  // Sem limite de quantidade — anexa quantas fotos forem necessárias, uma de
+  // cada vez (tira e confirma, tira mais e confirma...) ou várias de uma vez.
+  function fotoFieldHtml(name){
+    return `<div class="field"><label>${icon('camera',13)} Fotos (opcional — quantas forem necessárias)</label>
+      <input type="file" name="${name}" accept="image/*" capture="environment" multiple></div>`;
+  }
+  function fotosGaleriaHtml(fotos){
+    if(!fotos || !fotos.length) return "";
+    return `<div class="foto-galeria">${fotos.map(f=>`
+      <a href="${f.url}" target="_blank" rel="noopener" class="foto-thumb" title="${esc(f.nome||'')}">
+        <img src="${f.url}" alt="${esc(f.nome||'foto')}" loading="lazy">
+      </a>`).join("")}</div>`;
+  }
+
   // ---------- modal ----------
   function ensureOverlay(){
     let ov = document.getElementById("overlay");
@@ -206,6 +226,7 @@
     tarefaStatusChip, resultadoChip, progressBar, stageDaysChip, icon, ICONS,
     assistenciaStatusChip, perfilChip,
     statTile, card, progressRow, attentionItem, pageSearchInput, attachQuickSearch,
+    fotoFieldHtml, fotosGaleriaHtml,
 
     openModal(html, opts){
       opts = opts||{};

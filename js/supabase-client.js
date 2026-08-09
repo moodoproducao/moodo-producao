@@ -8,14 +8,14 @@
    (carregarEstado) e sai (salvarEstado) da memória.
 
    Como plugar:
-   1. Preencha supabase-config.js com a URL e a anon key do seu projeto.
+   1. Preencha supabase-config.js com a URL e a publishable key do seu projeto.
    2. Inclua estes dois arquivos no index.html, ANTES de store.js:
         <script src="js/supabase-config.js"></script>
         <script src="js/supabase-client.js"></script>
    3. store.js já sabe usar M.Supa quando M.Supa.habilitado for true (ver os
       comentários "// SUPABASE:" em store.js).
 
-   Enquanto SUPABASE_URL/SUPABASE_ANON_KEY estiverem vazios em
+   Enquanto SUPABASE_URL/SUPABASE_PUBLISHABLE_KEY estiverem vazios em
    supabase-config.js, nada disso roda — o app continua 100% no localStorage,
    exatamente como hoje.
    ============================================================================ */
@@ -24,7 +24,7 @@
   window.M = window.M || {};
   const M = window.M;
 
-  const habilitado = !!(M.SUPABASE_URL && M.SUPABASE_ANON_KEY);
+  const habilitado = !!(M.SUPABASE_URL && M.SUPABASE_PUBLISHABLE_KEY);
   const Supa = { habilitado, client: null, ready: Promise.resolve(false) };
   M.Supa = Supa;
 
@@ -45,7 +45,7 @@
   }
 
   Supa.ready = carregarSupabaseJs().then(() => {
-    Supa.client = window.supabase.createClient(M.SUPABASE_URL, M.SUPABASE_ANON_KEY, {
+    Supa.client = window.supabase.createClient(M.SUPABASE_URL, M.SUPABASE_PUBLISHABLE_KEY, {
       auth: { persistSession: true, autoRefreshToken: true },
     });
     console.info("[Moodo] Conectado ao Supabase.");
@@ -72,6 +72,35 @@
     const { data, error } = await Supa.client.from("colaboradores").select("*").eq("auth_user_id", user.id).single();
     if (error) return null;
     return data;
+  };
+
+  // --------------------------------------------------------------------------
+  // EQUIPE — tabela relacional própria (colaboradores), separada do blob de
+  // estado_operacional. É a mesma tabela que auth_user_id vai usar quando o
+  // login por senha for ligado, então a equipe já nasce pronta pra isso.
+  // --------------------------------------------------------------------------
+  Supa.listarColaboradores = async () => {
+    const { data, error } = await Supa.client.from("colaboradores").select("*").order("criado_em", { ascending: true });
+    if (error) { console.error("[Moodo] erro ao listar colaboradores:", error); return null; }
+    return data;
+  };
+  Supa.criarColaborador = async (dados) => {
+    const { data, error } = await Supa.client.from("colaboradores").insert(dados).select().single();
+    if (error) throw error;
+    return data;
+  };
+  Supa.atualizarColaborador = async (id, dados) => {
+    const { data, error } = await Supa.client.from("colaboradores").update(dados).eq("id", id).select().single();
+    if (error) throw error;
+    return data;
+  };
+  // dispara "cb" sempre que QUALQUER aparelho criar/editar/desativar alguém —
+  // quem chamou decide o que fazer (aqui, sempre recarrega a lista inteira).
+  Supa.assinarMudancasColaboradores = (cb) => {
+    const canal = Supa.client.channel("moodo-colaboradores-realtime");
+    canal.on("postgres_changes", { event: "*", schema: "public", table: "colaboradores" }, () => cb());
+    canal.subscribe();
+    return () => Supa.client.removeChannel(canal);
   };
 
   // --------------------------------------------------------------------------

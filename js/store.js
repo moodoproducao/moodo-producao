@@ -148,6 +148,27 @@
         // a partir daqui, mudanças feitas em QUALQUER outro aparelho chegam aqui.
         M.Supa.assinarMudancas(remoto2=> aplicarEstadoRemoto(remoto2));
       });
+      sincronizarEquipeComSupabase();
+    });
+  }
+
+  // SUPABASE: a equipe (M.COLABORADORES) vive numa tabela relacional própria,
+  // separada do blob de estado_operacional — mutamos o array NO LUGAR (nunca
+  // reatribuímos M.COLABORADORES) porque data.js guarda uma referência interna
+  // ao mesmo array (colabByNome) que precisa continuar enxergando os dados novos.
+  function aplicarColaboradoresRemotos(lista){
+    if(!lista) return;
+    M.COLABORADORES.length = 0;
+    lista.forEach(c=> M.COLABORADORES.push(c));
+    listeners.forEach(fn=>fn());
+  }
+  function sincronizarEquipeComSupabase(){
+    M.Supa.listarColaboradores().then(lista=>{
+      if(lista && lista.length) aplicarColaboradoresRemotos(lista);
+      // se vier vazia, mantém o elenco de exemplo local até alguém cadastrar a equipe real.
+      M.Supa.assinarMudancasColaboradores(()=>{
+        M.Supa.listarColaboradores().then(lista2=> aplicarColaboradoresRemotos(lista2));
+      });
     });
   }
 
@@ -155,6 +176,9 @@
     state,
     subscribe(fn){ listeners.push(fn); return ()=>{ const i=listeners.indexOf(fn); if(i>=0) listeners.splice(i,1); }; },
     reset(){ Object.assign(state, seedState()); emit(); },
+    // re-renderiza sem persistir `state` — usado depois de mudanças que vivem
+    // fora do estado principal (hoje: equipe, gravada direto na tabela colaboradores).
+    notify(){ listeners.forEach(fn=>fn()); },
 
     // ---------- lookups ----------
     getObra(obraId){ return state.obras.find(o=>o.id===obraId); },
@@ -496,6 +520,22 @@
     },
     reabrirPendencia(pendId){ Store.atualizarStatusPendencia(pendId, "ABERTA"); },
 
+    // ---------- arquivos do projeto (por obra) ----------
+    adicionarArquivo(obraId, arquivo){
+      const o = Store.getObra(obraId); if(!o) return;
+      o.arquivos = o.arquivos || [];
+      const item = Object.assign({id:M.uid("arq"), enviadoEm:M.todayISO()}, arquivo);
+      o.arquivos.unshift(item);
+      Store.log(obraId, "ARQUIVO_ENVIADO", `Arquivo enviado: ${arquivo.nome}`);
+      emit();
+      return item;
+    },
+    removerArquivo(obraId, arquivoId){
+      const o = Store.getObra(obraId); if(!o) return;
+      o.arquivos = (o.arquivos||[]).filter(a=>a.id!==arquivoId);
+      emit();
+    },
+
     // ---------- lotes ----------
     criarLote(l){
       const item = Object.assign({id:M.uid("lote"), status:"PROGRAMADO", data:M.todayISO()}, l);
@@ -576,7 +616,8 @@
         Store.criarTarefa({obraId:t.obraId, obraNome:t.obraNome, ambienteId:t.ambienteId, ambienteNome:t.ambienteNome,
           movelId:t.movelId, movelNome:t.movelNome, titulo:"Retrabalho: "+t.titulo, etapa:t.etapa,
           responsavelPlanejado:t.executadoPor, tipo:"REFACAO", obrigatorio:"OBRIGATORIO",
-          motivoRefacao:opts.observacao||"Gerado a partir de: "+t.titulo, origemProblema:opts.origemProblema||"Não identificado"});
+          motivoRefacao:opts.observacao||"Gerado a partir de: "+t.titulo, origemProblema:opts.origemProblema||"Não identificado",
+          fotos:opts.fotos||[]});
         Store.audit({categoria:"QUALIDADE", tipo:"RETRABALHO", obraId:t.obraId, ambienteId:t.ambienteId, movelId:t.movelId,
           etapa:t.etapa, descricao:`Retrabalho gerado em "${t.titulo}"`, motivo:opts.observacao||"-"});
       }

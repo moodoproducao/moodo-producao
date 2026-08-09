@@ -24,19 +24,21 @@
       const vencida = a.prazo && C.diasAte(a.prazo)<0 && a.status!=="CONCLUIDA";
       const idxAtual = STATUS_FLOW.indexOf(a.status);
       const proximo = STATUS_FLOW[idxAtual+1];
-      return `<div class="asst-card" style="margin-bottom:10px;">
+      const expandido = M.UIState.assistExpandido===a.id;
+      return `<div class="asst-card" style="margin-bottom:10px;cursor:pointer;" onclick="Act.toggleAssistExpandido('${a.id}')">
         <div class="flex-between" style="flex-wrap:wrap;gap:8px;">
           <div>
-            <div class="small muted">${UI.esc(a.categoria)} · ${a.obraId?`<a href="#/obra/${a.obraId}">${UI.esc(a.obraNome)}</a>`:UI.esc(a.cliente||"")} ${a.ambienteNome?"· "+UI.esc(a.ambienteNome):""}</div>
+            <div class="small muted">${UI.esc(a.categoria)} · ${a.obraId?`<a href="#/obra/${a.obraId}" onclick="event.stopPropagation()">${UI.esc(a.obraNome)}</a>`:UI.esc(a.cliente||"")} ${a.ambienteNome?"· "+UI.esc(a.ambienteNome):""}</div>
             <b>${UI.esc(a.descricao)}</b>
           </div>
-          <div class="flex-gap">${UI.prioridadeChip(a.prioridade)}${UI.assistenciaStatusChip(a.status)}</div>
+          <div class="flex-gap">${UI.prioridadeChip(a.prioridade)}${UI.assistenciaStatusChip(a.status)}${a.fotos&&a.fotos.length?`<span class="chip neutral">${UI.icon('image',11)} ${a.fotos.length}</span>`:""}</div>
         </div>
         <div class="flex-between small muted" style="margin-top:10px;">
           <span>${UI.person(a.responsavel)} · origem: ${UI.esc(a.origem||"—")}</span>
           <span class="${vencida?'critical':''}" style="${vencida?'color:var(--critical);font-weight:700;':''}">${a.prazo? (vencida?"venceu "+C.fmtDate(a.prazo):"prazo "+C.fmtDate(a.prazo)) : "sem prazo"}</span>
         </div>
-        ${a.status!=="CONCLUIDA" ? `<div class="flex-gap" style="margin-top:10px;">
+        ${expandido? UI.fotosGaleriaHtml(a.fotos) : ""}
+        ${a.status!=="CONCLUIDA" ? `<div class="flex-gap" style="margin-top:10px;" onclick="event.stopPropagation()">
           ${proximo? `<button class="btn sm primary" onclick="Act.setAssistenciaStatus('${a.id}','${proximo}')">Avançar → ${STATUS_LABEL[proximo]}</button>`:""}
           <button class="btn sm" onclick="Act.setAssistenciaStatus('${a.id}','CONCLUIDA')">Marcar concluída</button>
         </div>`:""}
@@ -86,7 +88,7 @@
             <div class="field"><label>Prioridade</label><select name="prioridade"><option value="ALTA">Alta</option><option value="MEDIA" selected>Média</option><option value="BAIXA">Baixa</option></select></div>
           </div>
           <div class="field"><label>Prazo</label><input type="date" name="prazo"></div>
-          <div class="field"><label>${UI.icon('camera',13)} Foto (opcional)</label><input type="file" accept="image/*" capture="environment" name="foto"></div>
+          ${UI.fotoFieldHtml("fotos")}
         </div>
         <div class="modal-foot"><button type="button" class="btn" data-close>Cancelar</button><button class="btn primary" type="submit">Registrar assistência</button></div>
       </form>`;

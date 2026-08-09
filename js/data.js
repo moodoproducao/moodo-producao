@@ -33,7 +33,7 @@ window.M = window.M || {};
 
   // grupos visuais fixos do pipeline (seção 8) — cada etapa escolhe um destes em "grupo"
   const STAGE_GROUPS = [
-    {key:"PRE_PRODUCAO", label:"Pré-produção"},
+    {key:"PRE_PRODUCAO", label:"PCP"},
     {key:"FABRICA",      label:"Fábrica"},
     {key:"LOGISTICA",    label:"Logística / Obra"},
   ];
