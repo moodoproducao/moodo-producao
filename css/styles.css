@@ -344,7 +344,9 @@ table.tbl tr:hover td{ background:var(--surface-alt); }
 .cal-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; font-size:15px; }
 .cal-grid{ display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:6px; }
 .cal-dow{ font-size:10.5px; color:var(--ink-mute); text-align:center; padding-bottom:4px; font-weight:700; text-transform:uppercase; min-width:0; overflow:hidden;}
-.cal-cell{ background:var(--surface); border:1px solid var(--border); border-radius:8px; min-height:86px; padding:6px; font-size:10.5px; min-width:0; overflow:hidden;}
+.cal-cell{ background:var(--surface); border:1px solid var(--border); border-radius:8px; min-height:86px; padding:6px; font-size:10.5px; min-width:0; overflow:hidden; cursor:pointer; transition:border-color .15s, box-shadow .15s;}
+.cal-cell:not(.empty):hover{ border-color:var(--brand); }
+.cal-more{ font-size:9.5px; color:var(--ink-mute); font-weight:700; margin-top:1px; } padding:6px; font-size:10.5px; min-width:0; overflow:hidden;}
 .cal-cell.empty{ background:transparent; border:none; }
 .cal-cell.today{ box-shadow:0 0 0 2px var(--brand) inset; }
 .cal-daynum{ font-weight:700; color:var(--ink-soft); margin-bottom:4px;}

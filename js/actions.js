@@ -282,12 +282,14 @@
       if(m<0){ m=11; y--; } if(m>11){ m=0; y++; }
       M.UIState.calMonth = m; M.UIState.calYear = y; Act.rerender();
     },
-    toggleCalFiltro(tipo){
-      const s = M.UIState.calFiltros;
-      if(s.has(tipo)) s.delete(tipo); else s.add(tipo);
-      Act.rerender();
-    },
-
+   toggleCalFiltro(tipo){
+  const s = M.UIState.calFiltros;
+  if(s.has(tipo)) s.delete(tipo); else s.add(tipo);
+  Act.rerender();
+},
+abrirDiaCalendario(iso){
+  UI.openModal(M.Pages.calendarioDiaModalHtml(iso));
+},
     // ---------- lotes ----------
     toggleSelecaoLote(id){
       const s = M.UIState.selecaoLote;
