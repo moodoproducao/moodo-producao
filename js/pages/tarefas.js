@@ -8,7 +8,11 @@
 
   M.Pages.tarefas = function(){
     const f = M.UIState.tarefaFiltro;
+    const nome = M.Store.state.usuarioAtual;
+    const colab = M.colabByNome(nome);
+    const somenteMinhas = colab && (colab.perfil==="OPERADOR"||colab.perfil==="MONTADOR");
     let tarefas = M.Store.state.tarefas.slice().sort((a,b)=> (a.status==="EM_ANDAMENTO"?0:a.status==="PLANEJADA"?1:2) - (b.status==="EM_ANDAMENTO"?0:b.status==="PLANEJADA"?1:2));
+    if(somenteMinhas) tarefas = tarefas.filter(t=>t.responsavelPlanejado===nome || t.executadoPor===nome);
     if(f.responsavel) tarefas = tarefas.filter(t=>t.responsavelPlanejado===f.responsavel);
     if(f.status) tarefas = tarefas.filter(t=>t.status===f.status);
 
@@ -45,7 +49,7 @@
         </table>
       </div>
     `;
-    return {title:"Tarefas", crumb:"Responsável × executor, apontamento de produção", html,
+    return {title: somenteMinhas?"Minhas Tarefas":"Tarefas", crumb:"Responsável × executor, apontamento de produção", html,
       actionsHtml:`<button class="btn primary" onclick="Act.openTarefaForm(null)">+ Nova tarefa</button>`};
   };
 
