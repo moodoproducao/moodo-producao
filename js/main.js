@@ -5,7 +5,7 @@
   "use strict";
   const M = window.M;
   const UI = M.UI;
-  const APP_VERSION = "2.0.0";
+  const APP_VERSION = "2.1.0";
 
   function usuarioAtualColab(){
     return M.colabByNome(M.Store.state.usuarioAtual) || M.COLABORADORES[9];
@@ -87,7 +87,18 @@
     `;
   }
 
+  // CORREÇÃO (auditoria): render() é chamado tanto em navegação real (troca de
+  // hash) quanto toda vez que o estado muda (Store.subscribe(render) — ex.:
+  // marcar um item de checklist, mover uma etapa). Antes, TODA chamada dava
+  // window.scrollTo(0,0), então marcar um checklist no fim de uma lista longa
+  // jogava a tela de volta pro topo. Agora só reseta o scroll quando o hash
+  // realmente mudou (navegação de verdade); re-render por mudança de estado
+  // na mesma página mantém a posição de rolagem.
+  let ultimoHashRenderizado = null;
   function render(){
+    const hashAtual = location.hash;
+    const navegou = hashAtual !== ultimoHashRenderizado;
+    ultimoHashRenderizado = hashAtual;
     const {key, params} = M.Router.parseHash();
     const fn = M.Router.ROUTES[key] || M.Router.ROUTES["dashboard"];
     let page;
@@ -105,7 +116,7 @@
       app.innerHTML = shell(key, page);
     }
     if(typeof page.afterRender === "function") page.afterRender();
-    window.scrollTo(0,0);
+    if(navegou) window.scrollTo(0,0);
     renderPwaBanner();
   }
 

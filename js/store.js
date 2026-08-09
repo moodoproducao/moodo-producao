@@ -115,11 +115,37 @@
   // (fire-and-forget — não trava a UI esperando a rede). localStorage
   // continua sendo gravado sempre, como cache local/offline.
   let supaSaveTimer = null;
+  let supaRetryTimer = null;
+  let supaSaveFailing = false;
+  // CORREÇÃO (auditoria): antes, uma falha de gravação na nuvem (rede caiu,
+  // Supabase fora do ar etc.) era só um console.error — o operador continuava
+  // vendo a tela normal, achando que estava tudo sincronizado, quando na
+  // verdade só o localStorage deste aparelho tinha o dado novo. Agora avisa
+  // com um toast (uma vez, não a cada tentativa) e tenta de novo sozinho.
+  function avisarFalhaNuvem(){
+    if(supaSaveFailing) return;
+    supaSaveFailing = true;
+    if(M.UI && M.UI.toast) M.UI.toast("⚠️ Não foi possível salvar na nuvem agora. Os dados continuam salvos neste aparelho — tentando reconectar…");
+    if(!supaRetryTimer){
+      supaRetryTimer = setInterval(()=>{
+        M.Supa.salvarEstado(state).then(ok=>{ if(ok) avisarNuvemOk(); });
+      }, 15000);
+    }
+  }
+  function avisarNuvemOk(){
+    if(supaRetryTimer){ clearInterval(supaRetryTimer); supaRetryTimer = null; }
+    if(supaSaveFailing){
+      supaSaveFailing = false;
+      if(M.UI && M.UI.toast) M.UI.toast("Conexão com a nuvem restabelecida — dados sincronizados.");
+    }
+  }
   function persistSupabase(){
     if(!(M.Supa && M.Supa.habilitado)) return;
     // debounce curto: ações em sequência rápida (ex.: digitando) viram 1 gravação só
     clearTimeout(supaSaveTimer);
-    supaSaveTimer = setTimeout(()=>{ M.Supa.salvarEstado(state); }, 400);
+    supaSaveTimer = setTimeout(()=>{
+      M.Supa.salvarEstado(state).then(ok=>{ ok ? avisarNuvemOk() : avisarFalhaNuvem(); });
+    }, 400);
   }
   function emit(){ persist(); persistSupabase(); listeners.forEach(fn=>fn()); }
 
@@ -425,12 +451,30 @@
       const novaEtapa = Store.etapaById(novaEtapaId);
       const indoParaFrente = Store.posicaoEtapa(novaEtapaId) > Store.posicaoEtapa(f.m.etapa);
       const etapaAnteriorLabel = Store.etapaById(f.m.etapa).nome;
-      if(indoParaFrente){
-        const check = Store.checarRequisitos(Object.assign({}, f.m, {etapa:novaEtapaId}));
-        if(!check.liberado && !opts.forcar){
-          return {ok:false, motivo:"REQUISITOS", faltando:check.faltando, bloqueioDuro:check.bloqueioDuro};
+      // opts.ignorarRequisitos: usado só pelo encerramento de montagem
+      // (Store.concluirMontagem), que já faz seu PRÓPRIO levantamento do estado
+      // real (pendenciasReaisMovel) e registra tudo em montagemEncerramento —
+      // sem isto, um item "sem liberação excepcional" (bloqueioDuro) travava a
+      // etapa em FINALIZADA silenciosamente: o toast dizia "montagem encerrada"
+      // mas o móvel continuava preso na etapa anterior.
+      if(indoParaFrente && !opts.ignorarRequisitos){
+        // CORREÇÃO: checar requisitos/tarefas obrigatórias da etapa ATUAL do móvel
+        // (o que falta para poder SAIR dela), não da etapa de destino — antes disto,
+        // Object.assign(...,{etapa:novaEtapaId}) fazia a checagem olhar pra etapa
+        // errada, e tarefas obrigatórias da etapa atual nunca bloqueavam nada.
+        const check = Store.checarRequisitos(f.m);
+        // CORREÇÃO: uma pendência aberta vinculada ao móvel (m.bloqueio) também
+        // precisa travar o avanço normal, igual a um requisito — antes disto era
+        // só decorativo no card, dava pra avançar a etapa com o móvel bloqueado.
+        const faltandoBloqueio = f.m.bloqueio
+          ? [{nome:`Pendência aberta: ${f.m.bloqueio.categoria} — ${f.m.bloqueio.descricao}`, obrigatorio:true, bloqueio:true, permiteAvancoExcepcional:true}]
+          : [];
+        const faltando = check.faltando.concat(faltandoBloqueio);
+        const liberado = faltando.length===0;
+        if(!liberado && !opts.forcar){
+          return {ok:false, motivo:"REQUISITOS", faltando, bloqueioDuro:check.bloqueioDuro};
         }
-        if(!check.liberado && opts.forcar){
+        if(!liberado && opts.forcar){
           if(check.bloqueioDuro.length){
             return {ok:false, motivo:"BLOQUEIO_DURO", faltando:check.bloqueioDuro};
           }
@@ -442,22 +486,36 @@
             motivo: opts.motivoForcar||"-", usuario: state.usuarioAtual,
             data: M.todayISO(), hora: new Date().toTimeString().slice(0,5),
             novoResponsavel: opts.novoResponsavel||null, novoPrazo: opts.novoPrazo||null,
-            itensPendentes: check.faltando.map(x=>x.nome),
+            itensPendentes: faltando.map(x=>x.nome),
           };
+          // CORREÇÃO: fica marcado como aberto até alguém resolver de propósito
+          // (Store.resolverRessalva) — antes disto, o aviso "avançou com ressalva"
+          // desaparecia sozinho assim que o móvel avançava mais uma etapa, mesmo
+          // que os itens pendentes nunca tivessem sido resolvidos de verdade.
+          f.m.ressalvaAberta = true;
           Store.log(f.o.id, "LIBERACAO_FORCADA", `${f.m.nome}: avançou para "${novaEtapa.nome}" com ressalva. Motivo: ${opts.motivoForcar||"-"}`);
           Store.audit({categoria:"GOVERNANCA", tipo:"AVANCO_COM_RESSALVA", obraId:f.o.id, ambienteId:f.a.id, movelId:f.m.id,
-            etapa:novaEtapa.id, descricao:`${f.m.nome} avançou de "${etapaAnteriorLabel}" para "${novaEtapa.nome}" sem concluir: ${check.faltando.map(x=>x.nome).join(", ")}`,
+            etapa:novaEtapa.id, descricao:`${f.m.nome} avançou de "${etapaAnteriorLabel}" para "${novaEtapa.nome}" sem concluir: ${faltando.map(x=>x.nome).join(", ")}`,
             motivo:opts.motivoForcar||"-", novoResponsavel:opts.novoResponsavel||null, novoPrazo:opts.novoPrazo||null});
           if(opts.novoResponsavel) f.m.responsavel = opts.novoResponsavel;
         }
       }
       f.m.etapa = novaEtapa.id;
       f.m.dataEntradaEtapa = M.todayISO();
-      f.m.estadoEtapa = (f.m.ressalva && f.m.ressalva.etapa===novaEtapa.id) ? "RESSALVA" : "OK";
       Store.log(f.o.id, "MUDANCA_ETAPA", `${f.m.nome} → ${novaEtapa.nome}`);
       Store.criarTarefasPadraoParaEtapa(f, novaEtapa.id);
       emit();
-      return {ok:true, ressalva: f.m.estadoEtapa==="RESSALVA"};
+      return {ok:true, ressalva: !!f.m.ressalvaAberta};
+    },
+    // marca os itens pendentes de uma liberação excepcional como resolvidos de
+    // fato — só assim o aviso sai do Kanban/Para Finalizar (não sozinho com o tempo).
+    resolverRessalva(movelId){
+      const f = Store.findMovel(movelId); if(!f || !f.m.ressalvaAberta) return;
+      f.m.ressalvaAberta = false;
+      Store.log(f.o.id, "RESSALVA_RESOLVIDA", `${f.m.nome}: itens pendentes da liberação excepcional (${(f.m.ressalva&&f.m.ressalva.itensPendentes||[]).join(", ")}) marcados como resolvidos.`);
+      Store.audit({categoria:"GOVERNANCA", tipo:"RESSALVA_RESOLVIDA", obraId:f.o.id, ambienteId:f.a.id, movelId:f.m.id,
+        descricao:`Itens pendentes da liberação excepcional de "${f.m.nome}" resolvidos.`});
+      emit();
     },
 
     // ---------- checklist ----------
@@ -664,15 +722,41 @@
     },
 
     // ---------- montagem: encerramento (seção 32) ----------
-    concluirMontagem(movelId, checklistOk, temPendencias){
-      const f = Store.findMovel(movelId); if(!f) return;
-      f.m.montagemEncerramento = { concluidaEm:M.todayISO(), checklistOk, status: temPendencias?"CONCLUIDA_COM_PENDENCIAS":"CONCLUIDA" };
+    // CORREÇÃO (auditoria funcional #82): antes, "tem pendências?" era só uma
+    // caixinha que o próprio operador marcava de memória — nada checava o
+    // estado real (bloqueio aberto, retrabalho/aguardando em componentes
+    // críticos, tarefa obrigatória não concluída, pendência aberta vinculada
+    // ao móvel, ressalva de liberação excepcional não resolvida). Dava pra
+    // encerrar como "concluída" limpa mesmo com pendência real aberta.
+    // Agora o sistema calcula essa lista sozinho (pendenciasReaisMovel) e ela
+    // conta pra decidir o status, além do que o operador marcar manualmente.
+    pendenciasReaisMovel(m){
+      const itens = [];
+      if(m.bloqueio) itens.push(`Bloqueio aberto: ${m.bloqueio.categoria} — ${m.bloqueio.descricao}`);
+      if(m.ressalvaAberta) itens.push("Ressalva de liberação excepcional ainda não resolvida");
+      (m.componentesCriticos||[]).forEach(c=>{
+        if(c.status==="REFACAO") itens.push(`Retrabalho pendente: ${c.nome}`);
+        if(c.status==="AGUARDANDO") itens.push(`Aguardando: ${c.nome}`);
+      });
+      Store.tarefasObrigatoriasAbertas(m).forEach(t=> itens.push(`Tarefa obrigatória em aberto: ${t.titulo}`));
+      state.pendencias.filter(p=>p.movelId===m.id && p.status!=="RESOLVIDA").forEach(p=> itens.push(`Pendência aberta: ${p.categoria} — ${p.descricao}`));
+      return itens;
+    },
+    concluirMontagem(movelId, checklistOk, temPendenciasInformado){
+      const f = Store.findMovel(movelId); if(!f) return {ok:false};
+      const pendReais = Store.pendenciasReaisMovel(f.m);
+      const temPendencias = !!(temPendenciasInformado || pendReais.length);
+      f.m.montagemEncerramento = {
+        concluidaEm:M.todayISO(), checklistOk, status: temPendencias?"CONCLUIDA_COM_PENDENCIAS":"CONCLUIDA",
+        itensPendentesReais: pendReais,
+      };
       if(temPendencias){
         Store.audit({categoria:"QUALIDADE", tipo:"MONTAGEM_COM_PENDENCIA", obraId:f.o.id, movelId:f.m.id,
-          descricao:`Montagem de "${f.m.nome}" encerrada com pendências em aberto`});
+          descricao:`Montagem de "${f.m.nome}" encerrada com pendências em aberto${pendReais.length? ": "+pendReais.join("; ") : " (informado manualmente pelo responsável)"}`});
       }
-      Store.moverEtapa(movelId, "FINALIZADA", {});
+      Store.moverEtapa(movelId, "FINALIZADA", {ignorarRequisitos:true});
       emit();
+      return {ok:true, temPendencias, pendReais};
     },
 
     // ---------- configurações ----------

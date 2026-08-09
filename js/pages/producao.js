@@ -11,7 +11,7 @@
     const dias = C.diasDesde(m.dataEntradaEtapa);
     const check = M.Store.checarRequisitos(m);
     const done = m.checklist.filter(c=>c.concluido).length;
-    const ressalva = m.estadoEtapa==="RESSALVA" && m.ressalva && m.ressalva.etapa===m.etapa;
+    const ressalva = !!m.ressalvaAberta;
     return `<div class="kcard" draggable="true"
         ondragstart="Act.dragStart(event,'${m.id}')" ondragend="Act.dragEnd(event)"
         onclick="Act.openMovel('${m.id}')">
@@ -154,6 +154,13 @@
         ${m.bloqueio? `<div class="help-banner" style="background:var(--critical-bg);border-color:var(--critical);color:var(--critical);">
           ${UI.icon('lock',13)} <b>Bloqueada:</b> ${UI.esc(m.bloqueio.categoria)} — ${UI.esc(m.bloqueio.descricao)}. Responsável: ${UI.esc(m.bloqueio.responsavel)}.
           <a href="#/pendencias" data-close style="text-decoration:underline;">ver em Pendências →</a>
+        </div>` : ""}
+
+        ${m.ressalvaAberta && m.ressalva? `<div class="help-banner" style="background:var(--warning-bg);border-color:var(--warning);color:var(--warning);">
+          ${UI.icon('alert',13)} <b>Avançou com ressalva</b> para "${UI.esc(m.ressalva.etapaLabel)}" em ${C.fmtDate(m.ressalva.data)} (${UI.esc(m.ressalva.usuario||'-')}). Motivo: ${UI.esc(m.ressalva.motivo||'-')}.
+          ${m.ressalva.itensPendentes&&m.ressalva.itensPendentes.length? `<div class="small" style="margin-top:4px;">Itens pendentes: ${m.ressalva.itensPendentes.map(UI.esc).join(", ")}</div>`:""}
+          ${m.ressalva.novoResponsavel? `<div class="small" style="margin-top:2px;">Novo responsável: ${UI.esc(m.ressalva.novoResponsavel)}${m.ressalva.novoPrazo? " · novo prazo "+C.fmtDate(m.ressalva.novoPrazo):""}</div>`:""}
+          <div style="margin-top:6px;"><button class="btn sm" onclick="Act.resolverRessalva('${m.id}')">${UI.icon('check',12)} Marcar itens pendentes como resolvidos</button></div>
         </div>` : ""}
 
         <label style="font-size:11.5px;font-weight:700;color:var(--ink-soft);">Checklist de componentes</label>

@@ -1,0 +1,42 @@
+From 182237af8b6a427976d7b1e2b827096ddc731627 Mon Sep 17 00:00:00 2001
+From: Paulo Henrique <mdamoveis@gmail.com>
+Date: Sun, 9 Aug 2026 02:14:42 +0000
+Subject: [PATCH] Corrige Tarefas: Operador/Montador via so as proprias tarefas
+
+Tarefas (js/pages/tarefas.js) nao tinha o mesmo filtro "somente minhas"
+que Pendencias e Assistencias ja tinham para Operador/Montador -- a
+pagina aparecia como "Minhas Tarefas" no menu mas mostrava a fabrica
+inteira. Agora filtra por responsavelPlanejado ou executadoPor igual
+ao usuario atual, e o titulo da pagina reflete isso.
+---
+ js/pages/tarefas.js | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/js/pages/tarefas.js b/js/pages/tarefas.js
+index 38c6159..f4994ee 100644
+--- a/js/pages/tarefas.js
++++ b/js/pages/tarefas.js
+@@ -8,7 +8,11 @@
+ 
+   M.Pages.tarefas = function(){
+     const f = M.UIState.tarefaFiltro;
++    const nome = M.Store.state.usuarioAtual;
++    const colab = M.colabByNome(nome);
++    const somenteMinhas = colab && (colab.perfil==="OPERADOR"||colab.perfil==="MONTADOR");
+     let tarefas = M.Store.state.tarefas.slice().sort((a,b)=> (a.status==="EM_ANDAMENTO"?0:a.status==="PLANEJADA"?1:2) - (b.status==="EM_ANDAMENTO"?0:b.status==="PLANEJADA"?1:2));
++    if(somenteMinhas) tarefas = tarefas.filter(t=>t.responsavelPlanejado===nome || t.executadoPor===nome);
+     if(f.responsavel) tarefas = tarefas.filter(t=>t.responsavelPlanejado===f.responsavel);
+     if(f.status) tarefas = tarefas.filter(t=>t.status===f.status);
+ 
+@@ -45,7 +49,7 @@
+         </table>
+       </div>
+     `;
+-    return {title:"Tarefas", crumb:"Responsável × executor, apontamento de produção", html,
++    return {title: somenteMinhas?"Minhas Tarefas":"Tarefas", crumb:"Responsável × executor, apontamento de produção", html,
+       actionsHtml:`<button class="btn primary" onclick="Act.openTarefaForm(null)">+ Nova tarefa</button>`};
+   };
+ 
+-- 
+2.43.0
+

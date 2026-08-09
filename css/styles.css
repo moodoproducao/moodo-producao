@@ -150,6 +150,19 @@ p{ margin:0; }
   .mobile-nav .m-link.active{ color:#fff; }
   .mobile-nav .m-link .ico{ font-size:17px; }
   .content{ padding-bottom:80px; }
+
+  /* CORREÇÃO (auditoria UI/UX): no cabeçalho mobile, título longo + badge de
+     conexão + botão de ação (ex.: "+ Nova Obra") não cabiam numa linha só —
+     o botão saía cortado/empurrado pra fora da tela (overflow horizontal).
+     Agora o cabeçalho quebra em duas linhas de forma controlada, com menos
+     padding e fontes menores, mantendo tudo clicável com o polegar. */
+  .topbar{ padding:14px 16px; gap:8px 10px; flex-wrap:wrap; }
+  .topbar h1{ font-size:18px; }
+  .topbar-actions{ flex-wrap:wrap; row-gap:8px; }
+}
+@media (max-width: 480px){
+  .topbar{ flex-direction:column; align-items:stretch; }
+  .topbar-actions{ width:100%; justify-content:flex-end; }
 }
 
 /* ============ buttons ============ */
@@ -248,6 +261,17 @@ table.tbl tr:hover td{ background:var(--surface-alt); }
 .kcard .ktitle{ font-weight:700; margin-bottom:7px; line-height:1.25;}
 .kcard .krow{ display:flex; align-items:center; justify-content:space-between; margin-top:7px; gap:6px;}
 .kcard .kblocked{ margin-top:7px; font-size:10.5px; color:var(--critical); background:var(--critical-bg); border-radius:6px; padding:3px 7px; display:inline-block; font-weight:700;}
+
+/* CORREÇÃO (auditoria UI/UX): em telas estreitas (celular), colunas fixas de
+   242px mostravam só ~1,5 coluna por vez e exigiam scroll horizontal "solto"
+   — difícil de operar com uma mão parado no chão de fábrica. Agora cada
+   coluna ocupa quase a largura da tela e o scroll "trava" (snap) coluna a
+   coluna, virando um gesto de arrastar-e-soltar em vez de rolagem livre. */
+@media (max-width:600px){
+  .board-wrap{ scroll-snap-type:x mandatory; -webkit-overflow-scrolling:touch; }
+  .column{ width:82vw; flex:0 0 82vw; max-width:320px; scroll-snap-align:start; }
+  .kcard{ padding:12px; font-size:13px; }
+}
 
 /* ============ modal / drawer ============ */
 .overlay{ position:fixed; inset:0; background:rgba(20,15,10,0.5); display:none; align-items:flex-start; justify-content:center; z-index:100; padding:32px 14px; overflow-y:auto;}

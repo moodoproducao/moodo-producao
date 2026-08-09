@@ -1,0 +1,880 @@
+From 8f6763d48c155a6b0bba4eebcf0c8332dddba22b Mon Sep 17 00:00:00 2001
+From: Paulo Henrique <mdamoveis@gmail.com>
+Date: Sun, 9 Aug 2026 02:10:10 +0000
+Subject: [PATCH] Auditoria pre-deploy: equipe via Supabase, padroniza env
+ vars, corrige icones e CSS
+
+- Equipe (colaboradores) agora grava/le direto da tabela colaboradores do
+  Supabase (tela Equipe ganha criar/editar/desativar/reativar), com
+  fallback para o elenco de exemplo quando a nuvem nao esta conectada.
+- Renomeia SUPABASE_ANON_KEY -> SUPABASE_PUBLISHABLE_KEY em
+  supabase-config.js/supabase-client.js/.env.example (mesmo valor, nome
+  alinhado ao padrao atual do Supabase; nunca usa sb_secret/service_role).
+- Corrige icones de reordenar etapas (estavam esquerda/direita para uma
+  lista vertical; agora cima/baixo).
+- Remove regra CSS malformada duplicada de .cal-more/.cal-cell.empty.
+- Adiciona README.md com arquitetura real, como rodar local, onde
+  configurar Supabase, dados seguros no frontend e passo a passo Vercel.
+
+Auditoria completa (rotas, PWA, secrets, auth, UI/UX, cobertura
+funcional) reportada separadamente na conversa.
+---
+ .env.example              |   2 +-
+ README.md                 | 106 +++++++++++++++++++++++++++++++
+ css/styles.css            |  11 +++-
+ js/actions.js             | 128 +++++++++++++++++++++++++++++++++-----
+ js/data.js                |   2 +-
+ js/pages/assistencias.js  |  12 ++--
+ js/pages/configuracoes.js |   4 +-
+ js/pages/equipe.js        |  45 ++++++++++++--
+ js/pages/pendencias.js    |   3 +
+ js/pages/tarefas.js       |  33 ++++++++--
+ js/store.js               |  43 ++++++++++++-
+ js/supabase-client.js     |  37 +++++++++--
+ js/supabase-config.js     |  13 +++-
+ js/ui.js                  |  21 +++++++
+ 14 files changed, 416 insertions(+), 44 deletions(-)
+ create mode 100644 README.md
+
+diff --git a/.env.example b/.env.example
+index 3df15a9..4b26919 100644
+--- a/.env.example
++++ b/.env.example
+@@ -7,4 +7,4 @@
+ #
+ # Project Settings → API no seu projeto Supabase:
+ SUPABASE_URL=
+-SUPABASE_ANON_KEY=
++SUPABASE_PUBLISHABLE_KEY=
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000..18df7a5
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,106 @@
++# Moodo Produção
++
++Sistema operacional de fábrica da Moodo — PCP, produção, pendências, tarefas, montagem e
++assistência. É um app **estático**: HTML/CSS/JS puro, **sem bundler e sem passo de build**
++(sem Vite, sem Webpack, sem `npm run build`). O que está no repositório é exatamente o que
++sobe para produção.
++
++> Para o histórico de features e decisões de produto, ver `LEIA-ME.md`. Este arquivo cobre
++> só o que é necessário para rodar, configurar e publicar o projeto.
++
++## Arquitetura real
++
++- **Frontend**: JavaScript puro no namespace global `window.M`, sem framework. Navegação por
++  hash router (`js/router.js`), com uma função `M.render()` (`js/main.js`) que reconstrói a
++  tela inteira a cada mudança de estado ou de rota — não há Virtual DOM nem componentes.
++- **Ordem de carregamento dos scripts** é definida no `index.html` e importa: `js/data.js`
++  (dados/constantes) → `js/supabase-config.js` + `js/supabase-client.js` (integração opcional
++  com a nuvem) → `js/store.js` (estado + lógica de negócio) → `js/calc.js` → `js/ui.js` →
++  `js/actions.js` → páginas (`js/pages/*.js`) → `js/router.js` → `js/main.js` (bootstrap).
++- **Persistência — duas camadas, não uma só:**
++  - `localStorage` do navegador guarda o estado operacional completo (obras, tarefas,
++    pendências, assistências, etapas, configurações etc.) e é sempre gravado, mesmo sem
++    Supabase configurado — é o que garante que o app abre instantaneamente e funciona offline.
++  - **Supabase** (quando `js/supabase-config.js` está preenchido) sincroniza esse mesmo bloco
++    de estado na tabela `estado_operacional` (uma linha, coluna `dados` em JSONB) e replica em
++    tempo real entre aparelhos via Realtime. **Exceção:** a tabela **`colaboradores`** (equipe)
++    é relacional de verdade e é lida/gravada diretamente pelo app — não faz parte do blob JSON.
++- **Sem processo de build**: todo `.js`/`.css` do repositório é servido como está. Não existe
++  TypeScript, JSX, Sass ou qualquer transpilação.
++
++## Como rodar localmente
++
++Não precisa de `npm install` (não há dependências de runtime). Qualquer servidor estático
++funciona:
++
++```bash
++# opção 1 — Python (já vem em quase todo sistema)
++python3 -m http.server 8765
++
++# opção 2 — usando o script do package.json (baixa o pacote "serve" na hora via npx)
++npm start
++```
++
++Depois abra `http://localhost:8765` (ou a porta que o `serve` indicar). Sem preencher o
++Supabase, o app funciona 100% no `localStorage` do navegador — nada quebra, só não sincroniza
++entre aparelhos.
++
++## Onde configurar o Supabase
++
++Edite `js/supabase-config.js`:
++
++```js
++window.M.SUPABASE_URL = "https://SEU-PROJETO.supabase.co";
++window.M.SUPABASE_PUBLISHABLE_KEY = "sb_publishable_...";
++```
++
++Os dois valores vêm de **Project Settings → API** no painel do Supabase. Use sempre a chave
++**"publishable"** (prefixo `sb_publishable_...`) — nunca a `sb_secret_...` nem a
++`service_role`, que dão acesso total ao banco e não podem existir no navegador.
++
++Enquanto os dois campos estiverem vazios, o app roda só em `localStorage` (modo protótipo).
++Depois de preencher e publicar, o schema (`schema.sql`/`seed.sql`, mantidos junto ao projeto
++de backend) precisa já ter sido executado no SQL Editor do Supabase, e a replicação em tempo
++real da tabela `estado_operacional` precisa estar ativada:
++
++```sql
++alter publication supabase_realtime add table estado_operacional;
++```
++
++`js/supabase-config.js` **é seguro de versionar** — só contém a URL e a chave publicável, que
++são projetadas para ficar no navegador. O `.env.example` na raiz existe **só como
++documentação** do que preencher ali; como o projeto não usa bundler, nenhum arquivo `.env` é
++lido automaticamente pelo app.
++
++## Quais dados podem ficar no frontend
++
++- **Pode**: `SUPABASE_URL` e a chave `sb_publishable_...` — são públicas por design (o
++  equivalente à antiga `anon key`), protegidas pelas policies de RLS do banco, não por sigilo.
++- **Nunca pode**: chave `sb_secret_...`, `service_role`, senha do banco Postgres, ou qualquer
++  credencial que dê acesso administrativo. Nenhuma dessas deve aparecer em nenhum arquivo
++  `.js`/`.html` deste repositório — só em variáveis de ambiente do lado do servidor, se algum
++  dia existir um backend próprio.
++- **Situação atual do banco**: as policies de RLS das tabelas `perfis`, `colaboradores` e
++  `estado_operacional` estão como `using (true)` — abertas para qualquer cliente com a chave
++  publicável, porque ainda não há login por senha ligado na interface. Isso é aceitável apenas
++  enquanto o app roda para uma única empresa confiável; **antes de qualquer piloto
++  multiempresa ou de expor a chave publicamente fora da equipe, as policies precisam ser
++  reescritas para checar `auth.uid()`**.
++
++## Como publicar na Vercel
++
++1. Conecte o repositório do GitHub a um novo projeto Vercel — **framework preset "Other"**
++   (não é um projeto Next.js/Vite, é estático).
++2. Não é preciso configurar build command nem output directory (o projeto não tem passo de
++   build; a raiz do repositório já é o que deve ser servido).
++3. O roteamento é 100% client-side por **hash** (`#/rota`), não por caminho de URL — o
++   navegador nunca pede `/producao` ao servidor, só `/` com um fragmento depois do `#`. Por
++   isso **não é necessário nenhum rewrite no `vercel.json`** para as rotas do app funcionarem
++   com acesso direto ou F5; o `vercel.json` existente só define cabeçalhos de cache (service
++   worker sempre revalidado, `manifest.json` com cache curto, ícones com cache longo).
++4. Depois do primeiro deploy, confirme que `js/supabase-config.js` já está preenchido com os
++   valores do projeto Supabase de produção antes de divulgar a URL para a equipe.
++5. Ao fazer um deploy que muda algum arquivo `.js`, lembre de subir também a versão
++   (`APP_VERSION` em `js/main.js` e `CACHE_NAME` em `service-worker.js`) — são duas strings
++   independentes que precisam ser incrementadas juntas para o service worker descartar o cache
++   antigo e mostrar o aviso de "nova versão disponível" aos usuários já instalados como PWA.
+diff --git a/css/styles.css b/css/styles.css
+index 8f61236..1b4bf35 100644
+--- a/css/styles.css
++++ b/css/styles.css
+@@ -273,6 +273,13 @@ table.tbl tr:hover td{ background:var(--surface-alt); }
+ .check-row input[type=checkbox]{ width:16px;height:16px; accent-color:var(--brand); }
+ .check-row.done .label{ text-decoration:line-through; color:var(--ink-mute); }
+ 
++.foto-galeria{ display:flex; flex-wrap:wrap; gap:10px; margin-top:8px; }
++.foto-thumb{ display:block; width:104px; height:104px; border-radius:10px; overflow:hidden; border:1px solid var(--border); flex-shrink:0; transition:opacity .15s; }
++.foto-thumb:hover{ opacity:.85; }
++.foto-thumb img{ width:100%; height:100%; object-fit:cover; display:block; }
++.arquivo-upload-label{ cursor:pointer; }
++.arquivo-upload-label input[type=file]{ display:none; }
++
+ /* ============ misc ============ */
+ .hr{ height:1px; background:var(--border); margin:14px 0; }
+ .muted{ color:var(--ink-mute); }
+@@ -346,11 +353,11 @@ table.tbl tr:hover td{ background:var(--surface-alt); }
+ .cal-dow{ font-size:10.5px; color:var(--ink-mute); text-align:center; padding-bottom:4px; font-weight:700; text-transform:uppercase; min-width:0; overflow:hidden;}
+ .cal-cell{ background:var(--surface); border:1px solid var(--border); border-radius:8px; min-height:86px; padding:6px; font-size:10.5px; min-width:0; overflow:hidden; cursor:pointer; transition:border-color .15s, box-shadow .15s;}
+ .cal-cell:not(.empty):hover{ border-color:var(--brand); }
+-.cal-more{ font-size:9.5px; color:var(--ink-mute); font-weight:700; margin-top:1px; } padding:6px; font-size:10.5px; min-width:0; overflow:hidden;}
+-.cal-cell.empty{ background:transparent; border:none; }
++.cal-cell.empty{ background:transparent; border:none; cursor:default; }
+ .cal-cell.today{ box-shadow:0 0 0 2px var(--brand) inset; }
+ .cal-daynum{ font-weight:700; color:var(--ink-soft); margin-bottom:4px;}
+ .cal-evt{ font-size:9.5px; border-radius:5px; padding:2px 5px; margin-bottom:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:700;}
++.cal-more{ font-size:9.5px; color:var(--ink-mute); font-weight:700; margin-top:1px; }
+ 
+ /* TV mode — preto/dourado, alto contraste, industrial premium */
+ body.tv-mode{ background:#0a0705; }
+diff --git a/js/actions.js b/js/actions.js
+index 10cc45e..68cc035 100644
+--- a/js/actions.js
++++ b/js/actions.js
+@@ -21,14 +21,87 @@
+     selecaoLote: new Set(),
+     auditoriaFiltro: {periodo:30, categoria:"", somenteExcecoes:false},
+     assistFiltro: {status:""},
++    assistExpandido: null,
+     tvWidgets: null, // preenchido a partir de M.Store.state se necessário
+   };
+ 
++  // ---------- upload de arquivos/fotos (Supabase Storage) ----------
++  // Compartilhado por: Arquivos do projeto (obra), fotos de pendência/tarefa/assistência.
++  // Organiza automaticamente em pastas por obra dentro do bucket "arquivos-obra".
++  async function uploadArquivos(fileList, pastaPrefix, max){
++    const arquivos = [];
++    if(!fileList || !fileList.length) return arquivos;
++    if(!(M.Supa && M.Supa.habilitado)){
++      UI.toast("Envio de arquivos precisa da nuvem conectada — configure o Supabase antes de anexar arquivos.");
++      return arquivos;
++    }
++    const ok = await M.Supa.ready;
++    if(!ok){ UI.toast("Não consegui conectar à nuvem agora — tente enviar o arquivo de novo em instantes."); return arquivos; }
++    const arquivosSelecionados = Array.from(fileList).slice(0, max||fileList.length);
++    for(const file of arquivosSelecionados){
++      const path = `${pastaPrefix}/${Date.now()}_${file.name}`.replace(/\s+/g,"_");
++      const { error } = await M.Supa.client.storage.from("arquivos-obra").upload(path, file);
++      if(error){ UI.toast("Erro ao enviar "+file.name+": "+error.message); continue; }
++      const { data: urlData } = M.Supa.client.storage.from("arquivos-obra").getPublicUrl(path);
++      arquivos.push({nome:file.name, url:urlData.publicUrl, tipo:file.type, tamanho:file.size, enviadoPor:M.Store.state.usuarioAtual});
++    }
++    return arquivos;
++  }
++
+   const Act = {
+     go(route){ location.hash = route; },
+     rerender(){ M.render(); },
+     trocarUsuario(nome){ M.Store.setUsuarioAtual(nome); UI.toast("Agora navegando como "+nome+"."); location.hash = "#/dashboard"; },
+ 
++    // ---------- equipe (grava direto na tabela colaboradores do Supabase) ----------
++    openColaboradorForm(id){
++      if(!(M.Supa && M.Supa.habilitado)){ UI.toast("Cadastro de equipe precisa da nuvem conectada — configure o Supabase antes."); return; }
++      const c = id ? M.COLABORADORES.find(x=>x.id===id) : null;
++      UI.openModal(M.Pages.colaboradorFormHtml(c), {});
++      const form = document.getElementById("formColaborador");
++      form.addEventListener("submit", async (e)=>{
++        e.preventDefault();
++        const fd = new FormData(form);
++        const nome = (fd.get("nome")||"").trim();
++        const dados = {
++          nome, cargo: fd.get("cargo")||null, telefone: fd.get("telefone")||null, perfil: fd.get("perfil"),
++          iniciais: nome.split(/\s+/).filter(Boolean).slice(0,2).map(p=>p[0].toUpperCase()).join(""),
++        };
++        const submitBtn = form.querySelector('button[type=submit]');
++        if(submitBtn) submitBtn.disabled = true;
++        try{
++          if(c){
++            const atualizado = await M.Supa.atualizarColaborador(c.id, dados);
++            Object.assign(c, atualizado);
++          } else {
++            const criado = await M.Supa.criarColaborador(dados);
++            M.COLABORADORES.push(criado);
++          }
++          M.Store.notify();
++          UI.closeModal(); UI.toast(c? "Colaborador atualizado.":"Colaborador criado.");
++        }catch(err){
++          UI.toast("Erro ao salvar: "+(err.message||"tente de novo"));
++          if(submitBtn) submitBtn.disabled = false;
++        }
++      });
++    },
++    async desativarColaborador(id){
++      const c = M.COLABORADORES.find(x=>x.id===id); if(!c) return;
++      try{
++        const atualizado = await M.Supa.atualizarColaborador(id, {ativo:false});
++        Object.assign(c, atualizado);
++        M.Store.notify(); UI.toast("Colaborador desativado.");
++      }catch(err){ UI.toast("Erro ao desativar: "+(err.message||"tente de novo")); }
++    },
++    async reativarColaborador(id){
++      const c = M.COLABORADORES.find(x=>x.id===id); if(!c) return;
++      try{
++        const atualizado = await M.Supa.atualizarColaborador(id, {ativo:true});
++        Object.assign(c, atualizado);
++        M.Store.notify(); UI.toast("Colaborador reativado.");
++      }catch(err){ UI.toast("Erro ao reativar: "+(err.message||"tente de novo")); }
++    },
++
+     // ---------- checklist / responsável ----------
+     toggleChecklist(movelId, itemId){ M.Store.toggleChecklistItem(movelId, itemId); },
+     setResponsavel(movelId, sel){ M.Store.setResponsavel(movelId, sel.value); UI.toast("Responsável atualizado."); },
+@@ -122,18 +195,21 @@
+     openPendenciaForm(obraId, ambienteId, movelId){
+       UI.openModal(M.Pages.pendenciaFormHtml(obraId, ambienteId, movelId), {});
+       const form = document.getElementById("formPendencia");
+-      form.addEventListener("submit", (e)=>{
++      form.addEventListener("submit", async (e)=>{
+         e.preventDefault();
+         const fd = new FormData(form);
+         const mv = fd.get("movelId");
+         const f = mv ? M.Store.findMovel(mv) : null;
++        const submitBtn = form.querySelector('button[type=submit]');
++        if(submitBtn) submitBtn.disabled = true;
++        const fotos = await uploadArquivos(fd.getAll("fotos").filter(x=>x && x.size), (fd.get("obraId")||"avulsas")+"/pendencias");
+         M.Store.criarPendencia({
+           obraId: fd.get("obraId"), ambienteId: fd.get("ambienteId")||null, movelId: mv||null,
+           obraNome: f? f.o.cliente : (M.Store.getObra(fd.get("obraId"))||{}).cliente,
+           ambienteNome: f? f.a.nome : "", movelNome: f? f.m.nome : (fd.get("descricaoLivre")||"Item avulso"),
+           categoria: fd.get("categoria"), descricao: fd.get("descricao"), responsavel: fd.get("responsavel"),
+           fornecedor: fd.get("fornecedor"), prazo: fd.get("prazo")||null, prioridade: fd.get("prioridade"),
+-          origem: fd.get("origem")||null,
++          origem: fd.get("origem")||null, fotos,
+         });
+         UI.closeModal(); UI.toast("Pendência criada — fluxo iniciado.");
+       });
+@@ -148,12 +224,13 @@
+     openTarefaForm(obraId){
+       UI.openModal(M.Pages.tarefaFormHtml(obraId), {});
+       const form = document.getElementById("formTarefa");
+-      form.addEventListener("submit",(e)=>{
++      form.addEventListener("submit", async (e)=>{
+         e.preventDefault();
+         const fd = new FormData(form);
+         const mv = fd.get("movelId");
+         const f = mv ? M.Store.findMovel(mv) : null;
+         const etapa = fd.get("etapa")||null;
++        const fotos = await uploadArquivos(fd.getAll("fotos").filter(x=>x && x.size), (fd.get("obraId")||"geral")+"/tarefas");
+         const t = M.Store.criarTarefa({
+           obraId: fd.get("obraId"), obraNome:(M.Store.getObra(fd.get("obraId"))||{}).cliente,
+           ambienteId: f? f.a.id: null, ambienteNome: f? f.a.nome: null,
+@@ -161,7 +238,7 @@
+           titulo: fd.get("titulo"), etapa: etapa,
+           obrigatorio: fd.get("obrigatorio")||"OPCIONAL",
+           responsavelPlanejado: fd.get("responsavel"), tipo: fd.get("tipo")||"COMPLEMENTAR",
+-          instrucoes: fd.get("instrucoes")||"",
++          instrucoes: fd.get("instrucoes")||"", fotos,
+         });
+         if(fd.get("salvarPadrao")==="on" && etapa){
+           M.Store.salvarTarefaComoPadrao(t);
+@@ -172,6 +249,10 @@
+         UI.closeModal();
+       });
+     },
++    abrirDetalheTarefa(id){
++      const t = M.Store.state.tarefas.find(x=>x.id===id); if(!t) return;
++      UI.openModal(M.Pages.tarefaDetalheModalHtml(t));
++    },
+     iniciarTarefa(id){ M.Store.iniciarTarefa(id); UI.toast("Tarefa iniciada."); },
+     pausarTarefa(id){ M.Store.pausarTarefa(id); UI.toast("Tarefa pausada."); },
+     pedirResultado(id){
+@@ -196,7 +277,7 @@
+         <div class="modal-head"><h2>Reportar problema</h2><button class="modal-close" data-close>✕</button></div>
+         <form id="formProblema">
+           <div class="modal-body">
+-            <div class="field"><label>${UI.icon('camera',14)} Foto (opcional)</label><input type="file" accept="image/*" capture="environment" name="foto"></div>
++            ${UI.fotoFieldHtml("fotos")}
+             <div class="field"><label>Origem do problema</label>
+               <select name="origem">${M.ORIGENS_PROBLEMA.map(o=>`<option>${o}</option>`).join("")}</select>
+             </div>
+@@ -205,10 +286,11 @@
+           <div class="modal-foot"><button type="button" class="btn" data-close>Cancelar</button><button class="btn danger" type="submit">Criar retrabalho</button></div>
+         </form>
+       `);
+-      document.getElementById("formProblema").addEventListener("submit",(e)=>{
++      document.getElementById("formProblema").addEventListener("submit", async (e)=>{
+         e.preventDefault();
+         const fd = new FormData(e.target);
+-        M.Store.concluirTarefa(tarefaId,"GEROU_REFACAO",{observacao:fd.get("descricao"), origemProblema:fd.get("origem")});
++        const fotos = await uploadArquivos(fd.getAll("fotos").filter(x=>x && x.size), tarefaId+"/problema");
++        M.Store.concluirTarefa(tarefaId,"GEROU_REFACAO",{observacao:fd.get("descricao"), origemProblema:fd.get("origem"), fotos});
+         UI.closeModal(); UI.toast("Retrabalho registrado e visível em Auditoria.");
+       });
+     },
+@@ -218,21 +300,23 @@
+     openAssistenciaForm(obraId){
+       UI.openModal(M.Pages.assistenciaFormHtml(obraId), {});
+       const form = document.getElementById("formAssistencia");
+-      form.addEventListener("submit",(e)=>{
++      form.addEventListener("submit", async (e)=>{
+         e.preventDefault();
+         const fd = new FormData(form);
+         const obra = M.Store.getObra(fd.get("obraId"));
++        const fotos = await uploadArquivos(fd.getAll("fotos").filter(x=>x && x.size), (fd.get("obraId")||"avulsas")+"/assistencias");
+         M.Store.criarAssistencia({
+           obraId: fd.get("obraId"), obraNome: obra? obra.cliente: "", cliente: obra? obra.cliente: fd.get("clienteLivre"),
+           ambienteNome: fd.get("ambienteNome"), movelNome: fd.get("movelNome"),
+           descricao: fd.get("descricao"), categoria: fd.get("categoria"), origem: fd.get("origem"),
+-          prioridade: fd.get("prioridade"), responsavel: fd.get("responsavel"), prazo: fd.get("prazo")||null,
++          prioridade: fd.get("prioridade"), responsavel: fd.get("responsavel"), prazo: fd.get("prazo")||null, fotos,
+         });
+         UI.closeModal(); UI.toast("Assistência registrada.");
+       });
+     },
+     setAssistenciaStatus(id, status){ M.Store.atualizarAssistencia(id,{status}); UI.toast("Status da assistência atualizado."); },
+     setAssistFiltro(campo,val){ M.UIState.assistFiltro[campo]=val; Act.rerender(); },
++    toggleAssistExpandido(id){ M.UIState.assistExpandido = (M.UIState.assistExpandido===id)?null:id; Act.rerender(); },
+ 
+     // ---------- montagem ----------
+     abrirEncerramentoMontagem(movelId){
+@@ -250,6 +334,15 @@
+ 
+     // ---------- obra detail ----------
+     setObraTab(obraId, tab){ M.UIState.obraTab[obraId]=tab; Act.rerender(); },
++    async enviarArquivoObra(obraId, inputEl){
++      const arquivos = await uploadArquivos(Array.from(inputEl.files||[]), obraId+"/arquivos", 5);
++      arquivos.forEach(a=> M.Store.adicionarArquivo(obraId, a));
++      if(arquivos.length) UI.toast(arquivos.length>1? "Arquivos enviados.":"Arquivo enviado.");
++      inputEl.value = "";
++    },
++    removerArquivo(obraId, arquivoId){
++      UI.confirm("Remover este arquivo da obra?", ()=>{ M.Store.removerArquivo(obraId, arquivoId); UI.toast("Arquivo removido."); });
++    },
+ 
+     // ---------- nova obra (tela única — seção 6) ----------
+     novaObraDropFile(kind, name){
+@@ -282,14 +375,15 @@
+       if(m<0){ m=11; y--; } if(m>11){ m=0; y++; }
+       M.UIState.calMonth = m; M.UIState.calYear = y; Act.rerender();
+     },
+-   toggleCalFiltro(tipo){
+-  const s = M.UIState.calFiltros;
+-  if(s.has(tipo)) s.delete(tipo); else s.add(tipo);
+-  Act.rerender();
+-},
+-abrirDiaCalendario(iso){
+-  UI.openModal(M.Pages.calendarioDiaModalHtml(iso));
+-},
++    toggleCalFiltro(tipo){
++      const s = M.UIState.calFiltros;
++      if(s.has(tipo)) s.delete(tipo); else s.add(tipo);
++      Act.rerender();
++    },
++    abrirDiaCalendario(iso){
++      UI.openModal(M.Pages.calendarioDiaModalHtml(iso));
++    },
++
+     // ---------- lotes ----------
+     toggleSelecaoLote(id){
+       const s = M.UIState.selecaoLote;
+diff --git a/js/data.js b/js/data.js
+index ef1105b..324d4f7 100644
+--- a/js/data.js
++++ b/js/data.js
+@@ -33,7 +33,7 @@ window.M = window.M || {};
+ 
+   // grupos visuais fixos do pipeline (seção 8) — cada etapa escolhe um destes em "grupo"
+   const STAGE_GROUPS = [
+-    {key:"PRE_PRODUCAO", label:"Pré-produção"},
++    {key:"PRE_PRODUCAO", label:"PCP"},
+     {key:"FABRICA",      label:"Fábrica"},
+     {key:"LOGISTICA",    label:"Logística / Obra"},
+   ];
+diff --git a/js/pages/assistencias.js b/js/pages/assistencias.js
+index a737055..e86bab5 100644
+--- a/js/pages/assistencias.js
++++ b/js/pages/assistencias.js
+@@ -24,19 +24,21 @@
+       const vencida = a.prazo && C.diasAte(a.prazo)<0 && a.status!=="CONCLUIDA";
+       const idxAtual = STATUS_FLOW.indexOf(a.status);
+       const proximo = STATUS_FLOW[idxAtual+1];
+-      return `<div class="asst-card" style="margin-bottom:10px;">
++      const expandido = M.UIState.assistExpandido===a.id;
++      return `<div class="asst-card" style="margin-bottom:10px;cursor:pointer;" onclick="Act.toggleAssistExpandido('${a.id}')">
+         <div class="flex-between" style="flex-wrap:wrap;gap:8px;">
+           <div>
+-            <div class="small muted">${UI.esc(a.categoria)} · ${a.obraId?`<a href="#/obra/${a.obraId}">${UI.esc(a.obraNome)}</a>`:UI.esc(a.cliente||"")} ${a.ambienteNome?"· "+UI.esc(a.ambienteNome):""}</div>
++            <div class="small muted">${UI.esc(a.categoria)} · ${a.obraId?`<a href="#/obra/${a.obraId}" onclick="event.stopPropagation()">${UI.esc(a.obraNome)}</a>`:UI.esc(a.cliente||"")} ${a.ambienteNome?"· "+UI.esc(a.ambienteNome):""}</div>
+             <b>${UI.esc(a.descricao)}</b>
+           </div>
+-          <div class="flex-gap">${UI.prioridadeChip(a.prioridade)}${UI.assistenciaStatusChip(a.status)}</div>
++          <div class="flex-gap">${UI.prioridadeChip(a.prioridade)}${UI.assistenciaStatusChip(a.status)}${a.fotos&&a.fotos.length?`<span class="chip neutral">${UI.icon('image',11)} ${a.fotos.length}</span>`:""}</div>
+         </div>
+         <div class="flex-between small muted" style="margin-top:10px;">
+           <span>${UI.person(a.responsavel)} · origem: ${UI.esc(a.origem||"—")}</span>
+           <span class="${vencida?'critical':''}" style="${vencida?'color:var(--critical);font-weight:700;':''}">${a.prazo? (vencida?"venceu "+C.fmtDate(a.prazo):"prazo "+C.fmtDate(a.prazo)) : "sem prazo"}</span>
+         </div>
+-        ${a.status!=="CONCLUIDA" ? `<div class="flex-gap" style="margin-top:10px;">
++        ${expandido? UI.fotosGaleriaHtml(a.fotos) : ""}
++        ${a.status!=="CONCLUIDA" ? `<div class="flex-gap" style="margin-top:10px;" onclick="event.stopPropagation()">
+           ${proximo? `<button class="btn sm primary" onclick="Act.setAssistenciaStatus('${a.id}','${proximo}')">Avançar → ${STATUS_LABEL[proximo]}</button>`:""}
+           <button class="btn sm" onclick="Act.setAssistenciaStatus('${a.id}','CONCLUIDA')">Marcar concluída</button>
+         </div>`:""}
+@@ -86,7 +88,7 @@
+             <div class="field"><label>Prioridade</label><select name="prioridade"><option value="ALTA">Alta</option><option value="MEDIA" selected>Média</option><option value="BAIXA">Baixa</option></select></div>
+           </div>
+           <div class="field"><label>Prazo</label><input type="date" name="prazo"></div>
+-          <div class="field"><label>${UI.icon('camera',13)} Foto (opcional)</label><input type="file" accept="image/*" capture="environment" name="foto"></div>
++          ${UI.fotoFieldHtml("fotos")}
+         </div>
+         <div class="modal-foot"><button type="button" class="btn" data-close>Cancelar</button><button class="btn primary" type="submit">Registrar assistência</button></div>
+       </form>`;
+diff --git a/js/pages/configuracoes.js b/js/pages/configuracoes.js
+index a1cc5c2..c683892 100644
+--- a/js/pages/configuracoes.js
++++ b/js/pages/configuracoes.js
+@@ -59,8 +59,8 @@
+           <td>${e.exigeConferencia? `<span class="chip warning">sim</span>`:`<span class="chip neutral">não</span>`}</td>
+           <td>
+             <div class="flex-gap" style="flex-wrap:wrap;gap:4px;">
+-              <button class="btn sm" onclick="Act.moverEtapaOrdem('${e.id}','up')" title="Mover para cima">${UI.icon('chevron-left',12)}</button>
+-              <button class="btn sm" onclick="Act.moverEtapaOrdem('${e.id}','down')" title="Mover para baixo">${UI.icon('chevron-right',12)}</button>
++              <button class="btn sm" onclick="Act.moverEtapaOrdem('${e.id}','up')" title="Mover para cima">${UI.icon('chevron-up',12)}</button>
++              <button class="btn sm" onclick="Act.moverEtapaOrdem('${e.id}','down')" title="Mover para baixo">${UI.icon('chevron-down',12)}</button>
+               <button class="btn sm" onclick="Act.editarEtapaForm('${e.id}')" title="Editar">${UI.icon('edit',12)}</button>
+               <button class="btn sm" onclick="Act.duplicarEtapa('${e.id}')" title="Duplicar">Duplicar</button>
+               ${e.ativa
+diff --git a/js/pages/equipe.js b/js/pages/equipe.js
+index dc85e9f..66af2a7 100644
+--- a/js/pages/equipe.js
++++ b/js/pages/equipe.js
+@@ -8,26 +8,59 @@
+ 
+   M.Pages.equipe = function(){
+     const podeVerDesempenho = M.Store.pode("verDesempenho");
++    const podeGerenciar = M.Store.pode("verConfiguracoes");
++    const nuvemOk = !!(M.Supa && M.Supa.habilitado);
++    const lista = M.COLABORADORES.slice().sort((a,b)=> (a.ativo===false?1:0) - (b.ativo===false?1:0));
+     const html = `
++      ${podeGerenciar && !nuvemOk? `<div class="help-banner">${UI.icon('alert',13)} Cadastro de equipe precisa da nuvem conectada (Supabase) — sem isso dá pra ver a equipe, mas não pra incluir ou editar.</div>`:""}
+       <div class="grid-3">
+-        ${M.COLABORADORES.map(c=>{
++        ${lista.map(c=>{
+           const perf = C.desempenhoColaborador(c.nome);
+           const emAndamento = M.Store.state.tarefas.filter(t=>t.executadoPor===c.nome && t.status==="EM_ANDAMENTO");
+-          return `<div class="card pad">
+-            <div class="flex-gap"><span class="avatar lg">${UI.initials(c.nome)}</span>
+-              <div><b>${UI.esc(c.nome)}</b><div class="small muted">${UI.esc(c.cargo)}</div></div>
++          const inativo = c.ativo===false;
++          return `<div class="card pad" style="${inativo?'opacity:.55;':''}">
++            <div class="flex-between">
++              <div class="flex-gap"><span class="avatar lg">${UI.initials(c.nome)}</span>
++                <div><b>${UI.esc(c.nome)}</b><div class="small muted">${UI.esc(c.cargo||"")}</div></div>
++              </div>
++              ${podeGerenciar && nuvemOk ? `<button class="btn-icon" title="Editar" onclick="Act.openColaboradorForm('${c.id}')">${UI.icon('edit',15)}</button>`:""}
+             </div>
+             <div class="flex-gap" style="margin-top:8px;flex-wrap:wrap;">
+               ${UI.perfilChip(c.perfil)}
+-              <span class="small muted">${UI.icon('phone',11)} ${UI.esc(c.telefone)}</span>
++              ${inativo? `<span class="chip neutral">inativo</span>`:""}
++              ${c.telefone? `<span class="small muted">${UI.icon('phone',11)} ${UI.esc(c.telefone)}</span>`:""}
+             </div>
+             <div class="hr"></div>
+             ${podeVerDesempenho ? `<div class="small"><b>${perf.tarefasConcluidas}</b> tarefas concluídas · <b>${C.fmtBRLk(perf.valorProcessado)}</b> processados</div>` : ""}
+             ${emAndamento.length? `<div class="small muted" style="margin-top:6px;">Agora: ${UI.esc(emAndamento[0].titulo)}</div>`: `<div class="small muted" style="margin-top:6px;">Sem tarefa em andamento</div>`}
++            ${podeGerenciar && nuvemOk ? `<div class="flex-gap" style="margin-top:10px;">
++              ${inativo? `<button class="btn sm" onclick="Act.reativarColaborador('${c.id}')">${UI.icon('check',12)} Reativar</button>`
++                        : `<button class="btn sm" onclick="Act.desativarColaborador('${c.id}')">${UI.icon('x',12)} Desativar</button>`}
++            </div>`:""}
+           </div>`;
+         }).join("")}
+       </div>
+     `;
+-    return {title:"Equipe", crumb:"Colaboradores, cargo e perfil de acesso", html};
++    return {title:"Equipe", crumb:"Colaboradores, cargo e perfil de acesso", html,
++      actionsHtml: podeGerenciar? `<button class="btn primary" onclick="Act.openColaboradorForm(null)">${UI.icon('plus',14)} Novo colaborador</button>` : ""};
++  };
++
++  M.Pages.colaboradorFormHtml = function(c){
++    const editando = !!c;
++    return `
++      <div class="modal-head"><h2>${editando? "Editar colaborador" : "Novo colaborador"}</h2><button class="modal-close" data-close>✕</button></div>
++      <form id="formColaborador">
++        <div class="modal-body">
++          <div class="field"><label>Nome</label><input name="nome" required value="${editando?UI.esc(c.nome):''}"></div>
++          <div class="field-row">
++            <div class="field"><label>Cargo</label><input name="cargo" placeholder="Ex: Montador" value="${editando?UI.esc(c.cargo||''):''}"></div>
++            <div class="field"><label>Telefone</label><input name="telefone" placeholder="(11) 90000-0000" value="${editando?UI.esc(c.telefone||''):''}"></div>
++          </div>
++          <div class="field"><label>Perfil de acesso</label>
++            <select name="perfil">${M.PERFIS.map(p=>`<option value="${p.key}" ${editando&&c.perfil===p.key?'selected':''}>${p.label}</option>`).join("")}</select>
++          </div>
++        </div>
++        <div class="modal-foot"><button type="button" class="btn" data-close>Cancelar</button><button class="btn primary" type="submit">${editando?"Salvar":"Criar colaborador"}</button></div>
++      </form>`;
+   };
+ })();
+diff --git a/js/pages/pendencias.js b/js/pages/pendencias.js
+index 3efb224..74f4e38 100644
+--- a/js/pages/pendencias.js
++++ b/js/pages/pendencias.js
+@@ -42,11 +42,13 @@
+             ${UI.prioridadeChip(p.prioridade)}
+             ${UI.statusPendenciaChip(p.status)}
+             <span class="chip ${dias>=5?'critical':dias>=2?'warning':'neutral'}">${dias}d em aberto</span>
++            ${p.fotos&&p.fotos.length? `<span class="chip neutral">${UI.icon('image',11)} ${p.fotos.length}</span>`:""}
+           </div>
+         </div>
+         ${proximaAcao? `<div class="next-action"><div class="lbl">Próxima ação</div><div class="txt">${UI.esc(proximaAcao)} — ${UI.person(p.responsavel)} ${p.prazo?" · prazo "+C.fmtDate(p.prazo):""}</div></div>`:""}
+         ${expandido ? `
+           ${fluxoStepsHtml(p,false)}
++          ${UI.fotosGaleriaHtml(p.fotos)}
+           <div class="flex-gap" style="margin-top:12px;flex-wrap:wrap;" onclick="event.stopPropagation()">
+             ${p.status!=="RESOLVIDA"? `<button class="btn sm primary" onclick="Act.avancarFluxo('${p.id}')">${UI.icon('chevron-right',12)} Continuar fluxo</button>`:""}
+             ${p.status!=="RESOLVIDA"? `<button class="btn sm" onclick="Act.setPendenciaStatus('${p.id}','RESOLVIDA')">Marcar resolvida</button>`:""}
+@@ -115,6 +117,7 @@
+             <div class="field"><label>Prazo</label><input type="date" name="prazo"></div>
+             <div class="field"><label>Prioridade</label><select name="prioridade"><option value="ALTA">Alta</option><option value="MEDIA" selected>Média</option><option value="BAIXA">Baixa</option></select></div>
+           </div>
++          ${UI.fotoFieldHtml("fotos")}
+         </div>
+         <div class="modal-foot"><button type="button" class="btn" data-close>Cancelar</button><button class="btn primary" type="submit">Criar pendência</button></div>
+       </form>`;
+diff --git a/js/pages/tarefas.js b/js/pages/tarefas.js
+index a893747..38c6159 100644
+--- a/js/pages/tarefas.js
++++ b/js/pages/tarefas.js
+@@ -31,15 +31,15 @@
+         <table class="tbl">
+           <thead><tr><th>Tarefa</th><th>Obra / local</th><th>Responsável</th><th>Executor</th><th>Início–Fim</th><th>Status</th><th>Resultado</th><th></th></tr></thead>
+           <tbody>${tarefas.map(t=>`
+-            <tr>
+-              <td>${UI.esc(t.titulo)} ${t.tipo==='REFACAO'?'<span class="chip critical">retrabalho</span>':t.tipo==='COMPLEMENTAR'?'<span class="chip neutral">complementar</span>':''}</td>
+-              <td class="small muted"><a href="#/obra/${t.obraId}">${UI.esc(t.obraNome)}</a>${t.movelNome? " · "+UI.esc(t.movelNome):""}</td>
++            <tr style="cursor:pointer;" onclick="Act.abrirDetalheTarefa('${t.id}')">
++              <td>${UI.esc(t.titulo)} ${t.tipo==='REFACAO'?'<span class="chip critical">retrabalho</span>':t.tipo==='COMPLEMENTAR'?'<span class="chip neutral">complementar</span>':''} ${(t.fotos&&t.fotos.length)||t.instrucoes? `<span class="chip neutral">${UI.icon('file-text',10)}</span>`:""}</td>
++              <td class="small muted"><a href="#/obra/${t.obraId}" onclick="event.stopPropagation()">${UI.esc(t.obraNome)}</a>${t.movelNome? " · "+UI.esc(t.movelNome):""}</td>
+               <td>${UI.person(t.responsavelPlanejado)}</td>
+               <td>${t.executadoPor? UI.person(t.executadoPor):'<span class="small muted">—</span>'}</td>
+               <td class="small muted">${t.inicio||"—"} ${t.fim?"– "+t.fim:""}</td>
+               <td>${UI.tarefaStatusChip(t.status)}</td>
+               <td>${UI.resultadoChip(t.resultado)}</td>
+-              <td>${t.status==='PLANEJADA'? `<button class="btn sm" onclick="Act.iniciarTarefa('${t.id}')">Iniciar</button>`
++              <td onclick="event.stopPropagation()">${t.status==='PLANEJADA'? `<button class="btn sm" onclick="Act.iniciarTarefa('${t.id}')">Iniciar</button>`
+                   : t.status==='EM_ANDAMENTO'? `<button class="btn sm primary" onclick="Act.pedirResultado('${t.id}')">Concluir</button>` : ""}</td>
+             </tr>`).join("")}</tbody>
+         </table>
+@@ -71,8 +71,33 @@
+             <div class="field"><label>Responsável</label><select name="responsavel">${M.COLABORADORES.map(c=>`<option>${c.nome}</option>`).join("")}</select></div>
+             <div class="field"><label>Tipo</label><select name="tipo"><option value="COMPLEMENTAR">Complementar</option><option value="PRODUCAO">Produção</option></select></div>
+           </div>
++          <div class="field"><label>Instruções (opcional)</label><textarea name="instrucoes" placeholder="Detalhes de como executar, cuidados especiais, etc."></textarea></div>
++          ${UI.fotoFieldHtml("fotos")}
+         </div>
+         <div class="modal-foot"><button type="button" class="btn" data-close>Cancelar</button><button class="btn primary" type="submit">Criar tarefa</button></div>
+       </form>`;
+   };
++
++  // Modal de detalhe — aberto ao clicar numa tarefa em qualquer lista (título/local
++  // continuam clicáveis separadamente; o clique na linha inteira abre isto).
++  M.Pages.tarefaDetalheModalHtml = function(t){
++    return `
++      <div class="modal-head"><h2>${UI.esc(t.titulo)}</h2><button class="modal-close" data-close>✕</button></div>
++      <div class="modal-body">
++        <div class="flex-gap" style="gap:8px;flex-wrap:wrap;margin-bottom:10px;">
++          ${UI.tarefaStatusChip(t.status)} ${UI.resultadoChip(t.resultado)}
++          ${t.tipo==='REFACAO'?'<span class="chip critical">retrabalho</span>':''}
++        </div>
++        <p class="small muted">${t.obraId?`<a href="#/obra/${t.obraId}" onclick="UI.closeModal()">${UI.esc(t.obraNome||"")}</a>`:UI.esc(t.obraNome||"")}${t.ambienteNome?" · "+UI.esc(t.ambienteNome):""}${t.movelNome?" · "+UI.esc(t.movelNome):""}</p>
++        <p class="small">Responsável: ${UI.person(t.responsavelPlanejado)}${t.executadoPor?" · Executor: "+UI.person(t.executadoPor):""}</p>
++        ${t.instrucoes? `<div class="card pad" style="margin-top:10px;"><div class="card-title">Instruções</div><p style="white-space:pre-wrap;margin:0;">${UI.esc(t.instrucoes)}</p></div>`:""}
++        ${t.motivoRefacao? `<div class="card pad" style="margin-top:10px;"><div class="card-title">Motivo do retrabalho</div><p style="margin:0;">${UI.esc(t.motivoRefacao)}</p></div>`:""}
++        ${t.fotos&&t.fotos.length? `<div style="margin-top:10px;"><div class="card-title">Fotos</div>${UI.fotosGaleriaHtml(t.fotos)}</div>`:""}
++        <div class="flex-gap" style="margin-top:14px;flex-wrap:wrap;">
++          ${t.status==='PLANEJADA'? `<button class="btn primary" onclick="UI.closeModal(); Act.iniciarTarefa('${t.id}')">${UI.icon('play',14)} Iniciar</button>`:""}
++          ${t.status==='EM_ANDAMENTO'? `<button class="btn primary" onclick="UI.closeModal(); Act.pedirResultado('${t.id}')">${UI.icon('check',14)} Concluir</button>`:""}
++        </div>
++      </div>
++    `;
++  };
+ })();
+diff --git a/js/store.js b/js/store.js
+index 1cff7a7..acdb5ee 100644
+--- a/js/store.js
++++ b/js/store.js
+@@ -148,6 +148,27 @@
+         // a partir daqui, mudanças feitas em QUALQUER outro aparelho chegam aqui.
+         M.Supa.assinarMudancas(remoto2=> aplicarEstadoRemoto(remoto2));
+       });
++      sincronizarEquipeComSupabase();
++    });
++  }
++
++  // SUPABASE: a equipe (M.COLABORADORES) vive numa tabela relacional própria,
++  // separada do blob de estado_operacional — mutamos o array NO LUGAR (nunca
++  // reatribuímos M.COLABORADORES) porque data.js guarda uma referência interna
++  // ao mesmo array (colabByNome) que precisa continuar enxergando os dados novos.
++  function aplicarColaboradoresRemotos(lista){
++    if(!lista) return;
++    M.COLABORADORES.length = 0;
++    lista.forEach(c=> M.COLABORADORES.push(c));
++    listeners.forEach(fn=>fn());
++  }
++  function sincronizarEquipeComSupabase(){
++    M.Supa.listarColaboradores().then(lista=>{
++      if(lista && lista.length) aplicarColaboradoresRemotos(lista);
++      // se vier vazia, mantém o elenco de exemplo local até alguém cadastrar a equipe real.
++      M.Supa.assinarMudancasColaboradores(()=>{
++        M.Supa.listarColaboradores().then(lista2=> aplicarColaboradoresRemotos(lista2));
++      });
+     });
+   }
+ 
+@@ -155,6 +176,9 @@
+     state,
+     subscribe(fn){ listeners.push(fn); return ()=>{ const i=listeners.indexOf(fn); if(i>=0) listeners.splice(i,1); }; },
+     reset(){ Object.assign(state, seedState()); emit(); },
++    // re-renderiza sem persistir `state` — usado depois de mudanças que vivem
++    // fora do estado principal (hoje: equipe, gravada direto na tabela colaboradores).
++    notify(){ listeners.forEach(fn=>fn()); },
+ 
+     // ---------- lookups ----------
+     getObra(obraId){ return state.obras.find(o=>o.id===obraId); },
+@@ -496,6 +520,22 @@
+     },
+     reabrirPendencia(pendId){ Store.atualizarStatusPendencia(pendId, "ABERTA"); },
+ 
++    // ---------- arquivos do projeto (por obra) ----------
++    adicionarArquivo(obraId, arquivo){
++      const o = Store.getObra(obraId); if(!o) return;
++      o.arquivos = o.arquivos || [];
++      const item = Object.assign({id:M.uid("arq"), enviadoEm:M.todayISO()}, arquivo);
++      o.arquivos.unshift(item);
++      Store.log(obraId, "ARQUIVO_ENVIADO", `Arquivo enviado: ${arquivo.nome}`);
++      emit();
++      return item;
++    },
++    removerArquivo(obraId, arquivoId){
++      const o = Store.getObra(obraId); if(!o) return;
++      o.arquivos = (o.arquivos||[]).filter(a=>a.id!==arquivoId);
++      emit();
++    },
++
+     // ---------- lotes ----------
+     criarLote(l){
+       const item = Object.assign({id:M.uid("lote"), status:"PROGRAMADO", data:M.todayISO()}, l);
+@@ -576,7 +616,8 @@
+         Store.criarTarefa({obraId:t.obraId, obraNome:t.obraNome, ambienteId:t.ambienteId, ambienteNome:t.ambienteNome,
+           movelId:t.movelId, movelNome:t.movelNome, titulo:"Retrabalho: "+t.titulo, etapa:t.etapa,
+           responsavelPlanejado:t.executadoPor, tipo:"REFACAO", obrigatorio:"OBRIGATORIO",
+-          motivoRefacao:opts.observacao||"Gerado a partir de: "+t.titulo, origemProblema:opts.origemProblema||"Não identificado"});
++          motivoRefacao:opts.observacao||"Gerado a partir de: "+t.titulo, origemProblema:opts.origemProblema||"Não identificado",
++          fotos:opts.fotos||[]});
+         Store.audit({categoria:"QUALIDADE", tipo:"RETRABALHO", obraId:t.obraId, ambienteId:t.ambienteId, movelId:t.movelId,
+           etapa:t.etapa, descricao:`Retrabalho gerado em "${t.titulo}"`, motivo:opts.observacao||"-"});
+       }
+diff --git a/js/supabase-client.js b/js/supabase-client.js
+index 149d3b3..823a7dc 100644
+--- a/js/supabase-client.js
++++ b/js/supabase-client.js
+@@ -8,14 +8,14 @@
+    (carregarEstado) e sai (salvarEstado) da memória.
+ 
+    Como plugar:
+-   1. Preencha supabase-config.js com a URL e a anon key do seu projeto.
++   1. Preencha supabase-config.js com a URL e a publishable key do seu projeto.
+    2. Inclua estes dois arquivos no index.html, ANTES de store.js:
+         <script src="js/supabase-config.js"></script>
+         <script src="js/supabase-client.js"></script>
+    3. store.js já sabe usar M.Supa quando M.Supa.habilitado for true (ver os
+       comentários "// SUPABASE:" em store.js).
+ 
+-   Enquanto SUPABASE_URL/SUPABASE_ANON_KEY estiverem vazios em
++   Enquanto SUPABASE_URL/SUPABASE_PUBLISHABLE_KEY estiverem vazios em
+    supabase-config.js, nada disso roda — o app continua 100% no localStorage,
+    exatamente como hoje.
+    ============================================================================ */
+@@ -24,7 +24,7 @@
+   window.M = window.M || {};
+   const M = window.M;
+ 
+-  const habilitado = !!(M.SUPABASE_URL && M.SUPABASE_ANON_KEY);
++  const habilitado = !!(M.SUPABASE_URL && M.SUPABASE_PUBLISHABLE_KEY);
+   const Supa = { habilitado, client: null, ready: Promise.resolve(false) };
+   M.Supa = Supa;
+ 
+@@ -45,7 +45,7 @@
+   }
+ 
+   Supa.ready = carregarSupabaseJs().then(() => {
+-    Supa.client = window.supabase.createClient(M.SUPABASE_URL, M.SUPABASE_ANON_KEY, {
++    Supa.client = window.supabase.createClient(M.SUPABASE_URL, M.SUPABASE_PUBLISHABLE_KEY, {
+       auth: { persistSession: true, autoRefreshToken: true },
+     });
+     console.info("[Moodo] Conectado ao Supabase.");
+@@ -74,6 +74,35 @@
+     return data;
+   };
+ 
++  // --------------------------------------------------------------------------
++  // EQUIPE — tabela relacional própria (colaboradores), separada do blob de
++  // estado_operacional. É a mesma tabela que auth_user_id vai usar quando o
++  // login por senha for ligado, então a equipe já nasce pronta pra isso.
++  // --------------------------------------------------------------------------
++  Supa.listarColaboradores = async () => {
++    const { data, error } = await Supa.client.from("colaboradores").select("*").order("criado_em", { ascending: true });
++    if (error) { console.error("[Moodo] erro ao listar colaboradores:", error); return null; }
++    return data;
++  };
++  Supa.criarColaborador = async (dados) => {
++    const { data, error } = await Supa.client.from("colaboradores").insert(dados).select().single();
++    if (error) throw error;
++    return data;
++  };
++  Supa.atualizarColaborador = async (id, dados) => {
++    const { data, error } = await Supa.client.from("colaboradores").update(dados).eq("id", id).select().single();
++    if (error) throw error;
++    return data;
++  };
++  // dispara "cb" sempre que QUALQUER aparelho criar/editar/desativar alguém —
++  // quem chamou decide o que fazer (aqui, sempre recarrega a lista inteira).
++  Supa.assinarMudancasColaboradores = (cb) => {
++    const canal = Supa.client.channel("moodo-colaboradores-realtime");
++    canal.on("postgres_changes", { event: "*", schema: "public", table: "colaboradores" }, () => cb());
++    canal.subscribe();
++    return () => Supa.client.removeChannel(canal);
++  };
++
+   // --------------------------------------------------------------------------
+   // LEITURA — busca a linha única de estado_operacional. Retorna null se a
+   // tabela ainda estiver vazia (primeiro acesso de todos — nesse caso quem
+diff --git a/js/supabase-config.js b/js/supabase-config.js
+index df945c2..61be37f 100644
+--- a/js/supabase-config.js
++++ b/js/supabase-config.js
+@@ -1,3 +1,14 @@
++/* ============================================================
++   MOODO PRODUÇÃO — configuração do Supabase
++   ============================================================
++   Preencha as duas linhas abaixo com os dados do SEU projeto Supabase
++   (Configurações do projeto → API → "Project URL" e "anon public key").
++
++   Enquanto SUPABASE_URL/SUPABASE_PUBLISHABLE_KEY estiverem vazios, o app continua funcionando
++   exatamente como hoje, salvando no localStorage do navegador — nada
++   quebra. No momento em que você preencher as duas linhas e publicar,
++   o app passa a ler/gravar direto no seu banco Supabase.
++   ============================================================ */
+ window.M = window.M || {};
+ window.M.SUPABASE_URL = "https://pcowbbunmnnkananmcpg.supabase.co";
+-window.M.SUPABASE_ANON_KEY = "sb_publishable_KZ19pDU6do775NfNo7zbCg_nIcJt4sb";  // chave "publishable", NUNCA a "secret"
+\ No newline at end of file
++window.M.SUPABASE_PUBLISHABLE_KEY = "sb_publishable_KZ19pDU6do775NfNo7zbCg_nIcJt4sb";  // chave "publishable" (pública, segura no navegador) — NUNCA a "sb_secret_..." nem a service_role
+diff --git a/js/ui.js b/js/ui.js
+index 2959bea..6901b59 100644
+--- a/js/ui.js
++++ b/js/ui.js
+@@ -34,6 +34,8 @@
+     clock:           `<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>`,
+     "chevron-left":  `<path d="M15 5l-7 7 7 7"/>`,
+     "chevron-right": `<path d="M9 5l7 7-7 7"/>`,
++    "chevron-up":    `<path d="M5 15l7-7 7 7"/>`,
++    "chevron-down":  `<path d="M5 9l7 7 7-7"/>`,
+     x:               `<path d="M6 6l12 12M18 6L6 18"/>`,
+     plus:            `<path d="M12 5v14M5 12h14"/>`,
+     filter:          `<path d="M4 5h16l-6 8v6l-4-2v-4L4 5z"/>`,
+@@ -53,6 +55,9 @@
+     circle:          `<circle cx="12" cy="12" r="8"/>`,
+     link:            `<path d="M9 15l6-6"/><path d="M8 16l-2 2a3 3 0 0 1-4-4l4-4a3 3 0 0 1 4 0"/><path d="M16 8l2-2a3 3 0 0 1 4 4l-4 4a3 3 0 0 1-4 0"/>`,
+     "file-text":     `<path d="M7 3h7l4 4v14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 15.5h6M9 8.5h2"/>`,
++    upload:          `<path d="M12 15V4M8 8l4-4 4 4"/><path d="M5 19h14"/>`,
++    "map-pin":       `<path d="M12 21s7-7.5 7-12a7 7 0 0 0-14 0c0 4.5 7 12 7 12z"/><circle cx="12" cy="9" r="2.5"/>`,
++    image:           `<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16l-5.5-5.5L4 21"/>`,
+   };
+   function icon(name, size){
+     const s = size||16;
+@@ -178,6 +183,21 @@
+     return `<span class="chip ${cls}">${dias}d na etapa</span>`;
+   }
+ 
++  // ---------- fotos (formulários de pendência/tarefa/assistência) ----------
++  // Sem limite de quantidade — anexa quantas fotos forem necessárias, uma de
++  // cada vez (tira e confirma, tira mais e confirma...) ou várias de uma vez.
++  function fotoFieldHtml(name){
++    return `<div class="field"><label>${icon('camera',13)} Fotos (opcional — quantas forem necessárias)</label>
++      <input type="file" name="${name}" accept="image/*" capture="environment" multiple></div>`;
++  }
++  function fotosGaleriaHtml(fotos){
++    if(!fotos || !fotos.length) return "";
++    return `<div class="foto-galeria">${fotos.map(f=>`
++      <a href="${f.url}" target="_blank" rel="noopener" class="foto-thumb" title="${esc(f.nome||'')}">
++        <img src="${f.url}" alt="${esc(f.nome||'foto')}" loading="lazy">
++      </a>`).join("")}</div>`;
++  }
++
+   // ---------- modal ----------
+   function ensureOverlay(){
+     let ov = document.getElementById("overlay");
+@@ -206,6 +226,7 @@
+     tarefaStatusChip, resultadoChip, progressBar, stageDaysChip, icon, ICONS,
+     assistenciaStatusChip, perfilChip,
+     statTile, card, progressRow, attentionItem, pageSearchInput, attachQuickSearch,
++    fotoFieldHtml, fotosGaleriaHtml,
+ 
+     openModal(html, opts){
+       opts = opts||{};
+-- 
+2.43.0
+

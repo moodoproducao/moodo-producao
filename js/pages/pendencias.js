@@ -94,8 +94,8 @@
           </div>
           <div class="field"><label>Móvel afetado (opcional)</label>
             <select name="movelId" id="pendMovel">
-              <option value="">— pendência avulsa —</option>
-              ${M.Store.allMoveis().filter(x=>x.o.id===obraId).map(({a,m})=>`<option value="${m.id}" data-amb="${a.id}" ${m.id===movelId?'selected':''}>${a.nome} — ${m.nome}</option>`).join("")}
+              ${M.Store.allMoveis().filter(x=>x.o.id===obraId).map(({a,m})=>`<option value="${m.id}" data-amb="${a.id}" ${m.id===movelId?'selected':''}>${a.nome} — ${m.nome}${m.ressalvaAberta?' — ⚠️ com ressalva':''}</option>`).join("")}
+              <option value="" ${!movelId?'selected':''}>— pendência avulsa (sem móvel específico) —</option>
             </select>
           </div>
           <input type="hidden" name="ambienteId" id="pendAmbienteId" value="${ambienteId||''}">
@@ -124,7 +124,7 @@
   };
   M.Pages.__refreshPendMoveis = function(obraId){
     const sel = document.getElementById("pendMovel");
-    sel.innerHTML = `<option value="">— pendência avulsa —</option>` +
-      M.Store.allMoveis().filter(x=>x.o.id===obraId).map(({a,m})=>`<option value="${m.id}" data-amb="${a.id}">${a.nome} — ${m.nome}</option>`).join("");
+    sel.innerHTML = M.Store.allMoveis().filter(x=>x.o.id===obraId).map(({a,m})=>`<option value="${m.id}" data-amb="${a.id}">${a.nome} — ${m.nome}${m.ressalvaAberta?' — ⚠️ com ressalva':''}</option>`).join("")
+      + `<option value="" selected>— pendência avulsa (sem móvel específico) —</option>`;
   };
 })();

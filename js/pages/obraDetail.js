@@ -48,7 +48,11 @@
         </div>
         <div class="card pad">
           <div class="card-title">O que falta para finalizar</div>
-          ${faltam.length ? `<ul style="margin:0 0 0 18px; font-size:12.5px; line-height:2;">${faltam.map(f=>`<li>${UI.esc(f)}</li>`).join("")}</ul>` : `<p class="small muted">Nada pendente — obra pronta para finalizar.</p>`}
+          ${faltam.length ? faltam.map(g=>`
+            <div style="margin-bottom:10px;">
+              <div class="small" style="font-weight:700;color:var(--ink-soft);">${UI.esc(g.ambienteNome)}</div>
+              <ul style="margin:2px 0 0 18px; font-size:12.5px; line-height:2;">${g.itens.map(f=>`<li>${UI.esc(f)}</li>`).join("")}</ul>
+            </div>`).join("") : `<p class="small muted">Nada pendente — obra pronta para finalizar.</p>`}
           ${o.fichaTecnica ? `<div class="hr"></div><div class="card-title" style="margin-bottom:8px;">Ficha técnica (lista de materiais)</div>
             <p class="small">${o.fichaTecnica.chapasMDF} chapas de MDF (~${o.fichaTecnica.m2MDF} m²) · ~${o.fichaTecnica.metrosFitagem} m de fitagem</p>
             <p class="small muted">Componentes: ${o.fichaTecnica.componentes.join(", ")}</p>

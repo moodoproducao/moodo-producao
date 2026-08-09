@@ -46,21 +46,31 @@
   };
 
   // checklist de encerramento (seção 32)
+  // CORREÇÃO (auditoria funcional #82): mostra ANTES de encerrar o que o
+  // próprio sistema já sabe que está em aberto pra esse móvel (bloqueio,
+  // retrabalho/aguardando, tarefa obrigatória, pendência vinculada, ressalva),
+  // em vez de deixar tudo por conta da memória de quem está fechando.
   M.Pages.encerramentoMontagemHtml = function(f){
     const {o,a,m} = f;
+    const pendReais = M.Store.pendenciasReaisMovel(m);
     return `
       <div class="modal-head"><div><h2>Encerrar montagem</h2><div class="meta">${UI.esc(m.nome)} · ${UI.esc(o.cliente)} · ${UI.esc(a.nome)}</div></div><button class="modal-close" data-close>✕</button></div>
       <div class="modal-body">
+        ${pendReais.length? `<div class="help-banner" style="background:var(--warning-bg);border-color:var(--warning);color:var(--warning);">
+          ${UI.icon('alert',13)} <b>O sistema encontrou ${pendReais.length} item(ns) ainda em aberto para este móvel:</b>
+          <ul style="margin:6px 0 0 18px;">${pendReais.map(p=>`<li>${UI.esc(p)}</li>`).join("")}</ul>
+          <div class="small" style="margin-top:6px;">A montagem vai ser encerrada como <b>"concluída com pendências"</b> — isso continua visível em Para Finalizar até ser resolvido.</div>
+        </div>` : ""}
         ${CHECKLIST_ENCERRAMENTO.map((c,i)=>`
           <div class="check-row"><input type="checkbox" class="mont-check" id="mc${i}"><label class="label" for="mc${i}">${c}</label></div>
         `).join("")}
         <div class="field" style="margin-top:14px;">
-          <label><input type="checkbox" id="temPendencias" style="width:auto;margin-right:6px;">Ficaram pendências para depois (ex: peça em falta, ajuste futuro)</label>
+          <label><input type="checkbox" id="temPendencias" style="width:auto;margin-right:6px;" ${pendReais.length?'checked disabled':''}>Ficaram pendências para depois (ex: peça em falta, ajuste futuro)${pendReais.length?' — marcado automaticamente pelos itens acima':''}</label>
         </div>
       </div>
       <div class="modal-foot">
         <button class="btn" data-close>Cancelar</button>
-        <button class="btn primary" id="btnEncerrar">Encerrar montagem</button>
+        <button class="btn primary" id="btnEncerrar">${pendReais.length?'Encerrar com pendências':'Encerrar montagem'}</button>
       </div>
     `;
   };

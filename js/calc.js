@@ -126,20 +126,43 @@
     };
   }
 
+  // CORREÇÃO (auditoria UI/UX #78): antes retornava uma lista plana de frases
+  // por obra — numa obra com vários ambientes ficava difícil saber ONDE cada
+  // pendência estava. Agora agrupa OBRA (já é o parâmetro `o`) → AMBIENTE →
+  // ITEM, como pedido na auditoria funcional, com frases executáveis (dizem
+  // o que fazer, não só o que falta). Quem chama itera os grupos; use
+  // paraFinalizarTotal(o) pra contar o total de itens (não o nº de grupos).
   function paraFinalizar(o){
-    const itens = [];
-    o.ambientes.forEach(a=> a.moveis.forEach(m=>{
-      if(m.bloqueio) itens.push(m.bloqueio.descricao || m.bloqueio.categoria);
-      m.componentesCriticos.forEach(c=>{
-        if(c.status==="AGUARDANDO") itens.push(c.nome+" ("+c.tipo.toLowerCase()+")");
-        if(c.status==="REFACAO") itens.push(c.nome+" (retrabalho)");
+    const grupos = [];
+    o.ambientes.forEach(a=>{
+      const itens = [];
+      a.moveis.forEach(m=>{
+        if(m.bloqueio) itens.push(`Resolver pendência de "${m.nome}": ${m.bloqueio.descricao || m.bloqueio.categoria}`);
+        if(m.ressalvaAberta && m.ressalva){
+          const pend = (m.ressalva.itensPendentes||[]).join(", ") || "itens da liberação excepcional não resolvidos";
+          itens.push(`Regularizar ressalva de "${m.nome}" (avançou para ${M.Store.etapaById(m.ressalva.etapa).nome} sem concluir): ${pend}`);
+        }
+        m.componentesCriticos.forEach(c=>{
+          if(c.status==="AGUARDANDO") itens.push(`Receber/liberar "${c.nome}" (${c.tipo.toLowerCase()}) de "${m.nome}"`);
+          if(c.status==="REFACAO") itens.push(`Refazer "${c.nome}" de "${m.nome}" (retrabalho)`);
+        });
+        if(!movelConcluido(m) && !m.bloqueio){
+          const missing = m.checklist.filter(c=>!c.concluido);
+          if(missing.length) itens.push(`Concluir em "${m.nome}": ${missing.map(x=>x.nome).join(", ")}`);
+        }
+        // "concluída com pendências" continua aparecendo aqui até alguém
+        // resolver de verdade — encerrar a montagem não some com a pendência.
+        if(m.montagemEncerramento && m.montagemEncerramento.status==="CONCLUIDA_COM_PENDENCIAS"){
+          const reais = m.montagemEncerramento.itensPendentesReais||[];
+          itens.push(`Regularizar montagem de "${m.nome}" (encerrada com pendências): ${reais.length? reais.join("; ") : "verificar pendências registradas manualmente na conferência final"}`);
+        }
       });
-      if(!movelConcluido(m) && !m.bloqueio){
-        const missing = m.checklist.filter(c=>!c.concluido);
-        if(missing.length) itens.push(m.nome+": "+missing.map(x=>x.nome).join(", "));
-      }
-    }));
-    return itens;
+      if(itens.length) grupos.push({ambienteNome:a.nome, itens});
+    });
+    return grupos;
+  }
+  function paraFinalizarTotal(o){
+    return paraFinalizar(o).reduce((s,g)=>s+g.itens.length, 0);
   }
 
   function alertasGlobais(){
@@ -286,7 +309,7 @@
     movelConcluido, progressoGrupo, progressoObra, progressoAmbiente,
     itemCriticoGrupo, pendenciasAbertasDe, riscoObra, wipPorEtapa, indicadores,
     parseHora, duracaoHoras, valorProcessadoTarefa, desempenhoColaborador,
-    paraFinalizar, alertasGlobais,
+    paraFinalizar, paraFinalizarTotal, alertasGlobais,
     indiceDesempenho, pendenciasDoColaborador, rankingColaboradores,
     assistenciasResumo, auditoriaResumo, metaMensalProgresso, origemProblemaResumo,
     producaoHoje,

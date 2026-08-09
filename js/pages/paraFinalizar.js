@@ -19,7 +19,11 @@
             <div class="small muted" style="margin-bottom:6px;">${o.numeroOS} · entrega ${C.fmtDate(o.dataEntregaPrevista)}</div>
             ${UI.progressBar(prog.pct)}
             <div style="margin-top:10px;">
-              ${faltam.length? `<div class="small" style="font-weight:700;margin-bottom:4px;">FALTA:</div><ul style="margin:0 0 0 18px;font-size:12.5px;line-height:1.9;">${faltam.map(f=>`<li>${UI.esc(f)}</li>`).join("")}</ul>`
+              ${faltam.length? `<div class="small" style="font-weight:700;margin-bottom:4px;">FALTA:</div>` + faltam.map(g=>`
+                <div style="margin-bottom:8px;">
+                  <div class="small muted" style="font-weight:700;">${UI.esc(g.ambienteNome)}</div>
+                  <ul style="margin:2px 0 0 18px;font-size:12.5px;line-height:1.9;">${g.itens.map(f=>`<li>${UI.esc(f)}</li>`).join("")}</ul>
+                </div>`).join("")
                 : `<p class="small" style="color:var(--good);font-weight:700;">${UI.icon('check',12)} Nada pendente — pronta para finalizar!</p>`}
             </div>
             <a class="btn sm" href="#/obra/${o.id}" style="margin-top:10px;">Abrir obra →</a>

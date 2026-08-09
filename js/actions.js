@@ -180,6 +180,11 @@
       }
     },
     toggleRequisito(movelId, nome){ M.Store.toggleRequisito(movelId, nome); Act.openMovel(movelId, true); },
+    resolverRessalva(movelId){
+      M.Store.resolverRessalva(movelId);
+      UI.toast("Ressalva marcada como resolvida.");
+      Act.openMovel(movelId, true);
+    },
 
     // ---------- modal móvel ----------
     openMovel(movelId, skipHistory){
@@ -325,10 +330,10 @@
       document.getElementById("btnEncerrar").addEventListener("click", ()=>{
         const checks = document.querySelectorAll(".mont-check:checked").length;
         const total = document.querySelectorAll(".mont-check").length;
-        const temPendencias = document.getElementById("temPendencias").checked;
-        M.Store.concluirMontagem(movelId, `${checks}/${total}`, temPendencias);
+        const temPendenciasInformado = document.getElementById("temPendencias").checked;
+        const r = M.Store.concluirMontagem(movelId, `${checks}/${total}`, temPendenciasInformado);
         UI.closeModal();
-        UI.toast(temPendencias? "Montagem encerrada com pendências registradas." : "Montagem concluída!");
+        UI.toast(r.temPendencias? "Montagem encerrada como concluída com pendências — segue visível em Para Finalizar." : "Montagem concluída!");
       });
     },
 

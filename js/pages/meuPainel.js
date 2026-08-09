@@ -22,6 +22,21 @@
     const pend = M.Store.state.pendencias.filter(p=>p.responsavel===nome && p.status!=="RESOLVIDA")
       .sort((a,b)=> C.diasAte(a.prazo||"2099-01-01") - C.diasAte(b.prazo||"2099-01-01"));
 
+    // CORREÇÃO (auditoria funcional #81): "Minha Produção" mostrava a tarefa
+    // atual/próxima sem avisar se o móvel dela está com uma obra/pendência
+    // bloqueando o avanço — o colaborador só descobria isso ao tentar avançar
+    // a etapa lá na Produção. Agora avisa direto aqui, no painel dele.
+    function bloqueioDoMovel(t){
+      if(!t || !t.movelId) return null;
+      const f = M.Store.findMovel(t.movelId);
+      return f && f.m.bloqueio ? f.m.bloqueio : null;
+    }
+    const bloqueioAtual = bloqueioDoMovel(emAndamento) || (!emAndamento ? bloqueioDoMovel(proximas[0]) : null);
+    const bloqueioHtml = bloqueioAtual ? `
+      <div class="help-banner" style="background:var(--critical-bg);border-color:var(--critical);color:var(--critical);margin-top:10px;">
+        ${UI.icon('lock',13)} <b>Móvel bloqueado:</b> ${UI.esc(bloqueioAtual.categoria)} — ${UI.esc(bloqueioAtual.descricao)}. Responsável: ${UI.esc(bloqueioAtual.responsavel)}.
+      </div>` : "";
+
     const agoraHtml = emAndamento ? `
       <div class="mp-now">
         <div class="eyebrow">Agora</div>
@@ -32,6 +47,7 @@
           <button class="btn" onclick="Act.pausarTarefa('${emAndamento.id}')">${UI.icon('pause',15)} Pausar</button>
           <button class="btn primary" onclick="Act.pedirResultado('${emAndamento.id}')">${UI.icon('check',15)} Concluir</button>
         </div>
+        ${bloqueioHtml}
       </div>
     ` : (proximas[0] ? `
       <div class="mp-now">
@@ -42,6 +58,7 @@
         <div class="actions">
           <button class="btn primary" onclick="Act.iniciarTarefa('${proximas[0].id}')">${UI.icon('play',15)} Iniciar</button>
         </div>
+        ${bloqueioHtml}
       </div>
     ` : `
       <div class="mp-now">
