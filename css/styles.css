@@ -450,6 +450,7 @@ body.tv-mode .sidebar, body.tv-mode .mobile-nav, body.tv-mode .topbar-actions .h
 .perm-check{ justify-content:center; text-align:center; }
 .perm-dot{ width:9px;height:9px;border-radius:50%; margin:0 auto; }
 .perm-dot.on{ background:var(--good); } .perm-dot.off{ background:var(--border-strong); }
+.perm-check input[type=checkbox]{ width:15px;height:15px; accent-color:var(--brand); cursor:pointer; }
 
 /* ============ TV widgets / editor ============ */
 .widget-lib{ display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:10px; }

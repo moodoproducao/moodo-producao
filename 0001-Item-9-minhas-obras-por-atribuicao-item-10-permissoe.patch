@@ -1,0 +1,489 @@
+From 49451ffdddcefb63123c40d2eab6e28d857ea03e Mon Sep 17 00:00:00 2001
+From: Paulo Henrique <mdamoveis@gmail.com>
+Date: Sun, 9 Aug 2026 12:24:51 +0000
+Subject: [PATCH] Item 9 (minhas obras por atribuicao) + item 10 (permissoes
+ reais)
+
+Item 9:
+- Store.obraIdsDoColaborador(nome): deriva as obras da pessoa a partir de
+  tarefa/pendencia/assistencia atribuida a ela (nao existe nem deve existir
+  um campo fixo "obra do fulano").
+- Kanban de Producao (3 visoes), lista de Obras e Calendario agora mostram
+  so as obras da pessoa quando o perfil nao tem verTodasObras, com banner
+  explicando o filtro.
+
+Item 10:
+- Permissoes saem do codigo fixo (M.PERFIS[].pode) e viram state.permissoes:
+  editavel, persistida e sincronizada. Store.pode() le de la (com fallback
+  pro padrao se faltar), Store.setPermissao() grava com auditoria.
+- Configuracoes -> Permissoes agora e editavel (checkbox) pra quem tem
+  editarPermissoes; trava contra a pessoa se autoexcluir do proprio acesso
+  a Configuracoes/Permissoes.
+- Bloqueio de verdade: #/indicadores e #/configuracoes agora recusam acesso
+  direto por URL sem a permissao (antes so sumia o link do menu).
+- Valores financeiros (verValores) mascarados com UI.valorOuOculto() em
+  obraDetail, obras, producao (modal movel/ambiente) e dashboard.
+
+Bump APP_VERSION/CACHE_NAME 2.2.0 -> 2.3.0.
+
+Testado com node --check e Playwright: Operador bloqueado em rotas diretas,
+Kanban/Obras/Calendario escopados corretamente, valores mascarados, ADMIN
+ve tudo sem mascara/banner, toggle real de permissao via checkbox reflete
+na hora (testado ligando verIndicadores pro Operador e confirmando acesso),
+guarda de autobloqueio testada e funcionando.
+---
+ css/styles.css            |  1 +
+ js/actions.js             | 10 +++++++++
+ js/main.js                |  2 +-
+ js/pages/calendario.js    |  7 +++++++
+ js/pages/configuracoes.js | 20 ++++++++++++++++--
+ js/pages/dashboard.js     | 11 +++++++---
+ js/pages/indicadores.js   |  7 +++++++
+ js/pages/obraDetail.js    | 12 +++++------
+ js/pages/obras.js         | 13 +++++++++---
+ js/pages/producao.js      | 21 ++++++++++++++-----
+ js/store.js               | 43 +++++++++++++++++++++++++++++++++++++--
+ js/ui.js                  |  9 +++++++-
+ service-worker.js         |  2 +-
+ 13 files changed, 134 insertions(+), 24 deletions(-)
+
+diff --git a/css/styles.css b/css/styles.css
+index e3a72ff..fde2bc8 100644
+--- a/css/styles.css
++++ b/css/styles.css
+@@ -450,6 +450,7 @@ body.tv-mode .sidebar, body.tv-mode .mobile-nav, body.tv-mode .topbar-actions .h
+ .perm-check{ justify-content:center; text-align:center; }
+ .perm-dot{ width:9px;height:9px;border-radius:50%; margin:0 auto; }
+ .perm-dot.on{ background:var(--good); } .perm-dot.off{ background:var(--border-strong); }
++.perm-check input[type=checkbox]{ width:15px;height:15px; accent-color:var(--brand); cursor:pointer; }
+ 
+ /* ============ TV widgets / editor ============ */
+ .widget-lib{ display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:10px; }
+diff --git a/js/actions.js b/js/actions.js
+index fdbe5cb..2229315 100644
+--- a/js/actions.js
++++ b/js/actions.js
+@@ -446,6 +446,16 @@
+       UI.toast("Preferências de notificação salvas.");
+     },
+     salvarMeta(input){ M.Store.setMetaMensal(Number(input.value)||0); UI.toast("Meta mensal atualizada."); },
++    togglePermissao(perfilKey, acao, valor){
++      const r = M.Store.setPermissao(perfilKey, acao, valor);
++      if(!r.ok){
++        if(r.motivo==="AUTOBLOQUEIO") UI.toast("Você não pode tirar de si mesmo o acesso a Configurações/Permissões — peça pra outro administrador fazer essa mudança.");
++        else UI.toast("Sem permissão para editar.");
++        Act.rerender(); // desfaz visualmente o clique no checkbox
++        return;
++      }
++      UI.toast(`Permissão "${acao}" do perfil "${M.perfilDef(perfilKey).label}" ${valor?"liberada":"bloqueada"}.`);
++    },
+     toggleTvWidget(id){ M.Store.toggleTvWidget(id); },
+     restaurarDados(){
+       UI.confirm("Isso vai apagar tudo o que foi alterado no protótipo e voltar aos dados de exemplo originais. Continuar?", ()=>{
+diff --git a/js/main.js b/js/main.js
+index de8edae..e561c51 100644
+--- a/js/main.js
++++ b/js/main.js
+@@ -5,7 +5,7 @@
+   "use strict";
+   const M = window.M;
+   const UI = M.UI;
+-  const APP_VERSION = "2.2.0";
++  const APP_VERSION = "2.3.0";
+ 
+   function usuarioAtualColab(){
+     return M.colabByNome(M.Store.state.usuarioAtual) || M.COLABORADORES[9];
+diff --git a/js/pages/calendario.js b/js/pages/calendario.js
+index 431d25a..d976a95 100644
+--- a/js/pages/calendario.js
++++ b/js/pages/calendario.js
+@@ -38,6 +38,12 @@
+     if(ativos.has("ASSISTENCIAS")){
+       M.Store.state.assistencias.forEach(a=>{ if(a.status!=="CONCLUIDA" && a.prazo) add(a.prazo, "Assistência — "+(a.obraNome||a.cliente||""), "warning", a.obraId, {tipo:"assistencia", tab:"assistencias"}); });
+     }
++    // item 9: mesma regra do Kanban — sem verTodasObras, só os eventos das
++    // obras onde a pessoa tem algo atribuído.
++    if(!M.Store.pode("verTodasObras")){
++      const meuObraIds = M.Store.obraIdsDoColaborador(M.Store.state.usuarioAtual);
++      return raw.filter(e=> meuObraIds.has(e.obraId));
++    }
+     return raw;
+   }
+ 
+@@ -96,6 +102,7 @@
+     const dows = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"].map(x=>`<div class="cal-dow">${x}</div>`).join("");
+ 
+     const html = `
++      ${!M.Store.pode("verTodasObras")? `<div class="help-banner">${UI.icon('user',13)} Mostrando só eventos das obras onde você tem tarefa, pendência ou assistência atribuída.</div>`:""}
+       <div class="card pad" style="margin-bottom:14px;">
+         <div class="flex-gap" style="flex-wrap:wrap;">
+           ${FILTROS.map(f=>`<button class="chip ${M.UIState.calFiltros.has(f.key)?'brand':'neutral'}" style="cursor:pointer;border:none;" onclick="Act.toggleCalFiltro('${f.key}')">${f.label}</button>`).join("")}
+diff --git a/js/pages/configuracoes.js b/js/pages/configuracoes.js
+index 7f751aa..3db8e52 100644
+--- a/js/pages/configuracoes.js
++++ b/js/pages/configuracoes.js
+@@ -353,6 +353,9 @@
+   }
+ 
+   function permCheck(v){ return `<span class="perm-dot ${v?'on':'off'}"></span>`; }
++  // item 10: permissões agora são editáveis de verdade (state.permissoes,
++  // via Store.pode/setPermissao) — só quem tem "editarPermissoes" vê
++  // checkbox; os outros continuam vendo a bolinha somente-leitura de sempre.
+   function secPermissoes(){
+     const cols = ["ADMIN","PCP","LIDERANCA","OPERADOR","MONTADOR","TV"];
+     const linhas = [
+@@ -362,14 +365,20 @@
+       ["Acessar configurações","verConfiguracoes"], ["Liberar avanço excepcional","liberarExcecao"],
+       ["Editar processos (tarefas/fluxos/requisitos)","editarProcesso"], ["Editar permissões","editarPermissoes"],
+     ];
++    const podeEditar = M.Store.pode("editarPermissoes");
++    const valorDe = (perfilKey,acao)=> (M.Store.state.permissoes && M.Store.state.permissoes[perfilKey] && Object.prototype.hasOwnProperty.call(M.Store.state.permissoes[perfilKey],acao))
++      ? M.Store.state.permissoes[perfilKey][acao] : M.perfilDef(perfilKey).pode[acao];
+     return `
+-      <p class="small muted" style="margin-bottom:12px;">Nesta versão os perfis são fixos (Administrador, PCP/Gestão, Liderança, Operador, Montador, Consulta/TV) — a regra de menor acesso já está ativa na navegação: operadores e montadores veem só Minha Produção, Tarefas, Pendências, Assistências e Calendário.</p>
++      <p class="small muted" style="margin-bottom:12px;">Nesta versão os perfis são fixos (Administrador, PCP/Gestão, Liderança, Operador, Montador, Consulta/TV) — a regra de menor acesso já está ativa na navegação e agora também bloqueia acesso direto por link, não só esconde o menu. ${podeEditar? 'Clique numa caixinha pra ligar/desligar.' : 'Só quem tem "Editar permissões" pode alterar esta tabela.'}</p>
+       <div class="perm-grid">
+         <div class="perm-head" style="text-align:left;">Permissão</div>
+         ${cols.map(c=>`<div class="perm-head">${M.perfilDef(c).label}</div>`).join("")}
+         ${linhas.map(([label,key])=>`
+           <div class="perm-row-label">${label}</div>
+-          ${cols.map(c=> `<div class="perm-check">${permCheck(M.perfilDef(c).pode[key])}</div>`).join("")}
++          ${cols.map(c=> podeEditar
++            ? `<div class="perm-check"><input type="checkbox" ${valorDe(c,key)?'checked':''} onchange="Act.togglePermissao('${c}','${key}',this.checked)"></div>`
++            : `<div class="perm-check">${permCheck(valorDe(c,key))}</div>`
++          ).join("")}
+         `).join("")}
+       </div>`;
+   }
+@@ -412,7 +421,14 @@
+       </div>`;
+   }
+ 
++  // CORREÇÃO (item 10 da lista): antes o link "Configurações" só sumia do
++  // rodapé pra quem não tinha permissão — quem soubesse o endereço
++  // #/configuracoes acessava (e editava) processos, tarefas padrão, fluxos
++  // etc. mesmo sem permissão. Agora a página bloqueia de verdade.
+   M.Pages.configuracoes = function(sub){
++    if(!M.Store.pode("verConfiguracoes")){
++      return {title:"Configurações", html:`<div class="card pad"><p>Seu perfil (<b>${UI.esc(M.Store.perfilAtual().label)}</b>) não tem acesso a Configurações.</p></div>`};
++    }
+     sub = sub || "integracoes";
+     const secs = {integracoes:secIntegracoes, processos:secProcessos, indicadores:secIndicadores, tv:secTv,
+       permissoes:secPermissoes, notificacoes:secNotificacoes, assistencias:secAssistencias, dados:secDados};
+diff --git a/js/pages/dashboard.js b/js/pages/dashboard.js
+index 912b970..9d6cff9 100644
+--- a/js/pages/dashboard.js
++++ b/js/pages/dashboard.js
+@@ -38,7 +38,9 @@
+       <div class="stat-row">
+         ${UI.statTile({icon:'building', label:'Obras ativas', value:obras.length})}
+         ${UI.statTile({icon:'kanban', label:'Em produção agora', value:moveis.filter(x=>!C.movelConcluido(x.m)).length})}
+-        ${UI.statTile({icon:'bar-chart', label:'R$ produzido no mês', value:C.fmtBRLk(ind.produzido), sub:`${meta.pct}% da meta de ${C.fmtBRLk(meta.meta)}`})}
++        ${M.Store.pode('verValores')
++          ? UI.statTile({icon:'bar-chart', label:'R$ produzido no mês', value:C.fmtBRLk(ind.produzido), sub:`${meta.pct}% da meta de ${C.fmtBRLk(meta.meta)}`})
++          : UI.statTile({icon:'bar-chart', label:'R$ produzido no mês', value:'•••••', sub:'seu perfil não vê valores'})}
+         ${UI.statTile({icon:'lock', label:'Bloqueios ativos', value:bloqueados, critical:!!bloqueados})}
+         ${UI.statTile({icon:'alert', label:'Pendências abertas', value:pendAbertas.length, critical:!!pendAbertas.length})}
+         ${UI.statTile({icon:'truck', label:'Entregas em 7 dias', value:entregas7.length})}
+@@ -101,12 +103,12 @@
+           body: wip.map(r=>`<div class="progress-row">
+               <div class="pr-label">${UI.esc(r.label)}</div>
+               <div class="progress thin"><div style="width:${Math.round(r.qtd/maxWip*100)}%"></div></div>
+-              <div class="pr-pct" style="width:auto;white-space:nowrap;">${r.qtd} · ${C.fmtBRLk(r.valor)}</div>
++              <div class="pr-pct" style="width:auto;white-space:nowrap;">${r.qtd}${M.Store.pode('verValores')?` · ${C.fmtBRLk(r.valor)}`:''}</div>
+             </div>`).join("")
+         })}
+         ${UI.card({
+           title:"Meta do mês",
+-          body:`
++          body: M.Store.pode('verValores') ? `
+             <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:10px;">
+               <div style="font-size:26px;font-weight:800;letter-spacing:-0.02em;">${C.fmtBRLk(meta.realizado)}</div>
+               <div class="small muted">de ${C.fmtBRLk(meta.meta)}</div>
+@@ -118,6 +120,9 @@
+               <div><div style="font-size:16px;font-weight:800;">${C.fmtBRLk(ind.entregue)}</div><div class="small muted">Entregue</div></div>
+               <div><div style="font-size:16px;font-weight:800;">${C.fmtBRLk(ind.montado)}</div><div class="small muted">Montado</div></div>
+             </div>
++          ` : `
++            ${UI.progressBar(meta.pct,"good")}
++            <p class="small muted" style="margin-top:10px;">${meta.pct}% da meta do mês — seu perfil não vê os valores em R$.</p>
+           `
+         })}
+       </div>
+diff --git a/js/pages/indicadores.js b/js/pages/indicadores.js
+index b1b6dff..5251e40 100644
+--- a/js/pages/indicadores.js
++++ b/js/pages/indicadores.js
+@@ -6,7 +6,14 @@
+   const M = window.M, UI = M.UI, C = M.Calc;
+   M.Pages = M.Pages || {};
+ 
++  // CORREÇÃO (item 10 da lista): antes o link "Indicadores" só sumia do menu
++  // pra quem não tinha permissão — quem soubesse o endereço #/indicadores via
++  // os números financeiros de qualquer jeito. Agora a própria página bloqueia,
++  // igual já era feito em Auditoria.
+   M.Pages.indicadores = function(){
++    if(!M.Store.pode("verIndicadores")){
++      return {title:"Indicadores", html:`<div class="card pad"><p>Seu perfil (<b>${UI.esc(M.Store.perfilAtual().label)}</b>) não tem acesso aos Indicadores.</p></div>`};
++    }
+     const ind = C.indicadores();
+     const obras = M.Store.state.obras;
+     const moveis = M.Store.allMoveis();
+diff --git a/js/pages/obraDetail.js b/js/pages/obraDetail.js
+index 6535b1d..f31aef7 100644
+--- a/js/pages/obraDetail.js
++++ b/js/pages/obraDetail.js
+@@ -40,11 +40,11 @@
+           <table class="tbl">
+             <thead><tr><th>Ambiente</th><th>Bruto</th><th>Líquido</th></tr></thead>
+             <tbody>
+-              ${o.ambientes.map(a=>`<tr><td>${UI.esc(a.nome)}</td><td>${C.fmtBRL(a.valorBruto)}</td><td>${C.fmtBRL(a.valorLiquido)}</td></tr>`).join("")}
+-              <tr style="font-weight:700;"><td>Total</td><td>${C.fmtBRL(o.valorBruto)}</td><td>${C.fmtBRL(o.valorLiquido)}</td></tr>
++              ${o.ambientes.map(a=>`<tr><td>${UI.esc(a.nome)}</td><td>${UI.valorOuOculto(C.fmtBRL(a.valorBruto))}</td><td>${UI.valorOuOculto(C.fmtBRL(a.valorLiquido))}</td></tr>`).join("")}
++              <tr style="font-weight:700;"><td>Total</td><td>${UI.valorOuOculto(C.fmtBRL(o.valorBruto))}</td><td>${UI.valorOuOculto(C.fmtBRL(o.valorLiquido))}</td></tr>
+             </tbody>
+           </table>
+-          <p class="small muted" style="margin-top:8px;">Desconto aplicado: ${C.fmtBRL(o.desconto)} (${Math.round(o.descontoPct*10000)/100}%)</p>
++          <p class="small muted" style="margin-top:8px;">Desconto aplicado: ${UI.valorOuOculto(C.fmtBRL(o.desconto))} (${M.Store.pode("verValores")?Math.round(o.descontoPct*10000)/100+"%":"•••"})</p>
+         </div>
+         <div class="card pad">
+           <div class="card-title">O que falta para finalizar</div>
+@@ -66,14 +66,14 @@
+     return o.ambientes.map(a=>{
+       const prog = C.progressoAmbiente(a);
+       return `<div class="card pad" style="margin-bottom:12px;">
+-        <div class="flex-between"><b>${UI.esc(a.nome)}</b><span class="small muted">${C.fmtBRL(a.valorLiquido)} · ${prog.pct}%</span></div>
++        <div class="flex-between"><b>${UI.esc(a.nome)}</b><span class="small muted">${UI.valorOuOculto(C.fmtBRL(a.valorLiquido))} · ${prog.pct}%</span></div>
+         ${UI.progressBar(prog.pct)}
+         <div style="margin-top:10px;">
+           ${a.moveis.map(m=>`
+             <div class="check-row" style="cursor:pointer;" onclick="Act.openMovel('${m.id}')">
+               <span class="dot ${m.bloqueio?'critical':C.movelConcluido(m)?'good':'neutral'}"></span>
+               <span class="label"><b>${UI.esc(m.nome)}</b> <span class="chip neutral" style="margin-left:4px;">${UI.esc(M.Store.etapaById(m.etapa).nome)}</span>
+-                <div class="small muted">resp. ${UI.esc(m.responsavel)} · ${C.fmtBRL(m.valorLiquido)}${m.bloqueio? " · ⏳ "+UI.esc(m.bloqueio.categoria):""}</div></span>
++                <div class="small muted">resp. ${UI.esc(m.responsavel)} · ${UI.valorOuOculto(C.fmtBRL(m.valorLiquido))}${m.bloqueio? " · ⏳ "+UI.esc(m.bloqueio.categoria):""}</div></span>
+             </div>`).join("")}
+         </div>
+       </div>`;
+@@ -161,7 +161,7 @@
+             <h2 style="font-size:19px;">${UI.esc(o.cliente)}</h2>
+           </div>
+           <div class="flex-gap" style="gap:18px;flex-wrap:wrap;">
+-            <div><div class="small muted">Valor líquido</div><b>${C.fmtBRL(o.valorLiquido)}</b></div>
++            <div><div class="small muted">Valor líquido</div><b>${UI.valorOuOculto(C.fmtBRL(o.valorLiquido))}</b></div>
+             <div><div class="small muted">Progresso</div><b>${prog.pct}%</b></div>
+             <div><div class="small muted">Entrega</div><b>${C.fmtDate(o.dataEntregaPrevista)}</b></div>
+             <div><div class="small muted">Risco</div>${UI.riscoChip(risco.nivel)}</div>
+diff --git a/js/pages/obras.js b/js/pages/obras.js
+index 2c25338..80a6051 100644
+--- a/js/pages/obras.js
++++ b/js/pages/obras.js
+@@ -6,15 +6,21 @@
+   const M = window.M, UI = M.UI, C = M.Calc;
+   M.Pages = M.Pages || {};
+ 
++  // CORREÇÃO (itens 9 e 10): sem verTodasObras, só mostra as obras onde a
++  // pessoa tem algo atribuído (mesma regra do Kanban); sem verValores, o
++  // valor líquido fica mascarado igual no resto do app.
+   M.Pages.obras = function(){
+-    const rows = M.Store.state.obras.map(o=>{
++    const restrito = !M.Store.pode("verTodasObras");
++    const meuObraIds = restrito ? M.Store.obraIdsDoColaborador(M.Store.state.usuarioAtual) : null;
++    const obras = restrito ? M.Store.state.obras.filter(o=>meuObraIds.has(o.id)) : M.Store.state.obras;
++    const rows = obras.map(o=>{
+       const prog = C.progressoObra(o);
+       const risco = C.riscoObra(o);
+       return `<tr onclick="Act.go('#/obra/${o.id}')" style="cursor:pointer;">
+         <td><b>${UI.esc(o.cliente)}</b><div class="small muted">${o.numeroOS}</div></td>
+         <td>${o.ambientes.length} amb. · ${o.ambientes.reduce((s,a)=>s+a.moveis.length,0)} móveis</td>
+         <td style="min-width:140px;">${UI.progressBar(prog.pct)}<div class="small muted">${prog.pct}% (${prog.concluidos}/${prog.total})</div></td>
+-        <td>${C.fmtBRL(o.valorLiquido)}</td>
++        <td>${UI.valorOuOculto(C.fmtBRL(o.valorLiquido))}</td>
+         <td>${C.fmtDate(o.dataEntregaPrevista)} ${risco.diasEntrega<0?`<span class="chip critical">${-risco.diasEntrega}d atraso</span>`:""}</td>
+         <td>${risco.pendencias? `<span class="chip critical">${risco.pendencias}</span>` : `<span class="chip good">0</span>`}</td>
+         <td>${UI.riscoChip(risco.nivel)}</td>
+@@ -22,10 +28,11 @@
+     }).join("");
+ 
+     const html = `
++      ${restrito? `<div class="help-banner">${UI.icon('user',13)} Mostrando só as obras onde você tem tarefa, pendência ou assistência atribuída.</div>`:""}
+       <div class="card pad">
+         <table class="tbl">
+           <thead><tr><th>Obra</th><th>Escopo</th><th>Progresso</th><th>Valor líquido</th><th>Entrega</th><th>Pendências</th><th>Risco</th></tr></thead>
+-          <tbody>${rows}</tbody>
++          <tbody>${rows.length?rows:`<tr><td colspan="7" class="small muted" style="text-align:center;padding:20px;">Nenhuma obra atribuída a você no momento.</td></tr>`}</tbody>
+         </table>
+       </div>
+     `;
+diff --git a/js/pages/producao.js b/js/pages/producao.js
+index ba78fb7..ef69cae 100644
+--- a/js/pages/producao.js
++++ b/js/pages/producao.js
+@@ -60,16 +60,26 @@
+     }
+     const cols = etapasCols.map(()=>[]);
+ 
++    // item 9: sem verTodasObras, só entram no board os itens das obras onde a
++    // pessoa tem tarefa/pendência/assistência atribuída — derivado na hora,
++    // não existe (nem deveria existir) um campo fixo "obra do fulano".
++    const restrito = !M.Store.pode("verTodasObras");
++    const meuObraIds = restrito ? M.Store.obraIdsDoColaborador(M.Store.state.usuarioAtual) : null;
++    const obrasVisiveis = restrito ? M.Store.state.obras.filter(o=>meuObraIds.has(o.id)) : M.Store.state.obras;
++
+     if(view==="moveis"){
+-      M.Store.allMoveis().forEach(({o,a,m})=> cols[colFor(m.etapa)].push(movelCardHtml(o,a,m)));
++      M.Store.allMoveis().forEach(({o,a,m})=>{
++        if(restrito && !meuObraIds.has(o.id)) return;
++        cols[colFor(m.etapa)].push(movelCardHtml(o,a,m));
++      });
+     }else if(view==="ambientes"){
+-      M.Store.state.obras.forEach(o=> o.ambientes.forEach(a=>{
++      obrasVisiveis.forEach(o=> o.ambientes.forEach(a=>{
+         const crit = C.itemCriticoGrupo(a.moveis);
+         const etapaId = crit ? crit.etapa : "FINALIZADA";
+         cols[colFor(etapaId)].push(grupoCardHtml(o,a,a.moveis,"ambiente",a.id));
+       }));
+     }else{
+-      M.Store.state.obras.forEach(o=>{
++      obrasVisiveis.forEach(o=>{
+         const allM = o.ambientes.flatMap(a=>a.moveis);
+         const crit = C.itemCriticoGrupo(allM);
+         const etapaId = crit ? crit.etapa : "FINALIZADA";
+@@ -92,6 +102,7 @@
+     `).join("");
+ 
+     const html = `
++      ${restrito? `<div class="help-banner">${UI.icon('user',13)} Mostrando só as obras onde você tem tarefa, pendência ou assistência atribuída.</div>`:""}
+       <div class="board-toolbar flex-between" style="margin-bottom:10px;">
+         <div class="segmented">
+           <button class="${view==='ambientes'?'active':''}" onclick="Act.setKanbanView('ambientes')">Ambientes</button>
+@@ -148,7 +159,7 @@
+       <div class="modal-body">
+         <div class="field-row">
+           <div class="field"><label>Responsável</label><select onchange="Act.setResponsavel('${m.id}',this)">${respOptions}</select></div>
+-          <div class="field"><label>Valor líquido do móvel</label><input value="${C.fmtBRL(m.valorLiquido)}" disabled></div>
++          <div class="field"><label>Valor líquido do móvel</label><input value="${M.Store.pode('verValores')?C.fmtBRL(m.valorLiquido):'•••••'}" disabled></div>
+         </div>
+ 
+         ${m.bloqueio? `<div class="help-banner" style="background:var(--critical-bg);border-color:var(--critical);color:var(--critical);">
+@@ -190,7 +201,7 @@
+       </div>`).join("");
+     return `
+       <div class="modal-head">
+-        <div><h2>${UI.esc(a.nome)}</h2><div class="meta">${UI.esc(o.cliente)} · ${o.numeroOS} · valor líquido ${C.fmtBRL(a.valorLiquido)}</div></div>
++        <div><h2>${UI.esc(a.nome)}</h2><div class="meta">${UI.esc(o.cliente)} · ${o.numeroOS} · valor líquido ${UI.valorOuOculto(C.fmtBRL(a.valorLiquido))}</div></div>
+         <button class="modal-close" data-close>✕</button>
+       </div>
+       <div class="modal-body">
+diff --git a/js/store.js b/js/store.js
+index 97d5b31..a27a3bb 100644
+--- a/js/store.js
++++ b/js/store.js
+@@ -52,6 +52,10 @@
+       pesosDesempenho: Object.assign({}, M.PESOS_DESEMPENHO_DEFAULT),
+       tarefasPadrao: seedTarefasPadrao(),
+       fluxosPadrao: deepClone(M.FLUXOS_PENDENCIA_PADRAO),
++      // permissões (item 10): ponto único de verdade — cada perfil começa com o
++      // "pode" padrão de M.PERFIS, mas a partir daqui vive aqui, editável e
++      // persistida/sincronizada, não mais fixa no código.
++      permissoes: M.PERFIS.reduce((acc,p)=>{ acc[p.key] = Object.assign({}, p.pode); return acc; }, {}),
+       notificacoes: Object.assign({}, M.NOTIFICACOES_DEFAULT),
+       metaMensal: Object.assign({}, M.META_MENSAL),
+       tvWidgetsAtivos: {},
+@@ -77,6 +81,7 @@
+             auditoria: parsed.auditoria || fresh.auditoria,
+             tarefasPadrao: parsed.tarefasPadrao || fresh.tarefasPadrao,
+             fluxosPadrao: parsed.fluxosPadrao || fresh.fluxosPadrao,
++            permissoes: parsed.permissoes || fresh.permissoes,
+             pesosDesempenho: parsed.pesosDesempenho || fresh.pesosDesempenho,
+             notificacoes: parsed.notificacoes || fresh.notificacoes,
+             metaMensal: parsed.metaMensal || fresh.metaMensal,
+@@ -238,12 +243,46 @@
+       return item;
+     },
+ 
+-    // ---------- permissões ----------
++    // ---------- permissões (item 10: editáveis de verdade) ----------
+     perfilAtual(){
+       const c = M.colabByNome(state.usuarioAtual);
+       return M.perfilDef(c? c.perfil : "OPERADOR");
+     },
+-    pode(acao){ return !!Store.perfilAtual().pode[acao]; },
++    // lê de state.permissoes (editável/persistida) — cai no padrão fixo de
++    // M.PERFIS só se essa chave ainda não existir (estado antigo migrando,
++    // ou perfil/ação nova que a semente ainda não tinha quando foi salva).
++    pode(acao){
++      const perfil = Store.perfilAtual();
++      const overrides = state.permissoes && state.permissoes[perfil.key];
++      if(overrides && Object.prototype.hasOwnProperty.call(overrides, acao)) return !!overrides[acao];
++      return !!perfil.pode[acao];
++    },
++    setPermissao(perfilKey, acao, valor){
++      if(!Store.pode("editarPermissoes")) return {ok:false, motivo:"SEM_PERMISSAO"};
++      // rede de segurança: ninguém consegue tirar de si mesmo o acesso a
++      // Configurações/Permissões por essa tela — evitaria se autotrancar fora
++      // sem ter como reverter (só outro perfil com editarPermissoes resolveria).
++      if(perfilKey===Store.perfilAtual().key && (acao==="verConfiguracoes"||acao==="editarPermissoes") && !valor){
++        return {ok:false, motivo:"AUTOBLOQUEIO"};
++      }
++      state.permissoes = state.permissoes || {};
++      state.permissoes[perfilKey] = Object.assign({}, state.permissoes[perfilKey]);
++      state.permissoes[perfilKey][acao] = !!valor;
++      Store.audit({categoria:"GOVERNANCA", tipo:"ALTERACAO_PROCESSO",
++        descricao:`Permissão "${acao}" do perfil "${M.perfilDef(perfilKey).label}" alterada para ${valor?"permitido":"bloqueado"}.`});
++      emit();
++      return {ok:true};
++    },
++    // item 9: obras onde a pessoa tem alguma tarefa/pendência/assistência
++    // atribuída — não existe (nem deve existir) um vínculo direto "obra do
++    // fulano", então isso é sempre derivado na hora a partir do que já existe.
++    obraIdsDoColaborador(nome){
++      const ids = new Set();
++      state.tarefas.forEach(t=>{ if(t.responsavelPlanejado===nome || t.executadoPor===nome) ids.add(t.obraId); });
++      state.pendencias.forEach(p=>{ if(p.responsavel===nome) ids.add(p.obraId); });
++      state.assistencias.forEach(a=>{ if(a.responsavel===nome) ids.add(a.obraId); });
++      return ids;
++    },
+ 
+     // ============================================================
+     // ETAPAS — configuráveis (Configurações → Processos → Etapas)
+diff --git a/js/ui.js b/js/ui.js
+index 6901b59..5cf31b5 100644
+--- a/js/ui.js
++++ b/js/ui.js
+@@ -220,11 +220,18 @@
+     const p = M.perfilDef ? M.perfilDef(key) : null;
+     return `<span class="chip brand">${esc(p?p.label:key)}</span>`;
+   }
++  // item 10: mascara um valor financeiro já formatado quando o perfil atual
++  // não tem "verValores" — usar em todo lugar que hoje mostra R$ de obra/
++  // ambiente/móvel fora das telas já bloqueadas inteiras (Indicadores/Config).
++  function valorOuOculto(valorFormatadoHtml){
++    return (M.Store && M.Store.pode("verValores")) ? valorFormatadoHtml
++      : `<span class="small muted" title="Seu perfil não vê valores financeiros">•••••</span>`;
++  }
+ 
+   const UI = {
+     esc, initials, avatar, person, riscoChip, statusPendenciaChip, prioridadeChip,
+     tarefaStatusChip, resultadoChip, progressBar, stageDaysChip, icon, ICONS,
+-    assistenciaStatusChip, perfilChip,
++    assistenciaStatusChip, perfilChip, valorOuOculto,
+     statTile, card, progressRow, attentionItem, pageSearchInput, attachQuickSearch,
+     fotoFieldHtml, fotosGaleriaHtml,
+ 
+diff --git a/service-worker.js b/service-worker.js
+index ee4cd51..4af5bc2 100644
+--- a/service-worker.js
++++ b/service-worker.js
+@@ -5,7 +5,7 @@
+    evolução futura — aqui o objetivo é permitir abrir o app e ver a
+    última tela mesmo sem internet, e sinalizar quando há versão nova.
+    ============================================================ */
+-const CACHE_NAME = "moodo-producao-v2.2.0";
++const CACHE_NAME = "moodo-producao-v2.3.0";
+ const SHELL_FILES = [
+   "./",
+   "./index.html",
+-- 
+2.43.0
+

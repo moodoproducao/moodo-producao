@@ -52,6 +52,10 @@
       pesosDesempenho: Object.assign({}, M.PESOS_DESEMPENHO_DEFAULT),
       tarefasPadrao: seedTarefasPadrao(),
       fluxosPadrao: deepClone(M.FLUXOS_PENDENCIA_PADRAO),
+      // permissões (item 10): ponto único de verdade — cada perfil começa com o
+      // "pode" padrão de M.PERFIS, mas a partir daqui vive aqui, editável e
+      // persistida/sincronizada, não mais fixa no código.
+      permissoes: M.PERFIS.reduce((acc,p)=>{ acc[p.key] = Object.assign({}, p.pode); return acc; }, {}),
       notificacoes: Object.assign({}, M.NOTIFICACOES_DEFAULT),
       metaMensal: Object.assign({}, M.META_MENSAL),
       tvWidgetsAtivos: {},
@@ -77,6 +81,7 @@
             auditoria: parsed.auditoria || fresh.auditoria,
             tarefasPadrao: parsed.tarefasPadrao || fresh.tarefasPadrao,
             fluxosPadrao: parsed.fluxosPadrao || fresh.fluxosPadrao,
+            permissoes: parsed.permissoes || fresh.permissoes,
             pesosDesempenho: parsed.pesosDesempenho || fresh.pesosDesempenho,
             notificacoes: parsed.notificacoes || fresh.notificacoes,
             metaMensal: parsed.metaMensal || fresh.metaMensal,
@@ -238,12 +243,46 @@
       return item;
     },
 
-    // ---------- permissões ----------
+    // ---------- permissões (item 10: editáveis de verdade) ----------
     perfilAtual(){
       const c = M.colabByNome(state.usuarioAtual);
       return M.perfilDef(c? c.perfil : "OPERADOR");
     },
-    pode(acao){ return !!Store.perfilAtual().pode[acao]; },
+    // lê de state.permissoes (editável/persistida) — cai no padrão fixo de
+    // M.PERFIS só se essa chave ainda não existir (estado antigo migrando,
+    // ou perfil/ação nova que a semente ainda não tinha quando foi salva).
+    pode(acao){
+      const perfil = Store.perfilAtual();
+      const overrides = state.permissoes && state.permissoes[perfil.key];
+      if(overrides && Object.prototype.hasOwnProperty.call(overrides, acao)) return !!overrides[acao];
+      return !!perfil.pode[acao];
+    },
+    setPermissao(perfilKey, acao, valor){
+      if(!Store.pode("editarPermissoes")) return {ok:false, motivo:"SEM_PERMISSAO"};
+      // rede de segurança: ninguém consegue tirar de si mesmo o acesso a
+      // Configurações/Permissões por essa tela — evitaria se autotrancar fora
+      // sem ter como reverter (só outro perfil com editarPermissoes resolveria).
+      if(perfilKey===Store.perfilAtual().key && (acao==="verConfiguracoes"||acao==="editarPermissoes") && !valor){
+        return {ok:false, motivo:"AUTOBLOQUEIO"};
+      }
+      state.permissoes = state.permissoes || {};
+      state.permissoes[perfilKey] = Object.assign({}, state.permissoes[perfilKey]);
+      state.permissoes[perfilKey][acao] = !!valor;
+      Store.audit({categoria:"GOVERNANCA", tipo:"ALTERACAO_PROCESSO",
+        descricao:`Permissão "${acao}" do perfil "${M.perfilDef(perfilKey).label}" alterada para ${valor?"permitido":"bloqueado"}.`});
+      emit();
+      return {ok:true};
+    },
+    // item 9: obras onde a pessoa tem alguma tarefa/pendência/assistência
+    // atribuída — não existe (nem deve existir) um vínculo direto "obra do
+    // fulano", então isso é sempre derivado na hora a partir do que já existe.
+    obraIdsDoColaborador(nome){
+      const ids = new Set();
+      state.tarefas.forEach(t=>{ if(t.responsavelPlanejado===nome || t.executadoPor===nome) ids.add(t.obraId); });
+      state.pendencias.forEach(p=>{ if(p.responsavel===nome) ids.add(p.obraId); });
+      state.assistencias.forEach(a=>{ if(a.responsavel===nome) ids.add(a.obraId); });
+      return ids;
+    },
 
     // ============================================================
     // ETAPAS — configuráveis (Configurações → Processos → Etapas)

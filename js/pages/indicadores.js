@@ -6,7 +6,14 @@
   const M = window.M, UI = M.UI, C = M.Calc;
   M.Pages = M.Pages || {};
 
+  // CORREÇÃO (item 10 da lista): antes o link "Indicadores" só sumia do menu
+  // pra quem não tinha permissão — quem soubesse o endereço #/indicadores via
+  // os números financeiros de qualquer jeito. Agora a própria página bloqueia,
+  // igual já era feito em Auditoria.
   M.Pages.indicadores = function(){
+    if(!M.Store.pode("verIndicadores")){
+      return {title:"Indicadores", html:`<div class="card pad"><p>Seu perfil (<b>${UI.esc(M.Store.perfilAtual().label)}</b>) não tem acesso aos Indicadores.</p></div>`};
+    }
     const ind = C.indicadores();
     const obras = M.Store.state.obras;
     const moveis = M.Store.allMoveis();

@@ -38,7 +38,9 @@
       <div class="stat-row">
         ${UI.statTile({icon:'building', label:'Obras ativas', value:obras.length})}
         ${UI.statTile({icon:'kanban', label:'Em produção agora', value:moveis.filter(x=>!C.movelConcluido(x.m)).length})}
-        ${UI.statTile({icon:'bar-chart', label:'R$ produzido no mês', value:C.fmtBRLk(ind.produzido), sub:`${meta.pct}% da meta de ${C.fmtBRLk(meta.meta)}`})}
+        ${M.Store.pode('verValores')
+          ? UI.statTile({icon:'bar-chart', label:'R$ produzido no mês', value:C.fmtBRLk(ind.produzido), sub:`${meta.pct}% da meta de ${C.fmtBRLk(meta.meta)}`})
+          : UI.statTile({icon:'bar-chart', label:'R$ produzido no mês', value:'•••••', sub:'seu perfil não vê valores'})}
         ${UI.statTile({icon:'lock', label:'Bloqueios ativos', value:bloqueados, critical:!!bloqueados})}
         ${UI.statTile({icon:'alert', label:'Pendências abertas', value:pendAbertas.length, critical:!!pendAbertas.length})}
         ${UI.statTile({icon:'truck', label:'Entregas em 7 dias', value:entregas7.length})}
@@ -101,12 +103,12 @@
           body: wip.map(r=>`<div class="progress-row">
               <div class="pr-label">${UI.esc(r.label)}</div>
               <div class="progress thin"><div style="width:${Math.round(r.qtd/maxWip*100)}%"></div></div>
-              <div class="pr-pct" style="width:auto;white-space:nowrap;">${r.qtd} · ${C.fmtBRLk(r.valor)}</div>
+              <div class="pr-pct" style="width:auto;white-space:nowrap;">${r.qtd}${M.Store.pode('verValores')?` · ${C.fmtBRLk(r.valor)}`:''}</div>
             </div>`).join("")
         })}
         ${UI.card({
           title:"Meta do mês",
-          body:`
+          body: M.Store.pode('verValores') ? `
             <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:10px;">
               <div style="font-size:26px;font-weight:800;letter-spacing:-0.02em;">${C.fmtBRLk(meta.realizado)}</div>
               <div class="small muted">de ${C.fmtBRLk(meta.meta)}</div>
@@ -118,6 +120,9 @@
               <div><div style="font-size:16px;font-weight:800;">${C.fmtBRLk(ind.entregue)}</div><div class="small muted">Entregue</div></div>
               <div><div style="font-size:16px;font-weight:800;">${C.fmtBRLk(ind.montado)}</div><div class="small muted">Montado</div></div>
             </div>
+          ` : `
+            ${UI.progressBar(meta.pct,"good")}
+            <p class="small muted" style="margin-top:10px;">${meta.pct}% da meta do mês — seu perfil não vê os valores em R$.</p>
           `
         })}
       </div>

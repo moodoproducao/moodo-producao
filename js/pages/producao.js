@@ -60,16 +60,26 @@
     }
     const cols = etapasCols.map(()=>[]);
 
+    // item 9: sem verTodasObras, só entram no board os itens das obras onde a
+    // pessoa tem tarefa/pendência/assistência atribuída — derivado na hora,
+    // não existe (nem deveria existir) um campo fixo "obra do fulano".
+    const restrito = !M.Store.pode("verTodasObras");
+    const meuObraIds = restrito ? M.Store.obraIdsDoColaborador(M.Store.state.usuarioAtual) : null;
+    const obrasVisiveis = restrito ? M.Store.state.obras.filter(o=>meuObraIds.has(o.id)) : M.Store.state.obras;
+
     if(view==="moveis"){
-      M.Store.allMoveis().forEach(({o,a,m})=> cols[colFor(m.etapa)].push(movelCardHtml(o,a,m)));
+      M.Store.allMoveis().forEach(({o,a,m})=>{
+        if(restrito && !meuObraIds.has(o.id)) return;
+        cols[colFor(m.etapa)].push(movelCardHtml(o,a,m));
+      });
     }else if(view==="ambientes"){
-      M.Store.state.obras.forEach(o=> o.ambientes.forEach(a=>{
+      obrasVisiveis.forEach(o=> o.ambientes.forEach(a=>{
         const crit = C.itemCriticoGrupo(a.moveis);
         const etapaId = crit ? crit.etapa : "FINALIZADA";
         cols[colFor(etapaId)].push(grupoCardHtml(o,a,a.moveis,"ambiente",a.id));
       }));
     }else{
-      M.Store.state.obras.forEach(o=>{
+      obrasVisiveis.forEach(o=>{
         const allM = o.ambientes.flatMap(a=>a.moveis);
         const crit = C.itemCriticoGrupo(allM);
         const etapaId = crit ? crit.etapa : "FINALIZADA";
@@ -92,6 +102,7 @@
     `).join("");
 
     const html = `
+      ${restrito? `<div class="help-banner">${UI.icon('user',13)} Mostrando só as obras onde você tem tarefa, pendência ou assistência atribuída.</div>`:""}
       <div class="board-toolbar flex-between" style="margin-bottom:10px;">
         <div class="segmented">
           <button class="${view==='ambientes'?'active':''}" onclick="Act.setKanbanView('ambientes')">Ambientes</button>
@@ -148,7 +159,7 @@
       <div class="modal-body">
         <div class="field-row">
           <div class="field"><label>Responsável</label><select onchange="Act.setResponsavel('${m.id}',this)">${respOptions}</select></div>
-          <div class="field"><label>Valor líquido do móvel</label><input value="${C.fmtBRL(m.valorLiquido)}" disabled></div>
+          <div class="field"><label>Valor líquido do móvel</label><input value="${M.Store.pode('verValores')?C.fmtBRL(m.valorLiquido):'•••••'}" disabled></div>
         </div>
 
         ${m.bloqueio? `<div class="help-banner" style="background:var(--critical-bg);border-color:var(--critical);color:var(--critical);">
@@ -190,7 +201,7 @@
       </div>`).join("");
     return `
       <div class="modal-head">
-        <div><h2>${UI.esc(a.nome)}</h2><div class="meta">${UI.esc(o.cliente)} · ${o.numeroOS} · valor líquido ${C.fmtBRL(a.valorLiquido)}</div></div>
+        <div><h2>${UI.esc(a.nome)}</h2><div class="meta">${UI.esc(o.cliente)} · ${o.numeroOS} · valor líquido ${UI.valorOuOculto(C.fmtBRL(a.valorLiquido))}</div></div>
         <button class="modal-close" data-close>✕</button>
       </div>
       <div class="modal-body">

@@ -446,6 +446,16 @@
       UI.toast("Preferências de notificação salvas.");
     },
     salvarMeta(input){ M.Store.setMetaMensal(Number(input.value)||0); UI.toast("Meta mensal atualizada."); },
+    togglePermissao(perfilKey, acao, valor){
+      const r = M.Store.setPermissao(perfilKey, acao, valor);
+      if(!r.ok){
+        if(r.motivo==="AUTOBLOQUEIO") UI.toast("Você não pode tirar de si mesmo o acesso a Configurações/Permissões — peça pra outro administrador fazer essa mudança.");
+        else UI.toast("Sem permissão para editar.");
+        Act.rerender(); // desfaz visualmente o clique no checkbox
+        return;
+      }
+      UI.toast(`Permissão "${acao}" do perfil "${M.perfilDef(perfilKey).label}" ${valor?"liberada":"bloqueada"}.`);
+    },
     toggleTvWidget(id){ M.Store.toggleTvWidget(id); },
     restaurarDados(){
       UI.confirm("Isso vai apagar tudo o que foi alterado no protótipo e voltar aos dados de exemplo originais. Continuar?", ()=>{

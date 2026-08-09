@@ -353,6 +353,9 @@
   }
 
   function permCheck(v){ return `<span class="perm-dot ${v?'on':'off'}"></span>`; }
+  // item 10: permissões agora são editáveis de verdade (state.permissoes,
+  // via Store.pode/setPermissao) — só quem tem "editarPermissoes" vê
+  // checkbox; os outros continuam vendo a bolinha somente-leitura de sempre.
   function secPermissoes(){
     const cols = ["ADMIN","PCP","LIDERANCA","OPERADOR","MONTADOR","TV"];
     const linhas = [
@@ -362,14 +365,20 @@
       ["Acessar configurações","verConfiguracoes"], ["Liberar avanço excepcional","liberarExcecao"],
       ["Editar processos (tarefas/fluxos/requisitos)","editarProcesso"], ["Editar permissões","editarPermissoes"],
     ];
+    const podeEditar = M.Store.pode("editarPermissoes");
+    const valorDe = (perfilKey,acao)=> (M.Store.state.permissoes && M.Store.state.permissoes[perfilKey] && Object.prototype.hasOwnProperty.call(M.Store.state.permissoes[perfilKey],acao))
+      ? M.Store.state.permissoes[perfilKey][acao] : M.perfilDef(perfilKey).pode[acao];
     return `
-      <p class="small muted" style="margin-bottom:12px;">Nesta versão os perfis são fixos (Administrador, PCP/Gestão, Liderança, Operador, Montador, Consulta/TV) — a regra de menor acesso já está ativa na navegação: operadores e montadores veem só Minha Produção, Tarefas, Pendências, Assistências e Calendário.</p>
+      <p class="small muted" style="margin-bottom:12px;">Nesta versão os perfis são fixos (Administrador, PCP/Gestão, Liderança, Operador, Montador, Consulta/TV) — a regra de menor acesso já está ativa na navegação e agora também bloqueia acesso direto por link, não só esconde o menu. ${podeEditar? 'Clique numa caixinha pra ligar/desligar.' : 'Só quem tem "Editar permissões" pode alterar esta tabela.'}</p>
       <div class="perm-grid">
         <div class="perm-head" style="text-align:left;">Permissão</div>
         ${cols.map(c=>`<div class="perm-head">${M.perfilDef(c).label}</div>`).join("")}
         ${linhas.map(([label,key])=>`
           <div class="perm-row-label">${label}</div>
-          ${cols.map(c=> `<div class="perm-check">${permCheck(M.perfilDef(c).pode[key])}</div>`).join("")}
+          ${cols.map(c=> podeEditar
+            ? `<div class="perm-check"><input type="checkbox" ${valorDe(c,key)?'checked':''} onchange="Act.togglePermissao('${c}','${key}',this.checked)"></div>`
+            : `<div class="perm-check">${permCheck(valorDe(c,key))}</div>`
+          ).join("")}
         `).join("")}
       </div>`;
   }
@@ -412,7 +421,14 @@
       </div>`;
   }
 
+  // CORREÇÃO (item 10 da lista): antes o link "Configurações" só sumia do
+  // rodapé pra quem não tinha permissão — quem soubesse o endereço
+  // #/configuracoes acessava (e editava) processos, tarefas padrão, fluxos
+  // etc. mesmo sem permissão. Agora a página bloqueia de verdade.
   M.Pages.configuracoes = function(sub){
+    if(!M.Store.pode("verConfiguracoes")){
+      return {title:"Configurações", html:`<div class="card pad"><p>Seu perfil (<b>${UI.esc(M.Store.perfilAtual().label)}</b>) não tem acesso a Configurações.</p></div>`};
+    }
     sub = sub || "integracoes";
     const secs = {integracoes:secIntegracoes, processos:secProcessos, indicadores:secIndicadores, tv:secTv,
       permissoes:secPermissoes, notificacoes:secNotificacoes, assistencias:secAssistencias, dados:secDados};

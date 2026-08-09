@@ -38,6 +38,12 @@
     if(ativos.has("ASSISTENCIAS")){
       M.Store.state.assistencias.forEach(a=>{ if(a.status!=="CONCLUIDA" && a.prazo) add(a.prazo, "Assistência — "+(a.obraNome||a.cliente||""), "warning", a.obraId, {tipo:"assistencia", tab:"assistencias"}); });
     }
+    // item 9: mesma regra do Kanban — sem verTodasObras, só os eventos das
+    // obras onde a pessoa tem algo atribuído.
+    if(!M.Store.pode("verTodasObras")){
+      const meuObraIds = M.Store.obraIdsDoColaborador(M.Store.state.usuarioAtual);
+      return raw.filter(e=> meuObraIds.has(e.obraId));
+    }
     return raw;
   }
 
@@ -96,6 +102,7 @@
     const dows = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"].map(x=>`<div class="cal-dow">${x}</div>`).join("");
 
     const html = `
+      ${!M.Store.pode("verTodasObras")? `<div class="help-banner">${UI.icon('user',13)} Mostrando só eventos das obras onde você tem tarefa, pendência ou assistência atribuída.</div>`:""}
       <div class="card pad" style="margin-bottom:14px;">
         <div class="flex-gap" style="flex-wrap:wrap;">
           ${FILTROS.map(f=>`<button class="chip ${M.UIState.calFiltros.has(f.key)?'brand':'neutral'}" style="cursor:pointer;border:none;" onclick="Act.toggleCalFiltro('${f.key}')">${f.label}</button>`).join("")}

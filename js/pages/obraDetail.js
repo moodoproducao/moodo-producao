@@ -40,11 +40,11 @@
           <table class="tbl">
             <thead><tr><th>Ambiente</th><th>Bruto</th><th>Líquido</th></tr></thead>
             <tbody>
-              ${o.ambientes.map(a=>`<tr><td>${UI.esc(a.nome)}</td><td>${C.fmtBRL(a.valorBruto)}</td><td>${C.fmtBRL(a.valorLiquido)}</td></tr>`).join("")}
-              <tr style="font-weight:700;"><td>Total</td><td>${C.fmtBRL(o.valorBruto)}</td><td>${C.fmtBRL(o.valorLiquido)}</td></tr>
+              ${o.ambientes.map(a=>`<tr><td>${UI.esc(a.nome)}</td><td>${UI.valorOuOculto(C.fmtBRL(a.valorBruto))}</td><td>${UI.valorOuOculto(C.fmtBRL(a.valorLiquido))}</td></tr>`).join("")}
+              <tr style="font-weight:700;"><td>Total</td><td>${UI.valorOuOculto(C.fmtBRL(o.valorBruto))}</td><td>${UI.valorOuOculto(C.fmtBRL(o.valorLiquido))}</td></tr>
             </tbody>
           </table>
-          <p class="small muted" style="margin-top:8px;">Desconto aplicado: ${C.fmtBRL(o.desconto)} (${Math.round(o.descontoPct*10000)/100}%)</p>
+          <p class="small muted" style="margin-top:8px;">Desconto aplicado: ${UI.valorOuOculto(C.fmtBRL(o.desconto))} (${M.Store.pode("verValores")?Math.round(o.descontoPct*10000)/100+"%":"•••"})</p>
         </div>
         <div class="card pad">
           <div class="card-title">O que falta para finalizar</div>
@@ -66,14 +66,14 @@
     return o.ambientes.map(a=>{
       const prog = C.progressoAmbiente(a);
       return `<div class="card pad" style="margin-bottom:12px;">
-        <div class="flex-between"><b>${UI.esc(a.nome)}</b><span class="small muted">${C.fmtBRL(a.valorLiquido)} · ${prog.pct}%</span></div>
+        <div class="flex-between"><b>${UI.esc(a.nome)}</b><span class="small muted">${UI.valorOuOculto(C.fmtBRL(a.valorLiquido))} · ${prog.pct}%</span></div>
         ${UI.progressBar(prog.pct)}
         <div style="margin-top:10px;">
           ${a.moveis.map(m=>`
             <div class="check-row" style="cursor:pointer;" onclick="Act.openMovel('${m.id}')">
               <span class="dot ${m.bloqueio?'critical':C.movelConcluido(m)?'good':'neutral'}"></span>
               <span class="label"><b>${UI.esc(m.nome)}</b> <span class="chip neutral" style="margin-left:4px;">${UI.esc(M.Store.etapaById(m.etapa).nome)}</span>
-                <div class="small muted">resp. ${UI.esc(m.responsavel)} · ${C.fmtBRL(m.valorLiquido)}${m.bloqueio? " · ⏳ "+UI.esc(m.bloqueio.categoria):""}</div></span>
+                <div class="small muted">resp. ${UI.esc(m.responsavel)} · ${UI.valorOuOculto(C.fmtBRL(m.valorLiquido))}${m.bloqueio? " · ⏳ "+UI.esc(m.bloqueio.categoria):""}</div></span>
             </div>`).join("")}
         </div>
       </div>`;
@@ -161,7 +161,7 @@
             <h2 style="font-size:19px;">${UI.esc(o.cliente)}</h2>
           </div>
           <div class="flex-gap" style="gap:18px;flex-wrap:wrap;">
-            <div><div class="small muted">Valor líquido</div><b>${C.fmtBRL(o.valorLiquido)}</b></div>
+            <div><div class="small muted">Valor líquido</div><b>${UI.valorOuOculto(C.fmtBRL(o.valorLiquido))}</b></div>
             <div><div class="small muted">Progresso</div><b>${prog.pct}%</b></div>
             <div><div class="small muted">Entrega</div><b>${C.fmtDate(o.dataEntregaPrevista)}</b></div>
             <div><div class="small muted">Risco</div>${UI.riscoChip(risco.nivel)}</div>

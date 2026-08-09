@@ -220,11 +220,18 @@
     const p = M.perfilDef ? M.perfilDef(key) : null;
     return `<span class="chip brand">${esc(p?p.label:key)}</span>`;
   }
+  // item 10: mascara um valor financeiro já formatado quando o perfil atual
+  // não tem "verValores" — usar em todo lugar que hoje mostra R$ de obra/
+  // ambiente/móvel fora das telas já bloqueadas inteiras (Indicadores/Config).
+  function valorOuOculto(valorFormatadoHtml){
+    return (M.Store && M.Store.pode("verValores")) ? valorFormatadoHtml
+      : `<span class="small muted" title="Seu perfil não vê valores financeiros">•••••</span>`;
+  }
 
   const UI = {
     esc, initials, avatar, person, riscoChip, statusPendenciaChip, prioridadeChip,
     tarefaStatusChip, resultadoChip, progressBar, stageDaysChip, icon, ICONS,
-    assistenciaStatusChip, perfilChip,
+    assistenciaStatusChip, perfilChip, valorOuOculto,
     statTile, card, progressRow, attentionItem, pageSearchInput, attachQuickSearch,
     fotoFieldHtml, fotosGaleriaHtml,
 
