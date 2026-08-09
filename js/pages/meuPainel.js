@@ -28,8 +28,8 @@
     // a etapa lá na Produção. Agora avisa direto aqui, no painel dele.
     function bloqueioDoMovel(t){
       if(!t || !t.movelId) return null;
-      const f = M.Store.findMovel(t.movelId);
-      return f && f.m.bloqueio ? f.m.bloqueio : null;
+      const bloqueios = M.Store.bloqueiosMovel(t.movelId);
+      return bloqueios.length ? bloqueios[0] : null;
     }
     const bloqueioAtual = bloqueioDoMovel(emAndamento) || (!emAndamento ? bloqueioDoMovel(proximas[0]) : null);
     const bloqueioHtml = bloqueioAtual ? `

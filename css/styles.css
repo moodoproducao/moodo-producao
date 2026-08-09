@@ -434,6 +434,25 @@ body.tv-mode .sidebar, body.tv-mode .mobile-nav, body.tv-mode .topbar-actions .h
 .next-action .lbl{ font-size:10.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--brand-dark); font-weight:800; margin-bottom:3px;}
 .next-action .txt{ font-size:13.5px; font-weight:700; color:var(--ink); }
 
+/* ============ página da obra (plano "obra no centro" — linha do tempo de etapas) ============ */
+.etapa-timeline{ display:flex; align-items:flex-start; gap:0; overflow-x:auto; padding:6px 2px 12px; }
+.et-step{ display:flex; flex-direction:column; align-items:center; gap:6px; min-width:62px; font-size:10.5px; font-weight:700; color:var(--ink-mute); text-align:center; flex-shrink:0; cursor:default; }
+.et-step .num{ width:26px;height:26px;border-radius:50%; background:var(--surface-alt); display:flex; align-items:center; justify-content:center; font-size:11px; border:2px solid var(--border-strong); flex-shrink:0;}
+.et-step.done .num{ background:var(--good); color:#fff; border-color:var(--good); }
+.et-step.atual{ color:var(--brand-dark); }
+.et-step.atual .num{ background:var(--brand); color:#fff; border-color:var(--brand); box-shadow:0 0 0 3px var(--brand-wash); }
+.et-step.bloqueada .num{ border-color:var(--critical); color:var(--critical); }
+.et-step.bloqueada{ color:var(--critical); }
+.et-step.ressalva .num{ background:var(--warning-fill); color:#fff; border-color:var(--warning-fill); }
+.et-sep{ flex:1; height:2px; background:var(--border-strong); margin-top:15px; min-width:14px; }
+.et-sep.done{ background:var(--good); }
+.obra-ambiente-card{ background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:12px 14px; cursor:pointer; transition:.12s; min-width:140px; flex:1; }
+.obra-ambiente-card:hover{ border-color:var(--brand); }
+.obra-ambiente-card.foco{ border-color:var(--brand); background:var(--brand-wash); box-shadow:0 0 0 1px var(--brand); }
+.foto-mini-grid{ display:flex; flex-wrap:wrap; gap:8px; }
+.foto-mini{ width:64px;height:64px;border-radius:8px; overflow:hidden; border:1px solid var(--border); flex-shrink:0; }
+.foto-mini img{ width:100%;height:100%; object-fit:cover; display:block; }
+
 /* ============ ranking / desempenho ============ */
 .rank-table{ width:100%; border-collapse:collapse; }
 .rank-row{ display:grid; grid-template-columns:28px 1fr repeat(6,72px) 60px; gap:6px; align-items:center; padding:11px 8px; border-bottom:1px solid var(--surface-alt); font-size:12px;}

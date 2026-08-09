@@ -7,7 +7,7 @@
   M.Pages = M.Pages || {};
 
   function movelCardHtml(o,a,m){
-    const bloq = m.bloqueio;
+    const bloqueios = M.Store.bloqueiosMovel(m.id);
     const dias = C.diasDesde(m.dataEntradaEtapa);
     const check = M.Store.checarRequisitos(m);
     // item 9 do backlog: checklist de componentes virou Tarefa — a barrinha de
@@ -16,9 +16,11 @@
     const tarefasDoMovel = M.Store.state.tarefas.filter(t=>t.movelId===m.id);
     const done = tarefasDoMovel.filter(t=>t.status==="CONCLUIDA").length;
     const ressalva = !!m.ressalvaAberta;
+    // "Kanban vira mapa": o card leva direto pra página da obra com o ambiente
+    // desse móvel em foco, em vez de abrir modal (ver plano "obra no centro").
     return `<div class="kcard" draggable="true"
         ondragstart="Act.dragStart(event,'${m.id}')" ondragend="Act.dragEnd(event)"
-        onclick="Act.openMovel('${m.id}')">
+        onclick="Act.irParaObra('${o.id}','${a.id}')">
       <div class="kproj"><span>${UI.esc(o.cliente)}</span><span>${UI.esc(a.nome)}</span></div>
       <div class="ktitle">${UI.esc(m.nome)}</div>
       <div class="krow">${UI.person(m.responsavel)}${UI.stageDaysChip(dias)}</div>
@@ -26,7 +28,7 @@
       <div class="small muted" style="margin-top:3px;">${done}/${tarefasDoMovel.length} tarefas concluídas</div>`:""}
       ${ressalva? `<div class="kblocked" style="color:var(--warning);background:var(--warning-bg);">${UI.icon('alert',11)} avançou com ressalva</div>`:""}
       ${!check.liberado && !ressalva? `<div class="kblocked">${UI.icon('lock',11)} requisito pendente p/ avançar</div>`:""}
-      ${bloq? `<div class="kblocked">${UI.icon('clock',11)} ${UI.esc(bloq.categoria)}</div>`:""}
+      ${bloqueios.length? `<div class="kblocked">${UI.icon('clock',11)} ${UI.esc(bloqueios[0].categoria)}${bloqueios.length>1?` +${bloqueios.length-1}`:''}</div>`:""}
       ${m.componentesCriticos.some(c=>c.status==="REFACAO")? `<div class="kblocked">${UI.icon('wrench',11)} retrabalho em aberto</div>`:""}
     </div>`;
   }
@@ -35,7 +37,9 @@
     const prog = C.progressoGrupo(moveis);
     const crit = C.itemCriticoGrupo(moveis);
     const pend = C.pendenciasAbertasDe(o.id).filter(p=> ambiente? p.ambienteId===ambiente.id : true).length;
-    const onclick = kind==="ambiente" ? `Act.openAmbiente('${id}')` : `Act.go('#/obra/${id}')`;
+    // "Kanban vira mapa": card de ambiente leva direto pra página da obra com
+    // esse ambiente em foco; card de obra inteira já ia direto (mantido).
+    const onclick = kind==="ambiente" ? `Act.irParaObra('${o.id}','${id}')` : `Act.go('#/obra/${id}')`;
     return `<div class="kcard" onclick="${onclick}">
       <div class="kproj"><span>${UI.esc(o.cliente)}</span><span>${o.numeroOS}</span></div>
       <div class="ktitle">${ambiente? UI.esc(ambiente.nome) : "Obra inteira"}</div>
@@ -141,12 +145,21 @@
         <span onclick="event.stopPropagation()">${UI.tarefaAcoesHtml(t, m.id)}</span>
       </div>`).join("") : `<p class="small muted">Nenhuma tarefa cadastrada para este móvel ainda.</p>`;
 
+    // plano "obra no centro": componente crítico agora tem ação de verdade
+    // (igual tarefa) — Resolver fecha a pendência vinculada automaticamente;
+    // Reabrir volta a bloquear (ex.: chegou danificado de novo).
     const compHtml = m.componentesCriticos.map(c=>`
       <div class="check-row">
         <span class="dot ${c.status==='REFACAO'?'critical':c.status==='AGUARDANDO'?'warning':'good'}"></span>
-        <span class="label"><b>${UI.esc(c.nome)}</b> — ${UI.esc(c.tipo)}
+        <span class="label" style="flex:1;"><b>${UI.esc(c.nome)}</b> — ${UI.esc(c.tipo)}
           ${c.status==='REFACAO'? ` · <span class="chip critical">retrabalho</span> motivo: ${UI.esc(c.motivo||'-')}`:''}
           ${c.status==='AGUARDANDO'? ` · <span class="chip warning">aguardando</span> ${UI.esc(c.fornecedor||'')}`:''}
+          ${c.status==='RESOLVIDO'? ` · <span class="chip good">resolvido</span>`:''}
+        </span>
+        <span onclick="event.stopPropagation()">
+          ${c.status==='RESOLVIDO'
+            ? `<button class="btn sm" onclick="Act.reabrirComponente('${m.id}','${c.id}')">Reabrir</button>`
+            : `<button class="btn sm primary" onclick="Act.resolverComponente('${m.id}','${c.id}')">Resolver</button>`}
         </span>
       </div>`).join("");
 
@@ -161,6 +174,9 @@
     ` : `<p class="small muted">Sem requisitos configurados para "${UI.esc(M.Store.etapaById(m.etapa).nome)}".</p>`;
 
     const respOptions = M.COLABORADORES.map(c=>`<option ${c.nome===m.responsavel?'selected':''}>${c.nome}</option>`).join("");
+    // fase 4 do plano "obra no centro": todas as pendências abertas do móvel,
+    // não só a mais recente (m.bloqueio era um objeto único e sobrescrevia).
+    const bloqueiosM = M.Store.bloqueiosMovel(m.id);
 
     return `
       <div class="modal-head">
@@ -173,10 +189,10 @@
           <div class="field"><label>Valor líquido do móvel</label><input value="${M.Store.pode('verValores')?C.fmtBRL(m.valorLiquido):'•••••'}" disabled></div>
         </div>
 
-        ${m.bloqueio? `<div class="help-banner" style="background:var(--critical-bg);border-color:var(--critical);color:var(--critical);">
-          ${UI.icon('lock',13)} <b>Bloqueada:</b> ${UI.esc(m.bloqueio.categoria)} — ${UI.esc(m.bloqueio.descricao)}. Responsável: ${UI.esc(m.bloqueio.responsavel)}.
+        ${bloqueiosM.map(p=>`<div class="help-banner" style="background:var(--critical-bg);border-color:var(--critical);color:var(--critical);margin-bottom:8px;">
+          ${UI.icon('lock',13)} <b>Bloqueada:</b> ${UI.esc(p.categoria)} — ${UI.esc(p.descricao)}. Responsável: ${UI.esc(p.responsavel)}.
           <a href="#/pendencias" data-close style="text-decoration:underline;">ver em Pendências →</a>
-        </div>` : ""}
+        </div>`).join("")}
 
         ${m.ressalvaAberta && m.ressalva? `<div class="help-banner" style="background:var(--warning-bg);border-color:var(--warning);color:var(--warning);">
           ${UI.icon('alert',13)} <b>Avançou com ressalva</b> para "${UI.esc(m.ressalva.etapaLabel)}" em ${C.fmtDate(m.ressalva.data)} (${UI.esc(m.ressalva.usuario||'-')}). Motivo: ${UI.esc(m.ressalva.motivo||'-')}.
@@ -191,7 +207,12 @@
         </div>
         <div style="margin:6px 0 14px;">${tarefasHtml}</div>
 
-        ${compHtml? `<label style="font-size:11.5px;font-weight:700;color:var(--ink-soft);">Componentes críticos / exceções</label><div style="margin:6px 0 14px;">${compHtml}</div>`:""}
+        <div class="flex-between" style="margin-bottom:4px;">
+          <label style="font-size:11.5px;font-weight:700;color:var(--ink-soft);">Componentes críticos / exceções</label>
+          <button class="btn sm" onclick="Act.abrirFormComponente('${m.id}')">${UI.icon('plus',12)} componente</button>
+        </div>
+        <p class="small muted" style="margin:2px 0 6px;">Só pra exceções — vidro, serralheria, pintura, item comprado fora etc. Cadastrar aqui já cria a pendência correspondente.</p>
+        ${compHtml? `<div style="margin:6px 0 14px;">${compHtml}</div>` : `<p class="small muted" style="margin-bottom:14px;">Nenhum componente crítico neste móvel.</p>`}
 
         <label style="font-size:11.5px;font-weight:700;color:var(--ink-soft);">Requisitos da etapa "${UI.esc(M.Store.etapaById(m.etapa).nome)}"</label>
         <p class="small muted" style="margin:2px 0 6px;">São condições pra liberar a etapa (material disponível, aprovação etc.) — clique no chip pra marcar como atendido/pendente. Não é uma tarefa.</p>
@@ -205,15 +226,39 @@
     `;
   };
 
+  // ---------- form de componente crítico (exceção) — cadastrar já cria a pendência ----------
+  M.Pages.componenteFormHtml = function(movelId){
+    return `
+      <div class="modal-head"><h2>Novo componente crítico</h2><button class="modal-close" data-close>✕</button></div>
+      <form id="formComponente">
+        <div class="modal-body">
+          <div class="field"><label>Nome do item</label><input name="nome" required placeholder="Ex: Porta de vidro"></div>
+          <div class="field-row">
+            <div class="field"><label>Tipo</label><select name="tipo" required>${M.TIPOS_COMPONENTE.map(t=>`<option>${t}</option>`).join("")}</select></div>
+            <div class="field"><label>Fornecedor (se houver)</label><input name="fornecedor" placeholder="Ex: Vidraçaria Pontal"></div>
+          </div>
+          <div class="field-row">
+            <div class="field"><label>Responsável</label><select name="responsavel">${M.COLABORADORES.map(c=>`<option>${c.nome}</option>`).join("")}</select></div>
+            <div class="field"><label>Prazo</label><input type="date" name="prazo"></div>
+          </div>
+          <div class="field"><label>Observação</label><textarea name="observacao" placeholder="Detalhe o que está sendo esperado ou feito"></textarea></div>
+          <p class="small muted">Cria já com status "aguardando" e a pendência correspondente — some das duas juntas quando você marcar como resolvido.</p>
+        </div>
+        <div class="modal-foot"><button type="button" class="btn" data-close>Cancelar</button><button class="btn primary" type="submit">Criar componente</button></div>
+      </form>`;
+  };
+
   M.Pages.ambienteModalHtml = function(f){
     const {o,a} = f;
     const prog = C.progressoAmbiente(a);
-    const rows = a.moveis.map(m=>`
+    const rows = a.moveis.map(m=>{
+      const bloqueiosM = M.Store.bloqueiosMovel(m.id);
+      return `
       <div class="check-row" style="cursor:pointer;" onclick="UI.closeModal();Act.openMovel('${m.id}')">
-        <span class="dot ${m.bloqueio?'critical':C.movelConcluido(m)?'good':'neutral'}"></span>
+        <span class="dot ${bloqueiosM.length?'critical':C.movelConcluido(m)?'good':'neutral'}"></span>
         <span class="label"><b>${UI.esc(m.nome)}</b> <span class="chip neutral" style="margin-left:4px;">${UI.esc(M.Store.etapaById(m.etapa).nome)}</span>
-          <div class="small muted">resp. ${UI.esc(m.responsavel)}${m.bloqueio? " · ⏳ "+UI.esc(m.bloqueio.categoria):""}</div></span>
-      </div>`).join("");
+          <div class="small muted">resp. ${UI.esc(m.responsavel)}${bloqueiosM.length? " · ⏳ "+UI.esc(bloqueiosM[0].categoria)+(bloqueiosM.length>1?` +${bloqueiosM.length-1}`:''):""}</div></span>
+      </div>`;}).join("");
     return `
       <div class="modal-head">
         <div><h2>${UI.esc(a.nome)}</h2><div class="meta">${UI.esc(o.cliente)} · ${o.numeroOS} · valor líquido ${UI.valorOuOculto(C.fmtBRL(a.valorLiquido))}</div></div>

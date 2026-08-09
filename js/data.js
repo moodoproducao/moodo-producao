@@ -120,6 +120,18 @@ window.M = window.M || {};
   const TIPOS_COMPONENTE = ["Vidro","Espelho","Serralheria","Pintura","Estofado","LED","Ferragem especial","Material do cliente","Outro"];
   const COMPONENTES_CHECKLIST_PADRAO = ["Corpo MDF","Frentes","Portas","Gavetas","Ferragens","Puxadores","Vidro","Espelho","Serralheria","Pintura","Estofado","LED","Outros"];
 
+  // plano "obra no centro" — componente crítico AGUARDANDO/REFACAO gera uma
+  // pendência real (Store.criarComponenteCritico), e essa pendência precisa de
+  // uma categoria válida (CATEGORIAS_PENDENCIA_DEF) pra ganhar fluxo operacional.
+  // Mapeia o tipo do componente pra categoria mais próxima; "Material especial"
+  // é o tipo usado pelos itens especiais informados na criação da obra.
+  const TIPO_COMPONENTE_TO_CATEGORIA = {
+    "Vidro":"Vidro", "Espelho":"Espelho", "Serralheria":"Serralheria",
+    "Pintura":"Pintura", "Estofado":"Estofado", "LED":"Outro",
+    "Ferragem especial":"Falta ferragem", "Material do cliente":"Cliente",
+    "Material especial":"Falta material", "Outro":"Outro",
+  };
+
   // origem do problema (seção 47) — alimenta indicadores de qualidade
   const ORIGENS_PROBLEMA = ["Projeto","Medição","Corte","Usinagem","Fitagem","Pré-montagem","Transporte","Montagem","Fornecedor","Cliente","Obra civil","Não identificado"];
 
@@ -593,6 +605,7 @@ window.M = window.M || {};
   M.categoriaDef = categoriaDef;
   M.FLUXOS_PENDENCIA_PADRAO = FLUXOS_PENDENCIA_PADRAO;
   M.TIPOS_COMPONENTE = TIPOS_COMPONENTE;
+  M.TIPO_COMPONENTE_TO_CATEGORIA = TIPO_COMPONENTE_TO_CATEGORIA;
   M.COMPONENTES_CHECKLIST_PADRAO = COMPONENTES_CHECKLIST_PADRAO;
   M.ORIGENS_PROBLEMA = ORIGENS_PROBLEMA;
   M.PERFIS = PERFIS;

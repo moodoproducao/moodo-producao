@@ -29,23 +29,201 @@
         </tr>`).join("")}</tbody></table></div>`;
   }
 
+  // ============================================================
+  // Página operacional da obra — fase 3 do plano "obra no centro":
+  // cabeçalho com próxima ação/progresso/bloqueios, linha do tempo das etapas,
+  // etapa atual em destaque (ações + avançar), ambientes, pendências/bloqueios
+  // e fotos, tudo no mesmo lugar — sem precisar sair da obra.
+  // ============================================================
+
+  // ambiente em foco: o que a pessoa escolheu clicando, ou por padrão o dono
+  // do "item crítico" da obra (mesma lógica que já decide a coluna do Kanban).
+  function ambienteFoco(o){
+    if(!o.ambientes.length) return null;
+    const escolhidoId = M.UIState.obraFoco[o.id];
+    const escolhido = escolhidoId && o.ambientes.find(a=>a.id===escolhidoId);
+    if(escolhido) return escolhido;
+    const critico = C.itemCriticoGrupo(o.ambientes.flatMap(a=>a.moveis));
+    if(critico) return o.ambientes.find(a=>a.moveis.some(m=>m.id===critico.id)) || o.ambientes[0];
+    return o.ambientes[0];
+  }
+  function etapaFocoDoAmbiente(a){
+    const critico = C.itemCriticoGrupo(a.moveis);
+    if(critico) return critico.etapa;
+    return a.moveis.length ? a.moveis[0].etapa : null;
+  }
+  // ações da etapa em foco = tarefas dos móveis do ambiente que estão nessa
+  // etapa (já são geradas automaticamente por TAREFAS_PADRAO_ETAPA). Quando o
+  // ambiente tem mais de um móvel, prefixa com o nome do móvel pra não confundir.
+  function acoesDaEtapaFoco(a, etapaId){
+    const idsMoveis = new Set(a.moveis.map(m=>m.id));
+    const varios = a.moveis.length > 1;
+    return M.Store.state.tarefas.filter(t=> idsMoveis.has(t.movelId) && t.etapa===etapaId)
+      .sort((x,y)=> (x.status==="EM_ANDAMENTO"?0:x.status==="PLANEJADA"?1:2) - (y.status==="EM_ANDAMENTO"?0:y.status==="PLANEJADA"?1:2))
+      .map(t=> Object.assign({}, t, {_prefixo: varios ? t.movelNome+" — " : ""}));
+  }
+  function bloqueiosDaObra(o){
+    return C.pendenciasAbertasDe(o.id).slice().sort((x,y)=>{
+      const ux = x.prazo? C.diasAte(x.prazo) : 999, uy = y.prazo? C.diasAte(y.prazo) : 999;
+      return ux-uy;
+    });
+  }
+  function proximaAcaoObra(o, a, etapaId){
+    const bloqueios = bloqueiosDaObra(o);
+    const vencido = bloqueios.find(p=> p.prazo && C.diasAte(p.prazo)<=0);
+    if(vencido) return {titulo: vencido.descricao||vencido.categoria, responsavel:vencido.responsavel, prazo:vencido.prazo};
+    const acoes = a && etapaId ? acoesDaEtapaFoco(a, etapaId).filter(t=>t.status!=="CONCLUIDA") : [];
+    const prox = acoes.find(t=>t.obrigatorio==="OBRIGATORIO") || acoes[0];
+    if(prox) return {titulo: `${prox._prefixo}${prox.titulo}`, responsavel:prox.responsavelPlanejado, prazo:prox.prazo};
+    if(bloqueios.length) return {titulo: bloqueios[0].descricao||bloqueios[0].categoria, responsavel:bloqueios[0].responsavel, prazo:bloqueios[0].prazo};
+    return null;
+  }
+  function timelineHtml(etapaFocoId){
+    const etapas = M.Store.etapasAtivas();
+    const posFoco = etapas.findIndex(e=>e.id===etapaFocoId);
+    const partes = [];
+    etapas.forEach((e,i)=>{
+      const estado = i<posFoco ? "done" : i===posFoco ? "atual" : "";
+      partes.push(`<div class="et-step ${estado}" title="${UI.esc(e.nome)}"><div class="num">${estado==='done'?UI.icon('check',12):(i+1)}</div><div>${UI.esc(e.nomeCurto||e.nome)}</div></div>`);
+      if(i<etapas.length-1) partes.push(`<div class="et-sep ${i<posFoco?'done':''}"></div>`);
+    });
+    return `<div class="etapa-timeline">${partes.join("")}</div>`;
+  }
+
   function tabGeral(o){
     const prog = C.progressoObra(o);
-    const risco = C.riscoObra(o);
     const faltam = C.paraFinalizar(o);
-    return `
-      <div class="grid-2">
+    const a = ambienteFoco(o);
+    const etapaId = a ? etapaFocoDoAmbiente(a) : null;
+    const etapa = etapaId ? M.Store.etapaById(etapaId) : null;
+    const acoes = a && etapaId ? acoesDaEtapaFoco(a, etapaId) : [];
+    const obrigatorias = acoes.filter(t=>t.obrigatorio==="OBRIGATORIO");
+    const obrigatoriasAbertas = obrigatorias.filter(t=>t.status!=="CONCLUIDA");
+    const proxEtapaId = etapaId ? M.Store.proximaEtapaId(etapaId) : null;
+    const bloqueios = bloqueiosDaObra(o);
+    const proxAcao = proximaAcaoObra(o, a, etapaId);
+    const gruposFotos = fotosDaObra(o);
+    const totalFotos = gruposFotos.reduce((s,g)=>s+g.fotos.length,0);
+    const fotosMini = gruposFotos.flatMap(g=>g.fotos).slice(0,4);
+
+    const headerCards = `
+      <div class="grid-3" style="margin-bottom:14px;">
         <div class="card pad">
-          <div class="card-title">Rateio bruto → líquido</div>
-          <table class="tbl">
-            <thead><tr><th>Ambiente</th><th>Bruto</th><th>Líquido</th></tr></thead>
-            <tbody>
-              ${o.ambientes.map(a=>`<tr><td>${UI.esc(a.nome)}</td><td>${UI.valorOuOculto(C.fmtBRL(a.valorBruto))}</td><td>${UI.valorOuOculto(C.fmtBRL(a.valorLiquido))}</td></tr>`).join("")}
-              <tr style="font-weight:700;"><td>Total</td><td>${UI.valorOuOculto(C.fmtBRL(o.valorBruto))}</td><td>${UI.valorOuOculto(C.fmtBRL(o.valorLiquido))}</td></tr>
-            </tbody>
-          </table>
-          <p class="small muted" style="margin-top:8px;">Desconto aplicado: ${UI.valorOuOculto(C.fmtBRL(o.desconto))} (${M.Store.pode("verValores")?Math.round(o.descontoPct*10000)/100+"%":"•••"})</p>
+          <div class="card-title">${UI.icon('play',13)}Próxima ação</div>
+          ${proxAcao? `
+            <div style="font-weight:700;font-size:13.5px;margin-bottom:6px;">${UI.esc(proxAcao.titulo)}</div>
+            <div class="small muted">${proxAcao.responsavel?UI.person(proxAcao.responsavel):""}${proxAcao.prazo? " · prazo "+C.fmtDate(proxAcao.prazo):""}</div>
+          ` : `<p class="small muted">Nada pendente no momento.</p>`}
         </div>
+        <div class="card pad">
+          <div class="card-title">Progresso geral</div>
+          <div style="font-size:24px;font-weight:800;margin-bottom:6px;">${prog.pct}%</div>
+          ${UI.progressBar(prog.pct)}
+          <div class="small muted" style="margin-top:6px;">${prog.concluidos} de ${prog.total} móveis concluídos</div>
+        </div>
+        <div class="card pad">
+          <div class="card-title">${UI.icon('lock',13)}Bloqueios ativos</div>
+          ${bloqueios.length? `
+            <div style="font-weight:700;font-size:13.5px;margin-bottom:6px;color:var(--critical);">${bloqueios.length} bloqueio${bloqueios.length>1?'s':''}</div>
+            <div class="small muted">${UI.esc(bloqueios[0].categoria)}</div>
+          ` : `<div style="font-weight:700;font-size:13.5px;color:var(--good);">${UI.icon('check',13)} Nenhum</div>`}
+        </div>
+      </div>
+    `;
+
+    const etapaAtualHtml = a && etapa ? `
+      <div class="card pad">
+        <div class="flex-between" style="margin-bottom:2px;">
+          <div>
+            <div class="small muted">ETAPA ATUAL — ${UI.esc(a.nome)}</div>
+            <h3 style="font-size:16px;margin:2px 0 0;">${UI.esc(etapa.nome)}</h3>
+          </div>
+          <span class="chip brand">Em andamento</span>
+        </div>
+
+        <div class="flex-between" style="margin:14px 0 4px;">
+          <label style="font-size:11.5px;font-weight:700;color:var(--ink-soft);">Ações da etapa</label>
+          ${obrigatorias.length? `<span class="small muted">${obrigatorias.length-obrigatoriasAbertas.length} de ${obrigatorias.length} concluídas</span>`:""}
+        </div>
+        ${obrigatorias.length? UI.progressBar(100*(obrigatorias.length-obrigatoriasAbertas.length)/obrigatorias.length) : ""}
+        <div style="margin:10px 0 14px;">
+          ${acoes.length? acoes.map(t=>`
+            <div class="check-row ${t.status==='CONCLUIDA'?'done':''}" style="cursor:pointer;" onclick="Act.abrirDetalheTarefa('${t.id}')">
+              <span class="dot ${t.status==='CONCLUIDA'?'good':t.status==='EM_ANDAMENTO'?'warning':'neutral'}"></span>
+              <span class="label" style="flex:1;">${UI.esc(t._prefixo)}${UI.esc(t.titulo)}${t.obrigatorio!=='OBRIGATORIO'?' <span class="chip neutral">opcional</span>':''}</span>
+              <span onclick="event.stopPropagation()">${UI.tarefaAcoesHtml(t)}</span>
+            </div>`).join("") : `<p class="small muted">Nenhuma ação cadastrada para esta etapa.</p>`}
+        </div>
+
+        <div class="flex-between" style="flex-wrap:wrap;gap:10px;">
+          <button class="btn primary" ${proxEtapaId?'':'disabled'} onclick="Act.avancarEtapaAmbiente('${o.id}','${a.id}','${etapaId}')">
+            Avançar para ${proxEtapaId? UI.esc(M.Store.etapaById(proxEtapaId).nome) : '—'} →
+          </button>
+          ${obrigatoriasAbertas.length? `<span class="small" style="color:var(--critical);font-weight:700;">Falta ${obrigatoriasAbertas.length} ação obrigatória</span>`:""}
+        </div>
+      </div>
+    ` : `<div class="card pad"><p class="small muted">Esta obra ainda não tem ambientes/móveis cadastrados.</p></div>`;
+
+    const ambientesHtml = o.ambientes.length ? `
+      <div class="flex-gap" style="flex-wrap:wrap;margin-top:14px;">
+        ${o.ambientes.map(amb=>{
+          const p = C.progressoAmbiente(amb);
+          const crit = C.itemCriticoGrupo(amb.moveis);
+          const etapaAmb = crit? M.Store.etapaById(crit.etapa).nome : "Finalizada";
+          const pend = C.pendenciasAbertasDe(o.id).filter(x=>x.ambienteId===amb.id).length;
+          return `<div class="obra-ambiente-card ${a && amb.id===a.id?'foco':''}" onclick="Act.focarAmbiente('${o.id}','${amb.id}')">
+            <div style="font-weight:700;font-size:13px;">${UI.esc(amb.nome)}</div>
+            <div class="small muted" style="margin:2px 0 6px;">Etapa: ${UI.esc(etapaAmb)}</div>
+            <div style="font-weight:800;font-size:15px;">${p.pct}%</div>
+            ${UI.progressBar(p.pct)}
+            <div class="small muted" style="margin-top:6px;">${pend? pend+" pendência"+(pend>1?"s":"") : "sem pendências"}</div>
+          </div>`;
+        }).join("")}
+      </div>
+    ` : "";
+
+    const bloqueiosHtml = bloqueios.length ? bloqueios.map(p=>{
+      const proxima = p.fluxoPassos ? p.fluxoPassos[p.passoAtual] : null;
+      return `<div class="help-banner" style="background:var(--critical-bg);border-color:var(--critical);color:var(--critical);margin-bottom:10px;">
+        <div style="font-weight:800;">${UI.icon('alert',13)} ${UI.esc(p.categoria)}</div>
+        <div style="color:var(--ink);margin:3px 0;">${UI.esc(p.descricao)}</div>
+        <div class="small" style="color:var(--ink-soft);">${UI.person(p.responsavel)}${p.prazo?" · prazo "+C.fmtDate(p.prazo):""}</div>
+        ${proxima? `<div class="small" style="margin-top:3px;"><b>Próxima ação:</b> ${UI.esc(proxima)}</div>`:""}
+        <div class="flex-gap" style="margin-top:8px;">
+          <button class="btn sm danger" onclick="Act.setPendenciaStatus('${p.id}','RESOLVIDA')">Resolver agora</button>
+        </div>
+      </div>`;
+    }).join("") : `<p class="small muted">Nenhum bloqueio ativo.</p>`;
+
+    const fotosHtml = fotosMini.length ? `
+      <div class="foto-mini-grid">
+        ${fotosMini.map(f=>`<a href="${f.url}" target="_blank" rel="noopener" class="foto-mini"><img src="${f.url}" loading="lazy" alt="${UI.esc(f.nome||'')}"></a>`).join("")}
+      </div>
+    ` : `<p class="small muted">Nenhuma foto ainda.</p>`;
+
+    return `
+      ${headerCards}
+      ${etapaId? timelineHtml(etapaId) : ""}
+      <div class="grid-2" style="align-items:start;">
+        <div>
+          ${etapaAtualHtml}
+          ${ambientesHtml}
+        </div>
+        <div>
+          <div class="card pad" style="margin-bottom:14px;">
+            <div class="card-title">Pendências / bloqueios</div>
+            ${bloqueiosHtml}
+          </div>
+          <div class="card pad">
+            <div class="card-title">${UI.icon('image',13)}Arquivos e fotos</div>
+            ${fotosHtml}
+            ${totalFotos? `<button class="btn sm" style="margin-top:10px;" onclick="Act.setObraTab('${o.id}','arquivos')">Ver todas (${totalFotos})</button>`:""}
+          </div>
+        </div>
+      </div>
+
+      <div class="hr" style="margin:18px 0;"></div>
+      <div class="grid-2">
         <div class="card pad">
           <div class="card-title">O que falta para finalizar</div>
           ${faltam.length ? faltam.map(g=>`
@@ -53,10 +231,19 @@
               <div class="small" style="font-weight:700;color:var(--ink-soft);">${UI.esc(g.ambienteNome)}</div>
               <ul style="margin:2px 0 0 18px; font-size:12.5px; line-height:2;">${g.itens.map(f=>`<li>${UI.esc(f)}</li>`).join("")}</ul>
             </div>`).join("") : `<p class="small muted">Nada pendente — obra pronta para finalizar.</p>`}
-          ${o.fichaTecnica ? `<div class="hr"></div><div class="card-title" style="margin-bottom:8px;">Ficha técnica (lista de materiais)</div>
-            <p class="small">${o.fichaTecnica.chapasMDF} chapas de MDF (~${o.fichaTecnica.m2MDF} m²) · ~${o.fichaTecnica.metrosFitagem} m de fitagem</p>
-            <p class="small muted">Componentes: ${o.fichaTecnica.componentes.join(", ")}</p>
-            <p class="small muted" style="margin-top:6px;">Leitura completa da lista de materiais é uma fase futura — hoje esses dados vêm como ficha de referência.</p>` : ""}
+        </div>
+        <div class="card pad">
+          <div class="card-title">Rateio bruto → líquido</div>
+          <table class="tbl">
+            <thead><tr><th>Ambiente</th><th>Bruto</th><th>Líquido</th></tr></thead>
+            <tbody>
+              ${o.ambientes.map(a2=>`<tr><td>${UI.esc(a2.nome)}</td><td>${UI.valorOuOculto(C.fmtBRL(a2.valorBruto))}</td><td>${UI.valorOuOculto(C.fmtBRL(a2.valorLiquido))}</td></tr>`).join("")}
+              <tr style="font-weight:700;"><td>Total</td><td>${UI.valorOuOculto(C.fmtBRL(o.valorBruto))}</td><td>${UI.valorOuOculto(C.fmtBRL(o.valorLiquido))}</td></tr>
+            </tbody>
+          </table>
+          <p class="small muted" style="margin-top:8px;">Desconto aplicado: ${UI.valorOuOculto(C.fmtBRL(o.desconto))} (${M.Store.pode("verValores")?Math.round(o.descontoPct*10000)/100+"%":"•••"})</p>
+          ${o.fichaTecnica ? `<div class="hr"></div><p class="small">${o.fichaTecnica.chapasMDF} chapas de MDF (~${o.fichaTecnica.m2MDF} m²) · ~${o.fichaTecnica.metrosFitagem} m de fitagem</p>
+            <p class="small muted">Componentes: ${o.fichaTecnica.componentes.join(", ")}</p>` : ""}
         </div>
       </div>
     `;
@@ -69,12 +256,14 @@
         <div class="flex-between"><b>${UI.esc(a.nome)}</b><span class="small muted">${UI.valorOuOculto(C.fmtBRL(a.valorLiquido))} · ${prog.pct}%</span></div>
         ${UI.progressBar(prog.pct)}
         <div style="margin-top:10px;">
-          ${a.moveis.map(m=>`
+          ${a.moveis.map(m=>{
+            const bloqueiosM = M.Store.bloqueiosMovel(m.id);
+            return `
             <div class="check-row" style="cursor:pointer;" onclick="Act.openMovel('${m.id}')">
-              <span class="dot ${m.bloqueio?'critical':C.movelConcluido(m)?'good':'neutral'}"></span>
+              <span class="dot ${bloqueiosM.length?'critical':C.movelConcluido(m)?'good':'neutral'}"></span>
               <span class="label"><b>${UI.esc(m.nome)}</b> <span class="chip neutral" style="margin-left:4px;">${UI.esc(M.Store.etapaById(m.etapa).nome)}</span>
-                <div class="small muted">resp. ${UI.esc(m.responsavel)} · ${UI.valorOuOculto(C.fmtBRL(m.valorLiquido))}${m.bloqueio? " · ⏳ "+UI.esc(m.bloqueio.categoria):""}</div></span>
-            </div>`).join("")}
+                <div class="small muted">resp. ${UI.esc(m.responsavel)} · ${UI.valorOuOculto(C.fmtBRL(m.valorLiquido))}${bloqueiosM.length? " · ⏳ "+UI.esc(bloqueiosM[0].categoria)+(bloqueiosM.length>1?` +${bloqueiosM.length-1}`:''):""}</div></span>
+            </div>`;}).join("")}
         </div>
       </div>`;
     }).join("");

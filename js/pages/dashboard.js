@@ -21,7 +21,7 @@
     const meta = C.metaMensalProgresso();
     const asst = C.assistenciasResumo();
     const pendAbertas = M.Store.state.pendencias.filter(p=>p.status!=="RESOLVIDA");
-    const bloqueados = moveis.filter(x=>x.m.bloqueio).length;
+    const bloqueados = moveis.filter(x=>M.Store.bloqueiosMovel(x.m.id).length).length;
     const entregas7 = obras.filter(o=> C.diasAte(o.dataEntregaPrevista)>=0 && C.diasAte(o.dataEntregaPrevista)<=7);
     const montagens7 = moveis.filter(({m})=> m.etapa==="MONTAGEM");
     const alerts = C.alertasGlobais().slice(0,8);

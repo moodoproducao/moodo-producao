@@ -13,6 +13,43 @@
       .replace(/[^A-Z0-9]+/g,"_").replace(/^_+|_+$/g,"") || "ETAPA";
   }
 
+  // ---------- componentes críticos ↔ pendência (plano "obra no centro") ----------
+  // Um componente crítico AGUARDANDO/REFACAO precisa de uma pendência real por
+  // trás (senão fica só decorativo: não bloqueia etapa, não aparece em
+  // Pendências, não tem próxima ação). Essas funções ficam fora do objeto Store
+  // porque são usadas tanto por Store.criarComponenteCritico (criação ao vivo,
+  // via UI) quanto por Store.criarObra (itens especiais da Nova Obra) — um único
+  // lugar monta o objeto de pendência, não duplicado nos dois.
+  // novaPendenciaObj NÃO chama emit()/Store.log() — só monta e devolve o objeto,
+  // igual criarTarefasPadraoParaEtapa faz com tarefa. Quem chama decide quando
+  // dar o emit() (uma única vez por ação do usuário, nunca no meio de um laço).
+  function novaPendenciaObj(p){
+    const def = M.categoriaDef(p.categoria);
+    const passos = (state.fluxosPadrao[def.fluxo]||["Resolver"]).slice();
+    return Object.assign({id:M.uid("pnd"), status:"ABERTA", anexo:false, abertura:M.todayISO(),
+      fluxoTipo:def.fluxo, fluxoPassos:passos, passoAtual:0, origem:p.origem||null}, p);
+  }
+  function criarPendenciaDoComponente(f, comp){
+    const categoria = M.TIPO_COMPONENTE_TO_CATEGORIA[comp.tipo] || "Outro";
+    const pend = novaPendenciaObj({
+      obraId:f.o.id, ambienteId:f.a.id, movelId:f.m.id,
+      obraNome:f.o.cliente, ambienteNome:f.a.nome, movelNome:f.m.nome,
+      categoria, descricao: comp.nome + (comp.observacao? " — "+comp.observacao : (comp.motivo? " — "+comp.motivo : "")),
+      responsavel: comp.responsavel || f.o.responsavel, fornecedor: comp.fornecedor||"",
+      prazo: comp.prazo||null, prioridade:"ALTA", componenteCriticoId: comp.id,
+    });
+    state.pendencias.push(pend);
+    comp.pendenciaId = pend.id;
+    return pend;
+  }
+  function criarComponenteEmMovel(f, dados){
+    const comp = Object.assign({id:M.uid("comp"), status:"AGUARDANDO", fornecedor:"", motivo:"", observacao:""}, dados);
+    f.m.componentesCriticos = f.m.componentesCriticos || [];
+    f.m.componentesCriticos.push(comp);
+    if(comp.status==="AGUARDANDO" || comp.status==="REFACAO") criarPendenciaDoComponente(f, comp);
+    return comp;
+  }
+
   // ---------- semente de etapas / requisitos / tarefas padrão com ids/ordem ----------
   function seedEtapas(){ return deepClone(M.ETAPAS_SEED); }
   function seedRequisitos(){
@@ -134,6 +171,27 @@
             m.checklist = [];
             mudou = true;
           }
+          // fase 4 do plano "obra no centro": m.bloqueio (objeto único, podia
+          // sobrescrever/perder pendência) não existe mais — os bloqueios reais
+          // agora vêm sempre de Store.bloqueiosMovel(m.id), derivados direto de
+          // state.pendencias. Limpa o campo antigo se ele sobrou de uma versão
+          // anterior (dado morto, mas sem sentido deixar por aí).
+          if(m.bloqueio !== undefined){ delete m.bloqueio; mudou = true; }
+          // fase seguinte do plano "obra no centro": componente crítico
+          // AGUARDANDO/REFACAO sem pendência vinculada (obras/componentes
+          // criados antes desta correção) ficava só decorativo. Se já existe
+          // uma pendência aberta pra esse móvel com a mesma descrição (era o
+          // caso dos dados de demonstração, gerados à parte por coletarPendencias),
+          // liga nela em vez de duplicar; senão cria uma pendência nova agora.
+          (m.componentesCriticos||[]).forEach(c=>{
+            if((c.status==="AGUARDANDO" || c.status==="REFACAO") && !c.pendenciaId){
+              const pendAberta = state.pendencias.find(p=> p.movelId===m.id && p.status!=="RESOLVIDA"
+                && p.descricao && p.descricao.indexOf(c.nome)===0 && !p.componenteCriticoId);
+              if(pendAberta){ pendAberta.componenteCriticoId = c.id; c.pendenciaId = pendAberta.id; }
+              else criarPendenciaDoComponente({o,a,m}, c);
+              mudou = true;
+            }
+          });
         });
       });
     });
@@ -150,6 +208,18 @@
   let supaSaveTimer = null;
   let supaRetryTimer = null;
   let supaSaveFailing = false;
+  // RISCO ENCONTRADO NA AUDITORIA (sincronização multiusuário): o app inteiro
+  // (obras, tarefas, pendências) é gravado como um blob único no Supabase.
+  // Sem controle de concorrência, se dois aparelhos gravassem quase juntos,
+  // quem gravasse por último apagava silenciosamente a mudança do outro — sem
+  // aviso nenhum pra ninguém. ultimoAtualizadoEmConhecido guarda o carimbo
+  // atualizado_em da última versão que ESTE aparelho leu/gravou; Supa.salvarEstado
+  // só grava se o banco ainda estiver nesse carimbo (ver supabase-client.js).
+  // Quando não estiver (conflito:true), NÃO sobrescreve — avisarConflito() traz
+  // a versão mais recente e avisa, em vez de apagar a mudança de outra pessoa
+  // de forma invisível.
+  let ultimoAtualizadoEmConhecido = null;
+  let avisandoConflito = false;
   // CORREÇÃO (auditoria): antes, uma falha de gravação na nuvem (rede caiu,
   // Supabase fora do ar etc.) era só um console.error — o operador continuava
   // vendo a tela normal, achando que estava tudo sincronizado, quando na
@@ -161,7 +231,7 @@
     if(M.UI && M.UI.toast) M.UI.toast("⚠️ Não foi possível salvar na nuvem agora. Os dados continuam salvos neste aparelho — tentando reconectar…");
     if(!supaRetryTimer){
       supaRetryTimer = setInterval(()=>{
-        M.Supa.salvarEstado(state).then(ok=>{ if(ok) avisarNuvemOk(); });
+        M.Supa.salvarEstado(state, ultimoAtualizadoEmConhecido).then(processarResultadoSalvar);
       }, 15000);
     }
   }
@@ -172,12 +242,29 @@
       if(M.UI && M.UI.toast) M.UI.toast("Conexão com a nuvem restabelecida — dados sincronizados.");
     }
   }
+  // outra pessoa gravou entre a última leitura deste aparelho e agora: em vez
+  // de tentar de novo e arriscar apagar a mudança dela, busca a versão mais
+  // recente e avisa — quem estava editando aqui precisa conferir/refazer.
+  function avisarConflito(){
+    if(avisandoConflito) return;
+    avisandoConflito = true;
+    if(M.UI && M.UI.toast) M.UI.toast("⚠️ Outra pessoa salvou uma mudança agora mesmo — atualizando com a versão mais recente. Se você tinha acabado de mexer em algo, confira e refaça se precisar.");
+    M.Supa.carregarEstado().then(remoto=>{
+      avisandoConflito = false;
+      if(remoto){ ultimoAtualizadoEmConhecido = remoto.atualizadoEm; aplicarEstadoRemoto(remoto.dados); }
+    });
+  }
+  function processarResultadoSalvar(res){
+    if(res && res.ok){ ultimoAtualizadoEmConhecido = res.atualizadoEm; avisarNuvemOk(); }
+    else if(res && res.conflito) avisarConflito();
+    else avisarFalhaNuvem();
+  }
   function persistSupabase(){
     if(!(M.Supa && M.Supa.habilitado)) return;
     // debounce curto: ações em sequência rápida (ex.: digitando) viram 1 gravação só
     clearTimeout(supaSaveTimer);
     supaSaveTimer = setTimeout(()=>{
-      M.Supa.salvarEstado(state).then(ok=>{ ok ? avisarNuvemOk() : avisarFalhaNuvem(); });
+      M.Supa.salvarEstado(state, ultimoAtualizadoEmConhecido).then(processarResultadoSalvar);
     }, 400);
   }
   function emit(){ persist(); persistSupabase(); listeners.forEach(fn=>fn()); }
@@ -198,14 +285,20 @@
       if(!ok) return;
       M.Supa.carregarEstado().then(remoto=>{
         if(remoto){
-          aplicarEstadoRemoto(remoto);
+          ultimoAtualizadoEmConhecido = remoto.atualizadoEm;
+          aplicarEstadoRemoto(remoto.dados);
         } else {
           // tabela vazia: primeiro acesso de todos — semeia a nuvem com o
           // estado local (de exemplo ou já salvo neste aparelho).
-          M.Supa.salvarEstado(state);
+          M.Supa.salvarEstado(state, null).then(processarResultadoSalvar);
         }
-        // a partir daqui, mudanças feitas em QUALQUER outro aparelho chegam aqui.
-        M.Supa.assinarMudancas(remoto2=> aplicarEstadoRemoto(remoto2));
+        // a partir daqui, mudanças feitas em QUALQUER outro aparelho chegam aqui
+        // — atualiza o carimbo conhecido junto, senão a próxima gravação local
+        // acharia (errado) que houve conflito.
+        M.Supa.assinarMudancas((dados, atualizadoEm)=>{
+          ultimoAtualizadoEmConhecido = atualizadoEm;
+          aplicarEstadoRemoto(dados);
+        });
       });
       sincronizarEquipeComSupabase();
     });
@@ -245,6 +338,16 @@
       for(const o of state.obras) for(const a of o.ambientes) for(const m of a.moveis)
         if(m.id===movelId) return {o,a,m};
       return null;
+    },
+    // bloqueios reais do móvel = pendências abertas vinculadas a ele. Fase 4 do
+    // plano "obra no centro": antes disso existia m.bloqueio, um objeto único
+    // guardado à parte no móvel — criarPendencia sobrescrevia ele a cada pendência
+    // nova (perdendo a anterior) e atualizarStatusPendencia zerava ele ao resolver
+    // QUALQUER pendência do móvel, mesmo com outra ainda aberta. Removido o campo
+    // duplicado: agora deriva sempre de state.pendencias (a única fonte de verdade),
+    // então nunca fica desatualizado.
+    bloqueiosMovel(movelId){
+      return state.pendencias.filter(p=>p.movelId===movelId && p.status!=="RESOLVIDA");
     },
     findAmbiente(ambienteId){
       for(const o of state.obras) for(const a of o.ambientes) if(a.id===ambienteId) return {o,a};
@@ -530,12 +633,13 @@
         // Object.assign(...,{etapa:novaEtapaId}) fazia a checagem olhar pra etapa
         // errada, e tarefas obrigatórias da etapa atual nunca bloqueavam nada.
         const check = Store.checarRequisitos(f.m);
-        // CORREÇÃO: uma pendência aberta vinculada ao móvel (m.bloqueio) também
-        // precisa travar o avanço normal, igual a um requisito — antes disto era
-        // só decorativo no card, dava pra avançar a etapa com o móvel bloqueado.
-        const faltandoBloqueio = f.m.bloqueio
-          ? [{nome:`Pendência aberta: ${f.m.bloqueio.categoria} — ${f.m.bloqueio.descricao}`, obrigatorio:true, bloqueio:true, permiteAvancoExcepcional:true}]
-          : [];
+        // CORREÇÃO: toda pendência aberta vinculada ao móvel também precisa travar
+        // o avanço normal, igual a um requisito — antes disto era só decorativo no
+        // card, dava pra avançar a etapa com o móvel bloqueado. (fase 4 do plano
+        // "obra no centro": Store.bloqueiosMovel deriva direto de state.pendencias,
+        // não de um campo m.bloqueio guardado à parte — ver comentário na função.)
+        const faltandoBloqueio = Store.bloqueiosMovel(f.m.id)
+          .map(p=>({nome:`Pendência aberta: ${p.categoria} — ${p.descricao}`, obrigatorio:true, bloqueio:true, permiteAvancoExcepcional:true}));
         const faltando = check.faltando.concat(faltandoBloqueio);
         const liberado = faltando.length===0;
         if(!liberado && !opts.forcar){
@@ -596,13 +700,8 @@
 
     // ---------- pendências (com fluxo operacional — seção 24) ----------
     criarPendencia(p){
-      const def = M.categoriaDef(p.categoria);
-      const passos = (state.fluxosPadrao[def.fluxo]||["Resolver"]).slice();
-      const item = Object.assign({id:M.uid("pnd"), status:"ABERTA", anexo:false, abertura:M.todayISO(),
-        fluxoTipo:def.fluxo, fluxoPassos:passos, passoAtual:0, origem:p.origem||null}, p);
+      const item = novaPendenciaObj(p);
       state.pendencias.push(item);
-      const f = Store.findMovel(p.movelId);
-      if(f){ f.m.bloqueio = {categoria:p.categoria, descricao:p.descricao, responsavel:p.responsavel, fornecedor:p.fornecedor, abertura:item.abertura, prazo:p.prazo, prioridade:p.prioridade, status:"ABERTA"}; }
       Store.log(p.obraId, "PENDENCIA_ABERTA", `${p.categoria}: ${p.descricao}`);
       emit();
       return item;
@@ -625,18 +724,62 @@
       p.status = status;
       if(status==="RESOLVIDA"){
         p.passoAtual = p.fluxoPassos ? p.fluxoPassos.length-1 : 0;
-        const f = Store.findMovel(p.movelId);
-        if(f && f.m.bloqueio) f.m.bloqueio = null;
         Store.log(p.obraId, "PENDENCIA_RESOLVIDA", `${p.categoria}: ${p.descricao}`);
+        // pendência vinculada a um componente crítico: resolver a pendência aqui
+        // (tela de Pendências) também resolve o componente — senão os dois saem
+        // de sincronia, o mesmo tipo de bug corrigido na fase 4 (bloqueio duplicado).
+        if(p.componenteCriticoId) Store._sincronizarComponenteDaPendencia(p, "RESOLVIDO");
       }
       if(status==="ABERTA" && eraResolvida){
         Store.log(p.obraId, "PENDENCIA_REABERTA", `${p.categoria}: ${p.descricao}`);
         Store.audit({categoria:"QUALIDADE", tipo:"PENDENCIA_REABERTA", obraId:p.obraId, movelId:p.movelId,
           descricao:`Pendência "${p.categoria}" reaberta — ${p.descricao}`});
+        if(p.componenteCriticoId) Store._sincronizarComponenteDaPendencia(p, "AGUARDANDO");
       }
       emit();
     },
     reabrirPendencia(pendId){ Store.atualizarStatusPendencia(pendId, "ABERTA"); },
+    // grava o novo status diretamente no componente vinculado, sem passar de
+    // novo por Store.mudarStatusComponente (evitaria ida-e-volta infinita entre
+    // pendência↔componente — aqui é só espelhar o campo, não gerar/fechar pendência).
+    _sincronizarComponenteDaPendencia(p, novoStatusComponente){
+      if(!p.movelId || !p.componenteCriticoId) return;
+      const f = Store.findMovel(p.movelId); if(!f) return;
+      const comp = (f.m.componentesCriticos||[]).find(c=>c.id===p.componenteCriticoId);
+      if(comp) comp.status = novoStatusComponente;
+    },
+
+    // ---------- componentes críticos / exceções (vidro, serralheria, pintura...) ----------
+    // AGUARDANDO/REFACAO já nascem com pendência real vinculada (criarComponenteEmMovel);
+    // RESOLVIDO é o único status "não bloqueante" hoje reconhecido pelo resto do app.
+    criarComponenteCritico(movelId, dados){
+      const f = Store.findMovel(movelId); if(!f) return null;
+      const comp = criarComponenteEmMovel(f, dados);
+      Store.log(f.o.id, "COMPONENTE_CRIADO", `${comp.tipo}: ${comp.nome} — ${f.m.nome}`);
+      emit();
+      return comp;
+    },
+    mudarStatusComponente(movelId, componenteId, novoStatus){
+      const f = Store.findMovel(movelId); if(!f) return;
+      const comp = (f.m.componentesCriticos||[]).find(c=>c.id===componenteId); if(!comp) return;
+      const statusAnterior = comp.status;
+      const bloqueante = novoStatus==="AGUARDANDO" || novoStatus==="REFACAO";
+      if(bloqueante){
+        const pendExistente = comp.pendenciaId ? state.pendencias.find(p=>p.id===comp.pendenciaId) : null;
+        if(pendExistente && pendExistente.status==="RESOLVIDA") Store.atualizarStatusPendencia(pendExistente.id, "ABERTA");
+        else if(!pendExistente) criarPendenciaDoComponente(f, comp);
+      } else if(comp.pendenciaId){
+        const pend = state.pendencias.find(p=>p.id===comp.pendenciaId);
+        if(pend && pend.status!=="RESOLVIDA") Store.atualizarStatusPendencia(pend.id, "RESOLVIDA");
+      }
+      // atribuído por último de propósito: reabrir uma pendência resolvida (acima)
+      // sincroniza o componente de volta pra "AGUARDANDO" via _sincronizarComponenteDaPendencia
+      // — se o status pedido aqui for "REFACAO", essa atribuição garante que o valor
+      // final seja o certo, não o genérico que a sincronização escreveu.
+      comp.status = novoStatus;
+      Store.log(f.o.id, "COMPONENTE_STATUS", `${comp.nome}: ${statusAnterior} → ${novoStatus} (${f.m.nome})`);
+      emit();
+    },
 
     // ---------- arquivos do projeto (por obra) ----------
     adicionarArquivo(obraId, arquivo){
@@ -774,16 +917,35 @@
         a.valorLiquido = Math.round(a.valorBruto * processed.fatorLiquido);
         a.obraId = processed.id;
         a.moveis.forEach(m=>{
-          m.ambienteId=a.id; m.obraId=processed.id; m.componentesCriticos=m.componentesCriticos||[];
+          m.ambienteId=a.id; m.obraId=processed.id;
+          // CORREÇÃO: o móvel nascia com etapa:0 (índice numérico do formato antigo,
+          // nunca convertido pro id de verdade) e nunca ganhava as ações padrão da
+          // sua etapa inicial — só quando avançava pela primeira vez (moverEtapa é
+          // o único lugar que chamava criarTarefasPadraoParaEtapa). Resultado: toda
+          // obra nova nascia com a etapa atual sem nenhuma ação da etapa. Corrigido
+          // aqui: etapa inicial de verdade + ações padrão geradas já na criação.
+          const primeiraEtapa = M.Store.etapasAtivas()[0];
+          m.etapa = primeiraEtapa.id;
           m.requisitosOverride={}; m.dataEntradaEtapa=M.todayISO();
-          // checklist de componentes vira tarefa de verdade (item 9 do backlog de
-          // melhorias) — cada item do checklist inicial (Corpo MDF, Ferragens,
-          // materiais especiais) passa a ser uma Tarefa com Iniciar/Concluir,
-          // visível no móvel, em Tarefas geral e na aba Tarefas da obra.
-          const titulos = m.checklistInicial || [];
-          delete m.checklistInicial;
+          // fase 2 do plano "obra no centro": sem checklist genérico (Corpo MDF,
+          // Ferragens) — o trabalho real da etapa já vem de TAREFAS_PADRAO_ETAPA.
+          // Só material especial vira componente crítico (exceção, não checklist).
+          const especiais = m.componentesCriticosIniciais || [];
+          delete m.componentesCriticosIniciais;
           m.checklist = [];
-          titulos.forEach(titulo=> Store.criarTarefaDeChecklist({o:processed, a, m}, titulo));
+          m.componentesCriticos = m.componentesCriticos || [];
+          // fase seguinte do plano "obra no centro": cada item especial já nasce
+          // com a pendência real vinculada (mesmo caminho de Store.criarComponenteCritico),
+          // em vez de ficar decorativo até alguém mexer nele manualmente.
+          // Aceita string solta (nome, tipo genérico "Material especial" — entrada
+          // manual) ou {nome, tipo} (leitor de PDF já sabe o tipo específico —
+          // Vidro/Serralheria/etc. — porque detectou por palavra-chave no texto,
+          // o que dá uma categoria de pendência mais precisa que "Material especial").
+          especiais.forEach(especial=>{
+            const dados = typeof especial === "string" ? {nome:especial, tipo:"Material especial"} : especial;
+            criarComponenteEmMovel({o:processed, a, m}, dados);
+          });
+          Store.criarTarefasPadraoParaEtapa({o:processed, a, m}, primeiraEtapa.id);
         });
       });
       state.obras.push(processed);
@@ -818,14 +980,18 @@
     // conta pra decidir o status, além do que o operador marcar manualmente.
     pendenciasReaisMovel(m){
       const itens = [];
-      if(m.bloqueio) itens.push(`Bloqueio aberto: ${m.bloqueio.categoria} — ${m.bloqueio.descricao}`);
+      // bloqueiosMovel já é TODA pendência aberta desse móvel (inclusive a que
+      // um componente crítico gera automaticamente) — por isso o componente só
+      // entra na lista de novo se, por algum motivo, ainda não tiver pendência
+      // vinculada (senão duplicava a mesma coisa duas vezes na lista).
+      Store.bloqueiosMovel(m.id).forEach(p=> itens.push(`Bloqueio aberto: ${p.categoria} — ${p.descricao}`));
       if(m.ressalvaAberta) itens.push("Ressalva de liberação excepcional ainda não resolvida");
       (m.componentesCriticos||[]).forEach(c=>{
+        if(c.pendenciaId) return;
         if(c.status==="REFACAO") itens.push(`Retrabalho pendente: ${c.nome}`);
         if(c.status==="AGUARDANDO") itens.push(`Aguardando: ${c.nome}`);
       });
       Store.tarefasObrigatoriasAbertas(m).forEach(t=> itens.push(`Tarefa obrigatória em aberto: ${t.titulo}`));
-      state.pendencias.filter(p=>p.movelId===m.id && p.status!=="RESOLVIDA").forEach(p=> itens.push(`Pendência aberta: ${p.categoria} — ${p.descricao}`));
       return itens;
     },
     concluirMontagem(movelId, checklistOk, temPendenciasInformado){

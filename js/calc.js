@@ -40,7 +40,7 @@
   function itemCriticoGrupo(moveis){
     const abertos = moveis.filter(m=>!movelConcluido(m));
     if(!abertos.length) return null;
-    const bloqueados = abertos.filter(m=>m.bloqueio);
+    const bloqueados = abertos.filter(m=>M.Store.bloqueiosMovel(m.id).length);
     const pool = bloqueados.length ? bloqueados : abertos;
     pool.sort((x,y)=> pos(x.etapa) - pos(y.etapa));
     return pool[0];
@@ -137,16 +137,22 @@
     o.ambientes.forEach(a=>{
       const itens = [];
       a.moveis.forEach(m=>{
-        if(m.bloqueio) itens.push(`Resolver pendência de "${m.nome}": ${m.bloqueio.descricao || m.bloqueio.categoria}`);
+        const bloqueiosM = M.Store.bloqueiosMovel(m.id);
+        bloqueiosM.forEach(p=> itens.push(`Resolver pendência de "${m.nome}": ${p.descricao || p.categoria}`));
         if(m.ressalvaAberta && m.ressalva){
           const pend = (m.ressalva.itensPendentes||[]).join(", ") || "itens da liberação excepcional não resolvidos";
           itens.push(`Regularizar ressalva de "${m.nome}" (avançou para ${M.Store.etapaById(m.ressalva.etapa).nome} sem concluir): ${pend}`);
         }
+        // plano "obra no centro": componente AGUARDANDO/REFACAO já tem pendência
+        // real vinculada (Store.criarComponenteCritico) — essa pendência já apareceu
+        // acima via bloqueiosM. Só entra aqui de novo o componente sem pendência
+        // vinculada (não deveria mais acontecer, mas evita duplicar se acontecer).
         m.componentesCriticos.forEach(c=>{
+          if(c.pendenciaId) return;
           if(c.status==="AGUARDANDO") itens.push(`Receber/liberar "${c.nome}" (${c.tipo.toLowerCase()}) de "${m.nome}"`);
           if(c.status==="REFACAO") itens.push(`Refazer "${c.nome}" de "${m.nome}" (retrabalho)`);
         });
-        if(!movelConcluido(m) && !m.bloqueio){
+        if(!movelConcluido(m) && !bloqueiosM.length){
           // checklist de componentes virou Tarefa (item 9) — o que falta aqui
           // agora é olhar as tarefas do móvel ainda não concluídas.
           const missing = M.Store.state.tarefas.filter(t=>t.movelId===m.id && t.status!=="CONCLUIDA");

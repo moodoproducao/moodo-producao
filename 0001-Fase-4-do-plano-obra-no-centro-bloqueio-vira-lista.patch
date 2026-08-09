@@ -1,0 +1,317 @@
+From e3437fb8ef363ca1919e25165086c2319dc95d9b Mon Sep 17 00:00:00 2001
+From: Paulo Henrique <mdamoveis@gmail.com>
+Date: Sun, 9 Aug 2026 13:38:40 +0000
+Subject: [PATCH] Fase 4 do plano "obra no centro": bloqueio vira lista de
+ verdade
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Diagnóstico (apresentado e aprovado antes de codificar): m.bloqueio era
+um objeto único guardado no móvel, com dois bugs reais confirmados no
+código:
+- Store.criarPendencia sobrescrevia m.bloqueio a cada pendência nova
+  vinculada ao móvel — uma segunda pendência aberta fazia a primeira
+  "sumir" do móvel (ela continuava em state.pendencias, só não era
+  mais referenciada).
+- Store.atualizarStatusPendencia zerava m.bloqueio ao resolver
+  QUALQUER pendência daquele móvel, mesmo com outra ainda aberta.
+
+Correção: removido o campo m.bloqueio (cache duplicado e propenso a
+dessincronizar). Criada Store.bloqueiosMovel(movelId), que deriva
+sempre e só de state.pendencias (fonte única) — nunca fica
+desatualizada, não existe mais "esquecer" ou "sobrescrever" pendência.
+
+Atualizados os 9 pontos que liam m.bloqueio: badge do card no Kanban,
+banner no modal do móvel (agora lista todas, não só uma), linha do
+móvel no modal de ambiente e na aba Ambientes da obra, checagem de
+bloqueio ao avançar etapa (moverEtapa), item crítico do grupo
+(itemCriticoGrupo), "o que falta pra finalizar" (paraFinalizar),
+pendências reais da montagem (pendenciasReaisMovel), contador do
+dashboard e o aviso de bloqueio em Minha Produção (meuPainel).
+
+Migração: m.bloqueio antigo (se sobrou de uma versão salva anterior) é
+removido do estado — os dados reais já estão em state.pendencias,
+nada se perde.
+
+Testado com Playwright: cenário exato do bug (criar 2 pendências pro
+mesmo móvel → as duas aparecem; resolver 1 → a outra continua;
+resolver a última → zera certo); confirmado que m.bloqueio não sobra
+em nenhum móvel após a migração; regressão completa de rotas
+(dashboard, produção, obras, tarefas, pendências, para-finalizar,
+montagem, chão de fábrica, calendário, desempenho, auditoria, lotes,
+nova obra, indicadores, configurações/permissões, meu painel), Kanban
+nas 3 views, e rotas do Operador. node --check limpo em todos os
+arquivos alterados.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013KosEJZQn2LJLEwqimExYG
+---
+ js/calc.js             |  7 ++++---
+ js/main.js             |  2 +-
+ js/pages/dashboard.js  |  2 +-
+ js/pages/meuPainel.js  |  4 ++--
+ js/pages/obraDetail.js | 10 ++++++----
+ js/pages/producao.js   | 23 ++++++++++++++---------
+ js/store.js            | 35 ++++++++++++++++++++++++-----------
+ service-worker.js      |  2 +-
+ 8 files changed, 53 insertions(+), 32 deletions(-)
+
+diff --git a/js/calc.js b/js/calc.js
+index f576a3e..0657ea6 100644
+--- a/js/calc.js
++++ b/js/calc.js
+@@ -40,7 +40,7 @@
+   function itemCriticoGrupo(moveis){
+     const abertos = moveis.filter(m=>!movelConcluido(m));
+     if(!abertos.length) return null;
+-    const bloqueados = abertos.filter(m=>m.bloqueio);
++    const bloqueados = abertos.filter(m=>M.Store.bloqueiosMovel(m.id).length);
+     const pool = bloqueados.length ? bloqueados : abertos;
+     pool.sort((x,y)=> pos(x.etapa) - pos(y.etapa));
+     return pool[0];
+@@ -137,7 +137,8 @@
+     o.ambientes.forEach(a=>{
+       const itens = [];
+       a.moveis.forEach(m=>{
+-        if(m.bloqueio) itens.push(`Resolver pendência de "${m.nome}": ${m.bloqueio.descricao || m.bloqueio.categoria}`);
++        const bloqueiosM = M.Store.bloqueiosMovel(m.id);
++        bloqueiosM.forEach(p=> itens.push(`Resolver pendência de "${m.nome}": ${p.descricao || p.categoria}`));
+         if(m.ressalvaAberta && m.ressalva){
+           const pend = (m.ressalva.itensPendentes||[]).join(", ") || "itens da liberação excepcional não resolvidos";
+           itens.push(`Regularizar ressalva de "${m.nome}" (avançou para ${M.Store.etapaById(m.ressalva.etapa).nome} sem concluir): ${pend}`);
+@@ -146,7 +147,7 @@
+           if(c.status==="AGUARDANDO") itens.push(`Receber/liberar "${c.nome}" (${c.tipo.toLowerCase()}) de "${m.nome}"`);
+           if(c.status==="REFACAO") itens.push(`Refazer "${c.nome}" de "${m.nome}" (retrabalho)`);
+         });
+-        if(!movelConcluido(m) && !m.bloqueio){
++        if(!movelConcluido(m) && !bloqueiosM.length){
+           // checklist de componentes virou Tarefa (item 9) — o que falta aqui
+           // agora é olhar as tarefas do móvel ainda não concluídas.
+           const missing = M.Store.state.tarefas.filter(t=>t.movelId===m.id && t.status!=="CONCLUIDA");
+diff --git a/js/main.js b/js/main.js
+index 45f988f..1ae0f81 100644
+--- a/js/main.js
++++ b/js/main.js
+@@ -5,7 +5,7 @@
+   "use strict";
+   const M = window.M;
+   const UI = M.UI;
+-  const APP_VERSION = "2.5.0";
++  const APP_VERSION = "2.6.0";
+ 
+   function usuarioAtualColab(){
+     return M.colabByNome(M.Store.state.usuarioAtual) || M.COLABORADORES[9];
+diff --git a/js/pages/dashboard.js b/js/pages/dashboard.js
+index 9d6cff9..b278e26 100644
+--- a/js/pages/dashboard.js
++++ b/js/pages/dashboard.js
+@@ -21,7 +21,7 @@
+     const meta = C.metaMensalProgresso();
+     const asst = C.assistenciasResumo();
+     const pendAbertas = M.Store.state.pendencias.filter(p=>p.status!=="RESOLVIDA");
+-    const bloqueados = moveis.filter(x=>x.m.bloqueio).length;
++    const bloqueados = moveis.filter(x=>M.Store.bloqueiosMovel(x.m.id).length).length;
+     const entregas7 = obras.filter(o=> C.diasAte(o.dataEntregaPrevista)>=0 && C.diasAte(o.dataEntregaPrevista)<=7);
+     const montagens7 = moveis.filter(({m})=> m.etapa==="MONTAGEM");
+     const alerts = C.alertasGlobais().slice(0,8);
+diff --git a/js/pages/meuPainel.js b/js/pages/meuPainel.js
+index eac6117..babd5fe 100644
+--- a/js/pages/meuPainel.js
++++ b/js/pages/meuPainel.js
+@@ -28,8 +28,8 @@
+     // a etapa lá na Produção. Agora avisa direto aqui, no painel dele.
+     function bloqueioDoMovel(t){
+       if(!t || !t.movelId) return null;
+-      const f = M.Store.findMovel(t.movelId);
+-      return f && f.m.bloqueio ? f.m.bloqueio : null;
++      const bloqueios = M.Store.bloqueiosMovel(t.movelId);
++      return bloqueios.length ? bloqueios[0] : null;
+     }
+     const bloqueioAtual = bloqueioDoMovel(emAndamento) || (!emAndamento ? bloqueioDoMovel(proximas[0]) : null);
+     const bloqueioHtml = bloqueioAtual ? `
+diff --git a/js/pages/obraDetail.js b/js/pages/obraDetail.js
+index 086bb1c..25a43f2 100644
+--- a/js/pages/obraDetail.js
++++ b/js/pages/obraDetail.js
+@@ -256,12 +256,14 @@
+         <div class="flex-between"><b>${UI.esc(a.nome)}</b><span class="small muted">${UI.valorOuOculto(C.fmtBRL(a.valorLiquido))} · ${prog.pct}%</span></div>
+         ${UI.progressBar(prog.pct)}
+         <div style="margin-top:10px;">
+-          ${a.moveis.map(m=>`
++          ${a.moveis.map(m=>{
++            const bloqueiosM = M.Store.bloqueiosMovel(m.id);
++            return `
+             <div class="check-row" style="cursor:pointer;" onclick="Act.openMovel('${m.id}')">
+-              <span class="dot ${m.bloqueio?'critical':C.movelConcluido(m)?'good':'neutral'}"></span>
++              <span class="dot ${bloqueiosM.length?'critical':C.movelConcluido(m)?'good':'neutral'}"></span>
+               <span class="label"><b>${UI.esc(m.nome)}</b> <span class="chip neutral" style="margin-left:4px;">${UI.esc(M.Store.etapaById(m.etapa).nome)}</span>
+-                <div class="small muted">resp. ${UI.esc(m.responsavel)} · ${UI.valorOuOculto(C.fmtBRL(m.valorLiquido))}${m.bloqueio? " · ⏳ "+UI.esc(m.bloqueio.categoria):""}</div></span>
+-            </div>`).join("")}
++                <div class="small muted">resp. ${UI.esc(m.responsavel)} · ${UI.valorOuOculto(C.fmtBRL(m.valorLiquido))}${bloqueiosM.length? " · ⏳ "+UI.esc(bloqueiosM[0].categoria)+(bloqueiosM.length>1?` +${bloqueiosM.length-1}`:''):""}</div></span>
++            </div>`;}).join("")}
+         </div>
+       </div>`;
+     }).join("");
+diff --git a/js/pages/producao.js b/js/pages/producao.js
+index 518f85d..feac575 100644
+--- a/js/pages/producao.js
++++ b/js/pages/producao.js
+@@ -7,7 +7,7 @@
+   M.Pages = M.Pages || {};
+ 
+   function movelCardHtml(o,a,m){
+-    const bloq = m.bloqueio;
++    const bloqueios = M.Store.bloqueiosMovel(m.id);
+     const dias = C.diasDesde(m.dataEntradaEtapa);
+     const check = M.Store.checarRequisitos(m);
+     // item 9 do backlog: checklist de componentes virou Tarefa — a barrinha de
+@@ -26,7 +26,7 @@
+       <div class="small muted" style="margin-top:3px;">${done}/${tarefasDoMovel.length} tarefas concluídas</div>`:""}
+       ${ressalva? `<div class="kblocked" style="color:var(--warning);background:var(--warning-bg);">${UI.icon('alert',11)} avançou com ressalva</div>`:""}
+       ${!check.liberado && !ressalva? `<div class="kblocked">${UI.icon('lock',11)} requisito pendente p/ avançar</div>`:""}
+-      ${bloq? `<div class="kblocked">${UI.icon('clock',11)} ${UI.esc(bloq.categoria)}</div>`:""}
++      ${bloqueios.length? `<div class="kblocked">${UI.icon('clock',11)} ${UI.esc(bloqueios[0].categoria)}${bloqueios.length>1?` +${bloqueios.length-1}`:''}</div>`:""}
+       ${m.componentesCriticos.some(c=>c.status==="REFACAO")? `<div class="kblocked">${UI.icon('wrench',11)} retrabalho em aberto</div>`:""}
+     </div>`;
+   }
+@@ -161,6 +161,9 @@
+     ` : `<p class="small muted">Sem requisitos configurados para "${UI.esc(M.Store.etapaById(m.etapa).nome)}".</p>`;
+ 
+     const respOptions = M.COLABORADORES.map(c=>`<option ${c.nome===m.responsavel?'selected':''}>${c.nome}</option>`).join("");
++    // fase 4 do plano "obra no centro": todas as pendências abertas do móvel,
++    // não só a mais recente (m.bloqueio era um objeto único e sobrescrevia).
++    const bloqueiosM = M.Store.bloqueiosMovel(m.id);
+ 
+     return `
+       <div class="modal-head">
+@@ -173,10 +176,10 @@
+           <div class="field"><label>Valor líquido do móvel</label><input value="${M.Store.pode('verValores')?C.fmtBRL(m.valorLiquido):'•••••'}" disabled></div>
+         </div>
+ 
+-        ${m.bloqueio? `<div class="help-banner" style="background:var(--critical-bg);border-color:var(--critical);color:var(--critical);">
+-          ${UI.icon('lock',13)} <b>Bloqueada:</b> ${UI.esc(m.bloqueio.categoria)} — ${UI.esc(m.bloqueio.descricao)}. Responsável: ${UI.esc(m.bloqueio.responsavel)}.
++        ${bloqueiosM.map(p=>`<div class="help-banner" style="background:var(--critical-bg);border-color:var(--critical);color:var(--critical);margin-bottom:8px;">
++          ${UI.icon('lock',13)} <b>Bloqueada:</b> ${UI.esc(p.categoria)} — ${UI.esc(p.descricao)}. Responsável: ${UI.esc(p.responsavel)}.
+           <a href="#/pendencias" data-close style="text-decoration:underline;">ver em Pendências →</a>
+-        </div>` : ""}
++        </div>`).join("")}
+ 
+         ${m.ressalvaAberta && m.ressalva? `<div class="help-banner" style="background:var(--warning-bg);border-color:var(--warning);color:var(--warning);">
+           ${UI.icon('alert',13)} <b>Avançou com ressalva</b> para "${UI.esc(m.ressalva.etapaLabel)}" em ${C.fmtDate(m.ressalva.data)} (${UI.esc(m.ressalva.usuario||'-')}). Motivo: ${UI.esc(m.ressalva.motivo||'-')}.
+@@ -208,12 +211,14 @@
+   M.Pages.ambienteModalHtml = function(f){
+     const {o,a} = f;
+     const prog = C.progressoAmbiente(a);
+-    const rows = a.moveis.map(m=>`
++    const rows = a.moveis.map(m=>{
++      const bloqueiosM = M.Store.bloqueiosMovel(m.id);
++      return `
+       <div class="check-row" style="cursor:pointer;" onclick="UI.closeModal();Act.openMovel('${m.id}')">
+-        <span class="dot ${m.bloqueio?'critical':C.movelConcluido(m)?'good':'neutral'}"></span>
++        <span class="dot ${bloqueiosM.length?'critical':C.movelConcluido(m)?'good':'neutral'}"></span>
+         <span class="label"><b>${UI.esc(m.nome)}</b> <span class="chip neutral" style="margin-left:4px;">${UI.esc(M.Store.etapaById(m.etapa).nome)}</span>
+-          <div class="small muted">resp. ${UI.esc(m.responsavel)}${m.bloqueio? " · ⏳ "+UI.esc(m.bloqueio.categoria):""}</div></span>
+-      </div>`).join("");
++          <div class="small muted">resp. ${UI.esc(m.responsavel)}${bloqueiosM.length? " · ⏳ "+UI.esc(bloqueiosM[0].categoria)+(bloqueiosM.length>1?` +${bloqueiosM.length-1}`:''):""}</div></span>
++      </div>`;}).join("");
+     return `
+       <div class="modal-head">
+         <div><h2>${UI.esc(a.nome)}</h2><div class="meta">${UI.esc(o.cliente)} · ${o.numeroOS} · valor líquido ${UI.valorOuOculto(C.fmtBRL(a.valorLiquido))}</div></div>
+diff --git a/js/store.js b/js/store.js
+index ffa4a09..a39c367 100644
+--- a/js/store.js
++++ b/js/store.js
+@@ -134,6 +134,12 @@
+             m.checklist = [];
+             mudou = true;
+           }
++          // fase 4 do plano "obra no centro": m.bloqueio (objeto único, podia
++          // sobrescrever/perder pendência) não existe mais — os bloqueios reais
++          // agora vêm sempre de Store.bloqueiosMovel(m.id), derivados direto de
++          // state.pendencias. Limpa o campo antigo se ele sobrou de uma versão
++          // anterior (dado morto, mas sem sentido deixar por aí).
++          if(m.bloqueio !== undefined){ delete m.bloqueio; mudou = true; }
+         });
+       });
+     });
+@@ -246,6 +252,16 @@
+         if(m.id===movelId) return {o,a,m};
+       return null;
+     },
++    // bloqueios reais do móvel = pendências abertas vinculadas a ele. Fase 4 do
++    // plano "obra no centro": antes disso existia m.bloqueio, um objeto único
++    // guardado à parte no móvel — criarPendencia sobrescrevia ele a cada pendência
++    // nova (perdendo a anterior) e atualizarStatusPendencia zerava ele ao resolver
++    // QUALQUER pendência do móvel, mesmo com outra ainda aberta. Removido o campo
++    // duplicado: agora deriva sempre de state.pendencias (a única fonte de verdade),
++    // então nunca fica desatualizado.
++    bloqueiosMovel(movelId){
++      return state.pendencias.filter(p=>p.movelId===movelId && p.status!=="RESOLVIDA");
++    },
+     findAmbiente(ambienteId){
+       for(const o of state.obras) for(const a of o.ambientes) if(a.id===ambienteId) return {o,a};
+       return null;
+@@ -530,12 +546,13 @@
+         // Object.assign(...,{etapa:novaEtapaId}) fazia a checagem olhar pra etapa
+         // errada, e tarefas obrigatórias da etapa atual nunca bloqueavam nada.
+         const check = Store.checarRequisitos(f.m);
+-        // CORREÇÃO: uma pendência aberta vinculada ao móvel (m.bloqueio) também
+-        // precisa travar o avanço normal, igual a um requisito — antes disto era
+-        // só decorativo no card, dava pra avançar a etapa com o móvel bloqueado.
+-        const faltandoBloqueio = f.m.bloqueio
+-          ? [{nome:`Pendência aberta: ${f.m.bloqueio.categoria} — ${f.m.bloqueio.descricao}`, obrigatorio:true, bloqueio:true, permiteAvancoExcepcional:true}]
+-          : [];
++        // CORREÇÃO: toda pendência aberta vinculada ao móvel também precisa travar
++        // o avanço normal, igual a um requisito — antes disto era só decorativo no
++        // card, dava pra avançar a etapa com o móvel bloqueado. (fase 4 do plano
++        // "obra no centro": Store.bloqueiosMovel deriva direto de state.pendencias,
++        // não de um campo m.bloqueio guardado à parte — ver comentário na função.)
++        const faltandoBloqueio = Store.bloqueiosMovel(f.m.id)
++          .map(p=>({nome:`Pendência aberta: ${p.categoria} — ${p.descricao}`, obrigatorio:true, bloqueio:true, permiteAvancoExcepcional:true}));
+         const faltando = check.faltando.concat(faltandoBloqueio);
+         const liberado = faltando.length===0;
+         if(!liberado && !opts.forcar){
+@@ -601,8 +618,6 @@
+       const item = Object.assign({id:M.uid("pnd"), status:"ABERTA", anexo:false, abertura:M.todayISO(),
+         fluxoTipo:def.fluxo, fluxoPassos:passos, passoAtual:0, origem:p.origem||null}, p);
+       state.pendencias.push(item);
+-      const f = Store.findMovel(p.movelId);
+-      if(f){ f.m.bloqueio = {categoria:p.categoria, descricao:p.descricao, responsavel:p.responsavel, fornecedor:p.fornecedor, abertura:item.abertura, prazo:p.prazo, prioridade:p.prioridade, status:"ABERTA"}; }
+       Store.log(p.obraId, "PENDENCIA_ABERTA", `${p.categoria}: ${p.descricao}`);
+       emit();
+       return item;
+@@ -625,8 +640,6 @@
+       p.status = status;
+       if(status==="RESOLVIDA"){
+         p.passoAtual = p.fluxoPassos ? p.fluxoPassos.length-1 : 0;
+-        const f = Store.findMovel(p.movelId);
+-        if(f && f.m.bloqueio) f.m.bloqueio = null;
+         Store.log(p.obraId, "PENDENCIA_RESOLVIDA", `${p.categoria}: ${p.descricao}`);
+       }
+       if(status==="ABERTA" && eraResolvida){
+@@ -828,7 +841,7 @@
+     // conta pra decidir o status, além do que o operador marcar manualmente.
+     pendenciasReaisMovel(m){
+       const itens = [];
+-      if(m.bloqueio) itens.push(`Bloqueio aberto: ${m.bloqueio.categoria} — ${m.bloqueio.descricao}`);
++      Store.bloqueiosMovel(m.id).forEach(p=> itens.push(`Bloqueio aberto: ${p.categoria} — ${p.descricao}`));
+       if(m.ressalvaAberta) itens.push("Ressalva de liberação excepcional ainda não resolvida");
+       (m.componentesCriticos||[]).forEach(c=>{
+         if(c.status==="REFACAO") itens.push(`Retrabalho pendente: ${c.nome}`);
+diff --git a/service-worker.js b/service-worker.js
+index 0d9d7af..c4184ae 100644
+--- a/service-worker.js
++++ b/service-worker.js
+@@ -5,7 +5,7 @@
+    evolução futura — aqui o objetivo é permitir abrir o app e ver a
+    última tela mesmo sem internet, e sinalizar quando há versão nova.
+    ============================================================ */
+-const CACHE_NAME = "moodo-producao-v2.5.0";
++const CACHE_NAME = "moodo-producao-v2.6.0";
+ const SHELL_FILES = [
+   "./",
+   "./index.html",
+-- 
+2.43.0
+

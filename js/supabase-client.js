@@ -106,37 +106,63 @@
   // --------------------------------------------------------------------------
   // LEITURA — busca a linha única de estado_operacional. Retorna null se a
   // tabela ainda estiver vazia (primeiro acesso de todos — nesse caso quem
-  // chamou deve semear com o estado local de exemplo, ver store.js).
+  // chamou deve semear com o estado local de exemplo, ver store.js). Também
+  // devolve atualizadoEm — é o "carimbo" que salvarEstado usa pra saber se
+  // ninguém mais gravou por cima entre a leitura e a escrita (ver abaixo).
   // --------------------------------------------------------------------------
   Supa.carregarEstado = async () => {
-    const { data, error } = await Supa.client.from("estado_operacional").select("dados").eq("id", 1).maybeSingle();
+    const { data, error } = await Supa.client.from("estado_operacional").select("dados, atualizado_em").eq("id", 1).maybeSingle();
     if (error) { console.error("[Moodo] erro ao ler estado do Supabase:", error); return null; }
-    return data ? data.dados : null;
+    return data ? { dados: data.dados, atualizadoEm: data.atualizado_em } : null;
   };
 
   // --------------------------------------------------------------------------
-  // ESCRITA — grava (upsert) o estado inteiro. Chamado pelo store.js depois
-  // de cada mutação (o mesmo momento em que hoje ele grava no localStorage).
-  // Envia o nome de quem está gravando só pra rastro (atualizado_por fica
-  // nulo até o login por senha existir e conseguirmos ligar ao colaborador).
+  // ESCRITA — grava o estado inteiro, COM TRAVA DE CONCORRÊNCIA (risco real
+  // encontrado na auditoria: o app inteiro guarda tudo — obras, tarefas,
+  // pendências — num blob único; se dois aparelhos gravarem quase ao mesmo
+  // tempo, o "upsert" de quem chegasse por último apagava silenciosamente a
+  // mudança do outro, sem aviso nenhum). Agora a gravação só acontece se
+  // atualizado_em no banco ainda for o mesmo que este aparelho leu por último
+  // (atualizadoEmConhecido) — se outra pessoa já gravou nesse meio tempo, o
+  // update não bate em nenhuma linha (0 resultados) e devolvemos conflito:true
+  // em vez de sobrescrever. Não precisa de coluna nova: atualizado_em já existia.
+  // Devolve {ok, atualizadoEm} em caso de sucesso, ou {ok:false, conflito:true}
+  // quando outra gravação venceu a corrida, ou {ok:false} em erro de rede/etc.
   // --------------------------------------------------------------------------
-  Supa.salvarEstado = async (estado) => {
-    const { error } = await Supa.client.from("estado_operacional")
-      .upsert({ id: 1, dados: estado, atualizado_em: new Date().toISOString() });
-    if (error) console.error("[Moodo] erro ao salvar estado no Supabase:", error);
-    return !error;
+  Supa.salvarEstado = async (estado, atualizadoEmConhecido) => {
+    const agora = new Date().toISOString();
+    if(!atualizadoEmConhecido){
+      // primeiro carregamento desta sessão ainda sem carimbo conhecido: tenta
+      // criar a linha (primeiro acesso de todos). Se já existir (outra pessoa
+      // criou primeiro), cai pro caminho condicional abaixo lendo o carimbo atual.
+      const { error: erroInsert } = await Supa.client.from("estado_operacional")
+        .insert({ id: 1, dados: estado, atualizado_em: agora });
+      if(!erroInsert) return { ok:true, atualizadoEm: agora };
+    }
+    let base = atualizadoEmConhecido;
+    if(!base){
+      const atual = await Supa.client.from("estado_operacional").select("atualizado_em").eq("id", 1).maybeSingle();
+      base = atual.data ? atual.data.atualizado_em : null;
+    }
+    let query = Supa.client.from("estado_operacional").update({ dados: estado, atualizado_em: agora }).eq("id", 1);
+    query = base ? query.eq("atualizado_em", base) : query;
+    const { data, error } = await query.select("atualizado_em");
+    if (error) { console.error("[Moodo] erro ao salvar estado no Supabase:", error); return { ok:false }; }
+    if (!data || !data.length) return { ok:false, conflito:true };
+    return { ok:true, atualizadoEm: agora };
   };
 
   // --------------------------------------------------------------------------
   // TEMPO REAL — quando outro aparelho (outro celular, o desktop, a TV) grava
-  // uma mudança, esta assinatura dispara "cb" com o novo estado inteiro, para
-  // o app local se atualizar sem precisar de F5. Ignora o próprio eco (o
-  // callback recebe o payload cru; quem chamou decide se aplica ou não).
+  // uma mudança, esta assinatura dispara "cb" com o novo estado inteiro E o
+  // carimbo atualizado_em dessa gravação, para o app local se atualizar sem
+  // precisar de F5 e manter o carimbo em dia (senão a próxima gravação local
+  // acharia — errado — que houve conflito).
   // --------------------------------------------------------------------------
   Supa.assinarMudancas = (cb) => {
     const canal = Supa.client.channel("moodo-estado-realtime");
     canal.on("postgres_changes", { event: "UPDATE", schema: "public", table: "estado_operacional" },
-      (payload) => cb(payload.new && payload.new.dados));
+      (payload) => cb(payload.new && payload.new.dados, payload.new && payload.new.atualizado_em));
     canal.subscribe();
     return () => Supa.client.removeChannel(canal);
   };

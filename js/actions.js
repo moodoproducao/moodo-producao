@@ -11,7 +11,9 @@
     kanbanView: "ambientes",
     novaVersaoDisponivel: false,
     obraTab: {},
-    novaObra: {osFile:null, orcFile:null, lido:false, ambientesAjuste:{}},
+    obraFoco: {}, // {obraId: ambienteId} — ambiente em destaque na página operacional da obra (plano "obra no centro")
+    novaObra: {osFileObj:null, osFileName:null, orcFileObj:null, orcFileName:null,
+      lendo:false, lido:false, erro:null, dados:null, enderecoManual:"", ambientesAjuste:{}},
     pendFiltro: {categoria:"", status:""},
     pendExpandido: null,
     tarefaFiltro: {responsavel:"", status:"", obraId:""},
@@ -105,6 +107,31 @@
 
     // ---------- responsável ----------
     setResponsavel(movelId, sel){ M.Store.setResponsavel(movelId, sel.value); UI.toast("Responsável atualizado."); },
+
+    // ---------- página da obra (foco de ambiente + avanço em lote) ----------
+    focarAmbiente(obraId, ambienteId){ M.UIState.obraFoco[obraId] = ambienteId; Act.rerender(); },
+    // "Kanban vira mapa" (plano obra no centro): clicar num card de ambiente/móvel
+    // no Kanban leva direto pra página operacional da obra, já com o ambiente
+    // certo em foco — em vez de abrir um modal por cima do Kanban. Reaproveita o
+    // mesmo M.UIState.obraFoco usado por focarAmbiente/avancarEtapaAmbiente.
+    irParaObra(obraId, ambienteId){
+      if(ambienteId) M.UIState.obraFoco[obraId] = ambienteId;
+      Act.go('#/obra/'+obraId);
+    },
+    avancarEtapaAmbiente(obraId, ambienteId, etapaAtualId){
+      const f = M.Store.findAmbiente(ambienteId); if(!f) return;
+      const alvos = f.a.moveis.filter(m=>m.etapa===etapaAtualId);
+      if(!alvos.length) return;
+      const novaEtapaId = M.Store.proximaEtapaId(etapaAtualId);
+      // se algum dos móveis desse ambiente/etapa está travado, mostra o motivo do
+      // primeiro (os outros teriam o mesmo requisito de etapa, quase sempre) em vez
+      // de avançar parcialmente sem avisar.
+      const bloqueado = alvos.map(m=>({m, check:M.Store.checarRequisitos(m)})).find(x=>!x.check.liberado);
+      if(bloqueado){ Act.modalRequisitosFaltando(bloqueado.m.id, novaEtapaId, bloqueado.check.faltando, bloqueado.check.bloqueioDuro); return; }
+      let ok=0, total=alvos.length;
+      alvos.forEach(m=>{ const r = M.Store.moverEtapa(m.id, novaEtapaId, {}); if(r.ok) ok++; });
+      UI.toast(ok===total? `${ok===1?'Móvel avançou':'Móveis avançaram'} para ${M.Store.etapaById(novaEtapaId).nome}.` : `${ok}/${total} avançaram — o resto ficou pra trás, confira o bloqueio.`);
+    },
 
     // ---------- kanban ----------
     setKanbanView(v){ M.UIState.kanbanView = v; Act.rerender(); },
@@ -217,6 +244,32 @@
     openAmbiente(ambienteId){
       const f = M.Store.findAmbiente(ambienteId); if(!f) return;
       UI.openModal(M.Pages.ambienteModalHtml(f), {wide:true});
+    },
+
+    // ---------- componentes críticos / exceções (plano "obra no centro") ----------
+    abrirFormComponente(movelId){
+      UI.openModal(M.Pages.componenteFormHtml(movelId), {});
+      const form = document.getElementById("formComponente");
+      form.addEventListener("submit", (e)=>{
+        e.preventDefault();
+        const fd = new FormData(form);
+        M.Store.criarComponenteCritico(movelId, {
+          nome: fd.get("nome"), tipo: fd.get("tipo"), fornecedor: fd.get("fornecedor")||"",
+          responsavel: fd.get("responsavel")||"", prazo: fd.get("prazo")||null, observacao: fd.get("observacao")||"",
+        });
+        UI.toast("Componente criado — pendência aberta.");
+        Act._voltar(movelId);
+      });
+    },
+    resolverComponente(movelId, componenteId){
+      M.Store.mudarStatusComponente(movelId, componenteId, "RESOLVIDO");
+      UI.toast("Componente marcado como resolvido.");
+      Act.openMovel(movelId, true);
+    },
+    reabrirComponente(movelId, componenteId){
+      M.Store.mudarStatusComponente(movelId, componenteId, "AGUARDANDO");
+      UI.toast("Componente reaberto.");
+      Act.openMovel(movelId, true);
     },
 
     // ---------- pendências (com fluxo) ----------
@@ -383,16 +436,50 @@
       UI.confirm("Remover este arquivo da obra?", ()=>{ M.Store.removerArquivo(obraId, arquivoId); UI.toast("Arquivo removido."); });
     },
 
-    // ---------- nova obra (tela única — seção 6) ----------
-    novaObraDropFile(kind, name){
-      if(kind==="os") M.UIState.novaObra.osFile = name || "OS_2026_350.pdf";
-      else M.UIState.novaObra.orcFile = name || "Orcamento_2026_350.pdf";
+    // ---------- nova obra (tela única — seção 6, leitura real de PDF) ----------
+    novaObraArquivoSelecionado(kind, file){
+      if(!file) return;
+      const w = M.UIState.novaObra;
+      if(kind==="os"){ w.osFileObj = file; w.osFileName = file.name; }
+      else { w.orcFileObj = file; w.orcFileName = file.name; }
+      // troca de arquivo depois de já ter lido: limpa o resultado anterior,
+      // senão a tela ficaria mostrando dados de um PDF que não é mais esse.
+      w.lido = false; w.dados = null; w.erro = null;
       Act.rerender();
     },
-    novaObraSimularLeitura(){
-      M.UIState.novaObra.osFile = M.UIState.novaObra.osFile || "OS_2026_350.pdf";
-      M.UIState.novaObra.orcFile = M.UIState.novaObra.orcFile || "Orcamento_2026_350.pdf";
-      M.UIState.novaObra.lido = true;
+    async novaObraLerPdf(){
+      const w = M.UIState.novaObra;
+      w.lendo = true; w.erro = null; Act.rerender();
+      try{
+        const [orcLinhas, osLinhas] = await Promise.all([
+          w.orcFileObj ? M.PdfImport.extrairLinhas(w.orcFileObj) : Promise.resolve(null),
+          w.osFileObj ? M.PdfImport.extrairLinhas(w.osFileObj) : Promise.resolve(null),
+        ]);
+        const orcParsed = orcLinhas ? M.PdfImport.parseDocumento(orcLinhas) : null;
+        const osParsed = osLinhas ? M.PdfImport.parseDocumento(osLinhas) : null;
+        const dados = M.PdfImport.combinar(orcParsed, osParsed);
+        if(!dados){
+          w.erro = "Não consegui identificar os ambientes/itens neste PDF. Confira se é o formato padrão da Moodo (Orçamento ou Ordem de Serviço).";
+        } else {
+          w.dados = dados;
+          w.lido = true;
+        }
+      }catch(err){
+        console.error("[Moodo] erro ao ler PDF:", err);
+        w.erro = err.message || "Erro ao ler o PDF.";
+      }
+      w.lendo = false;
+      Act.rerender();
+    },
+    novaObraRecomecar(){
+      M.UIState.novaObra = {osFileObj:null, osFileName:null, orcFileObj:null, orcFileName:null,
+        lendo:false, lido:false, erro:null, dados:null, enderecoManual:"", ambientesAjuste:{}};
+      Act.rerender();
+    },
+    novaObraSetEndereco(valor){ M.UIState.novaObra.enderecoManual = valor; },
+    novaObraSetVendido(valor){
+      M.UIState.novaObra.dados.valorFinalVendido = Number(valor);
+      M.UIState.novaObra.ambientesAjuste = {}; // valor vendido mudou: rateio automático recalcula do zero
       Act.rerender();
     },
     novaObraAjustarValor(ambKey, valor){
@@ -404,7 +491,7 @@
       const nova = M.Pages.novaObraMontar();
       M.Store.criarObra(nova);
       UI.toast("Obra criada com sucesso!");
-      M.UIState.novaObra = {osFile:null, orcFile:null, lido:false, ambientesAjuste:{}};
+      Act.novaObraRecomecar();
       location.hash = "#/obra/"+nova.id;
     },
 
