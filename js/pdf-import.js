@@ -185,9 +185,13 @@
       const descricao = descAtual.join(" ").replace(/\s+/g," ").trim();
       descAtual = [];
       if(!descricao || !ambienteAtual) return;
+      const quantidade = Number(qtd) || 1;
+      const valorTotal = subtotal!=null ? subtotal : (valorUnit!=null ? valorUnit*quantidade : null);
       ambienteAtual.itens.push({
-        descricao, quantidade: qtd||1,
-        valorBruto: valorUnit!=null ? valorUnit : (subtotal!=null ? subtotal : null),
+        descricao, quantidade,
+        valorUnitario: valorUnit,
+        subtotal,
+        valorBruto: valorTotal,
         materiaisEspeciais: detectarComponentes(descricao),
       });
     }
@@ -271,8 +275,22 @@
     fonteAmbientes.forEach(a=> a.itens.forEach(it=>{
       itensOrc.push({ ambiente:a.nome, item: it.descricao, qtd: it.quantidade||1, valorBruto: it.valorBruto!=null ? it.valorBruto : 0 });
     }));
-    const valorBrutoTotal = (orc && orc.valorBrutoTotal) || itensOrc.reduce((s,i)=>s+i.valorBruto,0);
-    const valorFinalVendido = (orc && orc.valorLiquidoTotal) || valorBrutoTotal;
+    const somaItens = itensOrc.reduce((s,i)=>s+i.valorBruto,0);
+    const valorBrutoTotal = orc && orc.valorBrutoTotal!=null ? orc.valorBrutoTotal : somaItens;
+    // O total oficial do orçamento é a fonte de verdade. Alguns PDFs
+    // arredondam ou apresentam valores por item que não fecham exatamente;
+    // nesse caso o rateio proporcional preserva o total do documento.
+    if(valorBrutoTotal>0 && somaItens>0 && Math.abs(valorBrutoTotal-somaItens)>0.01){
+      const fatorAjuste = valorBrutoTotal/somaItens;
+      let acumulado = 0;
+      itensOrc.forEach((it,idx)=>{
+        it.valorBruto = idx===itensOrc.length-1
+          ? Math.round((valorBrutoTotal-acumulado)*100)/100
+          : Math.round(it.valorBruto*fatorAjuste*100)/100;
+        acumulado += it.valorBruto;
+      });
+    }
+    const valorFinalVendido = orc && orc.valorLiquidoTotal!=null ? orc.valorLiquidoTotal : valorBrutoTotal;
 
     return {
       numeroOS: (orc && orc.numeroOS) || (os && os.numeroOS) || null,
@@ -283,7 +301,7 @@
       email: (orc && orc.email) || (os && os.email) || "",
       data: M.todayISO(),
       dataEntregaPrevista: (os && os.dataEntregaPrevista) || null,
-      ambientes, itensOrc, valorFinalVendido,
+      ambientes, itensOrc, valorBrutoTotal, valorFinalVendido, temValores: valorBrutoTotal>0,
     };
   };
 })();

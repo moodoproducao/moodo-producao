@@ -7,9 +7,20 @@ window.M = window.M || {};
   "use strict";
 
   // ---------- datas utilitárias ----------
-  const TODAY = new Date(2026,7,8); // 8 ago 2026
-  function dOff(days){ const x = new Date(TODAY); x.setDate(x.getDate()+days); return x.toISOString().slice(0,10); }
-  function todayISO(){ return TODAY.toISOString().slice(0,10); }
+  function inicioDoDiaAtual(){
+    const agora = new Date();
+    return new Date(agora.getFullYear(), agora.getMonth(), agora.getDate());
+  }
+  function dataLocalISO(data){
+    const pad = n=>String(n).padStart(2,"0");
+    return `${data.getFullYear()}-${pad(data.getMonth()+1)}-${pad(data.getDate())}`;
+  }
+  // TODAY continua sendo a referência inicial do calendário desta sessão. Já
+  // todayISO()/dOff() consultam o relógio a cada chamada, inclusive se o PWA
+  // permanecer aberto durante a virada do dia.
+  const TODAY = inicioDoDiaAtual();
+  function dOff(days){ const x = inicioDoDiaAtual(); x.setDate(x.getDate()+days); return dataLocalISO(x); }
+  function todayISO(){ return dataLocalISO(inicioDoDiaAtual()); }
 
   // ---------- etapas do pipeline (seção 68-72: agora dados configuráveis, não constantes) ----------
   // Isto é só a SEMENTE inicial — a partir daqui quem manda é Store.state.etapas
@@ -178,7 +189,7 @@ window.M = window.M || {};
 
   function movel(o){
     const checklistSrc = o.checklist || COMPONENTES_CHECKLIST_PADRAO.slice(0,4);
-    return Object.assign({
+    const item = Object.assign({
       id: uid("mov"),
       componentesCriticos: [],
       bloqueio: null,
@@ -192,6 +203,8 @@ window.M = window.M || {};
       // precisa vir DEPOIS de "o" para não ser sobrescrito pela lista crua de strings
       checklist: checklistSrc.map(n=>({id:uid("chk"),nome:n,concluido:false})),
     });
+    item.historicoEtapas = item.historicoEtapas || [{de:null, para:item.etapa, data:item.dataEntradaEtapa}];
+    return item;
   }
 
   // ============================================================
@@ -567,7 +580,7 @@ window.M = window.M || {};
   const PESOS_DESEMPENHO_DEFAULT = { valorProcessado:30, pontualidade:20, qualidade:20, pendencias:15, velocidadeResolucao:10, participacao:5 };
 
   // meta mensal (seção 67)
-  const META_MENSAL = { valor: 1360000, mes: "Agosto/2026" };
+  const META_MENSAL = { valor: 1360000, mes: TODAY.toLocaleDateString("pt-BR",{month:"long",year:"numeric"}) };
 
   // notificações — quais alertas ficam ativos (seção 72)
   const NOTIFICACOES_DEFAULT = {

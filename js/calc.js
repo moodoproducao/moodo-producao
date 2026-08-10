@@ -74,7 +74,29 @@
     return rows;
   }
 
-  function indicadores(){
+  function periodoMesAtual(){
+    const inicio = M.todayISO().slice(0,7) + "-01";
+    const [ano, mes] = inicio.split("-").map(Number);
+    const proximo = new Date(ano, mes, 1);
+    const fim = `${proximo.getFullYear()}-${String(proximo.getMonth()+1).padStart(2,"0")}-01`;
+    return {inicio, fim};
+  }
+  function dataPrimeiraPassagem(m, etapaMarco){
+    const marco = pos(etapaMarco);
+    const historico = Array.isArray(m.historicoEtapas) && m.historicoEtapas.length
+      ? m.historicoEtapas
+      : [{de:null, para:m.etapa, data:m.dataEntradaEtapa}];
+    return historico
+      .filter(h=>h && h.data && pos(h.para)>=marco)
+      .slice()
+      .sort((a,b)=>`${a.data} ${a.hora||""}`.localeCompare(`${b.data} ${b.hora||""}`))[0]?.data || null;
+  }
+  function dentroDoPeriodo(data, periodo){
+    return !!data && data>=periodo.inicio && data<periodo.fim;
+  }
+
+  function indicadores(periodo){
+    periodo = periodo || periodoMesAtual();
     let liberado=0, produzido=0, entregue=0, montado=0, emProducao=0, aguardandoMontagem=0;
     let moveisProduzidos=0;
     const pLiberada = pos("LIBERADA"), pEmbalagem = pos("EMBALAGEM"), pEntrega = pos("ENTREGA"),
@@ -82,14 +104,14 @@
     M.Store.allMoveis().forEach(({m})=>{
       const v = m.valorLiquido||0;
       const pm = pos(m.etapa);
-      if(pm>=pLiberada) liberado += v;
-      if(pm>=pEmbalagem){ produzido += v; moveisProduzidos++; }
-      if(pm>=pEntrega) entregue += v;
-      if(pm>=pMontagem) montado += v;
+      if(dentroDoPeriodo(dataPrimeiraPassagem(m,"LIBERADA"), periodo)) liberado += v;
+      if(dentroDoPeriodo(dataPrimeiraPassagem(m,"EMBALAGEM"), periodo)){ produzido += v; moveisProduzidos++; }
+      if(dentroDoPeriodo(dataPrimeiraPassagem(m,"ENTREGA"), periodo)) entregue += v;
+      if(dentroDoPeriodo(dataPrimeiraPassagem(m,"MONTAGEM"), periodo)) montado += v;
       if(pm>=pCorte && pm<pEmbalagem) emProducao += v;
       if(m.etapa==="ENTREGA") aguardandoMontagem += v;
     });
-    return {liberado, produzido, entregue, montado, emProducao, aguardandoMontagem, moveisProduzidos};
+    return {liberado, produzido, entregue, montado, emProducao, aguardandoMontagem, moveisProduzidos, periodo};
   }
 
   function parseHora(hhmm){ if(!hhmm) return null; const [h,m] = hhmm.split(":").map(Number); return h*60+m; }
@@ -319,7 +341,7 @@
     parseHora, duracaoHoras, valorProcessadoTarefa, desempenhoColaborador,
     paraFinalizar, paraFinalizarTotal, alertasGlobais,
     indiceDesempenho, pendenciasDoColaborador, rankingColaboradores,
-    assistenciasResumo, auditoriaResumo, metaMensalProgresso, origemProblemaResumo,
+    assistenciasResumo, auditoriaResumo, metaMensalProgresso, origemProblemaResumo, periodoMesAtual,
     producaoHoje,
   };
 })();

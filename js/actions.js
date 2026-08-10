@@ -13,7 +13,7 @@
     obraTab: {},
     obraFoco: {}, // {obraId: ambienteId} — ambiente em destaque na página operacional da obra (plano "obra no centro")
     novaObra: {osFileObj:null, osFileName:null, orcFileObj:null, orcFileName:null,
-      lendo:false, lido:false, erro:null, dados:null, enderecoManual:"", ambientesAjuste:{}},
+      lendo:false, lido:false, erro:null, dados:null, enderecoManual:"", ambientesAjuste:{}, responsavelProducao:""},
     pendFiltro: {categoria:"", status:""},
     pendExpandido: null,
     tarefaFiltro: {responsavel:"", status:"", obraId:""},
@@ -444,7 +444,7 @@
       else { w.orcFileObj = file; w.orcFileName = file.name; }
       // troca de arquivo depois de já ter lido: limpa o resultado anterior,
       // senão a tela ficaria mostrando dados de um PDF que não é mais esse.
-      w.lido = false; w.dados = null; w.erro = null;
+      w.lido = false; w.dados = null; w.erro = null; w.responsavelProducao = "";
       Act.rerender();
     },
     async novaObraLerPdf(){
@@ -467,6 +467,10 @@
           w.erro = "Não consegui identificar os ambientes/itens neste PDF. Confira se é o formato padrão da Moodo (Orçamento ou Ordem de Serviço).";
         } else {
           w.dados = dados;
+          const normalizarNome = (valor)=>String(valor||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim().toLowerCase().replace(/\s+/g," ");
+          const nomeDocumento = normalizarNome(dados.responsavel);
+          const colaborador = M.COLABORADORES.find(c=>c.ativo!==false && normalizarNome(c.nome)===nomeDocumento);
+          w.responsavelProducao = colaborador ? colaborador.nome : "";
           w.lido = true;
         }
       }catch(err){
@@ -479,10 +483,11 @@
     },
     novaObraRecomecar(){
       M.UIState.novaObra = {osFileObj:null, osFileName:null, orcFileObj:null, orcFileName:null,
-        lendo:false, lido:false, erro:null, dados:null, enderecoManual:"", ambientesAjuste:{}};
+        lendo:false, lido:false, erro:null, dados:null, enderecoManual:"", ambientesAjuste:{}, responsavelProducao:""};
       Act.rerender();
     },
     novaObraSetEndereco(valor){ M.UIState.novaObra.enderecoManual = valor; },
+    novaObraSetResponsavel(valor){ M.UIState.novaObra.responsavelProducao = valor; Act.rerender(); },
     novaObraSetVendido(valor){
       M.UIState.novaObra.dados.valorFinalVendido = Number(valor);
       M.UIState.novaObra.ambientesAjuste = {}; // valor vendido mudou: rateio automático recalcula do zero
@@ -495,10 +500,21 @@
     novaObraResetAjustes(){ M.UIState.novaObra.ambientesAjuste = {}; Act.rerender(); },
     novaObraCriar(){
       const nova = M.Pages.novaObraMontar();
-      M.Store.criarObra(nova);
+      const resultado = M.Store.criarObra(nova);
+      if(!resultado.ok){
+        if(resultado.motivo==="OS_DUPLICADA"){
+          UI.toast(`A ${nova.numeroOS} já existe. Abrindo a obra cadastrada.`);
+          location.hash = "#/obra/"+resultado.obra.id;
+        } else if(resultado.motivo==="RESPONSAVEL_INVALIDO"){
+          UI.toast("Selecione um responsável válido da equipe antes de criar a obra.");
+        } else if(resultado.motivo==="VALOR_INVALIDO"){
+          UI.toast("Informe um valor real vendido maior que zero antes de criar a obra.");
+        }
+        return;
+      }
       UI.toast("Obra criada com sucesso!");
       Act.novaObraRecomecar();
-      location.hash = "#/obra/"+nova.id;
+      location.hash = "#/obra/"+resultado.obra.id;
     },
 
     // ---------- calendário ----------

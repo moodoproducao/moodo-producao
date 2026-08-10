@@ -16,27 +16,30 @@
     }
     const ind = C.indicadores();
     const obras = M.Store.state.obras;
-    const moveis = M.Store.allMoveis();
-    const refacoes = M.Store.state.tarefas.filter(t=>t.tipo==="REFACAO"||t.resultado==="GEROU_REFACAO").length;
+    const noMes = (data)=>!!data && data>=ind.periodo.inicio && data<ind.periodo.fim;
+    const tarefasMes = M.Store.state.tarefas.filter(t=>noMes(t.data));
+    const refacoes = tarefasMes.filter(t=>t.tipo==="REFACAO"||t.resultado==="GEROU_REFACAO").length;
     const pendAbertas = M.Store.state.pendencias.filter(p=>p.status!=="RESOLVIDA").length;
-    const ambientes = obras.reduce((s,o)=>s+o.ambientes.length,0);
-    const prazoMedio = Math.round(obras.reduce((s,o)=>s+C.diasAte(o.dataEntregaPrevista),0)/Math.max(1,obras.length));
-    const mesLabel = M.TODAY.toLocaleDateString("pt-BR",{month:"long",year:"numeric"});
+    const obrasAtivas = obras.filter(o=>C.progressoObra(o).pct<100);
+    const ambientesAtivos = obrasAtivas.reduce((s,o)=>s+o.ambientes.length,0);
+    const prazoMedio = Math.round(obrasAtivas.reduce((s,o)=>s+C.diasAte(o.dataEntregaPrevista),0)/Math.max(1,obrasAtivas.length));
+    const prazoMedioLabel = prazoMedio<0 ? `${Math.abs(prazoMedio)} dias de atraso` : `${prazoMedio} dias`;
+    const mesLabel = new Date(M.todayISO()+"T12:00:00").toLocaleDateString("pt-BR",{month:"long",year:"numeric"});
     const wip = C.wipPorEtapa();
     const maxWip = Math.max(...wip.map(r=>r.valor),1);
     const meta = C.metaMensalProgresso();
     const asst = C.assistenciasResumo();
 
     const html = `
-      <div class="help-banner">${UI.icon('bar-chart',13)} Estes números representam o volume da carteira processada — não são um indicador de eficiência industrial pura (isso viria de dados físicos de máquina, ainda uma fase futura).</div>
+      <div class="help-banner">${UI.icon('bar-chart',13)} Liberado, produzido, entregue e montado contam a primeira passagem pelo marco no mês. Em produção, aguardando montagem e pendências abertas são a fotografia atual da carteira.</div>
       <div class="card-title" style="margin-bottom:2px;text-transform:capitalize;">${mesLabel}</div>
       <div class="stat-row">
-        <div class="stat-tile"><div class="label">Carteira liberada</div><div class="value">${C.fmtBRLk(ind.liberado)}</div></div>
-        <div class="stat-tile"><div class="label">Produzido</div><div class="value">${C.fmtBRLk(ind.produzido)}</div></div>
-        <div class="stat-tile"><div class="label">Entregue</div><div class="value">${C.fmtBRLk(ind.entregue)}</div></div>
-        <div class="stat-tile"><div class="label">Montado</div><div class="value">${C.fmtBRLk(ind.montado)}</div></div>
-        <div class="stat-tile"><div class="label">Em produção</div><div class="value">${C.fmtBRLk(ind.emProducao)}</div></div>
-        <div class="stat-tile"><div class="label">Aguardando montagem</div><div class="value">${C.fmtBRLk(ind.aguardandoMontagem)}</div></div>
+        <div class="stat-tile"><div class="label">Liberado no mês</div><div class="value">${C.fmtBRLk(ind.liberado)}</div></div>
+        <div class="stat-tile"><div class="label">Produzido no mês</div><div class="value">${C.fmtBRLk(ind.produzido)}</div></div>
+        <div class="stat-tile"><div class="label">Entregue no mês</div><div class="value">${C.fmtBRLk(ind.entregue)}</div></div>
+        <div class="stat-tile"><div class="label">Montado no mês</div><div class="value">${C.fmtBRLk(ind.montado)}</div></div>
+        <div class="stat-tile"><div class="label">Em produção agora</div><div class="value">${C.fmtBRLk(ind.emProducao)}</div></div>
+        <div class="stat-tile"><div class="label">Aguardando montagem agora</div><div class="value">${C.fmtBRLk(ind.aguardandoMontagem)}</div></div>
       </div>
 
       <div class="card pad" style="margin-bottom:16px;">
@@ -64,14 +67,14 @@
           <div class="card-title">Outros indicadores do mês</div>
           <table class="tbl">
             <tbody>
-              <tr><td>Móveis produzidos (embalados ou além)</td><td class="right"><b>${ind.moveisProduzidos}</b></td></tr>
-              <tr><td>Ambientes em produção</td><td class="right"><b>${ambientes}</b></td></tr>
-              <tr><td>Obras ativas</td><td class="right"><b>${obras.length}</b></td></tr>
-              <tr><td>Tarefas registradas</td><td class="right"><b>${M.Store.state.tarefas.length}</b></td></tr>
-              <tr><td>Retrabalhos</td><td class="right"><b class="${refacoes?'critical':''}">${refacoes}</b></td></tr>
-              <tr><td>Pendências abertas</td><td class="right"><b class="${pendAbertas?'critical':''}">${pendAbertas}</b></td></tr>
-              <tr><td>Assistências abertas</td><td class="right"><b class="${asst.abertas?'critical':''}">${asst.abertas}</b></td></tr>
-              <tr><td>Prazo médio até entrega</td><td class="right"><b>${prazoMedio} dias</b></td></tr>
+              <tr><td>Móveis que chegaram à embalagem no mês</td><td class="right"><b>${ind.moveisProduzidos}</b></td></tr>
+              <tr><td>Ambientes de obras ativas (agora)</td><td class="right"><b>${ambientesAtivos}</b></td></tr>
+              <tr><td>Obras ativas (agora)</td><td class="right"><b>${obrasAtivas.length}</b></td></tr>
+              <tr><td>Tarefas com data no mês</td><td class="right"><b>${tarefasMes.length}</b></td></tr>
+              <tr><td>Retrabalhos com data no mês</td><td class="right"><b class="${refacoes?'critical':''}">${refacoes}</b></td></tr>
+              <tr><td>Pendências abertas (agora)</td><td class="right"><b class="${pendAbertas?'critical':''}">${pendAbertas}</b></td></tr>
+              <tr><td>Assistências abertas (agora)</td><td class="right"><b class="${asst.abertas?'critical':''}">${asst.abertas}</b></td></tr>
+              <tr><td>Prazo médio das obras ativas</td><td class="right"><b>${prazoMedioLabel}</b></td></tr>
             </tbody>
           </table>
         </div>

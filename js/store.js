@@ -163,6 +163,13 @@
     (state.obras||[]).forEach(o=>{
       (o.ambientes||[]).forEach(a=>{
         (a.moveis||[]).forEach(m=>{
+          // Histórico estruturado é a base dos indicadores mensais. Dados
+          // antigos não registravam as passagens de etapa; preservamos o que
+          // é comprovável (etapa atual + data de entrada) sem inventar datas.
+          if(!Array.isArray(m.historicoEtapas) || !m.historicoEtapas.length){
+            m.historicoEtapas = [{de:null, para:m.etapa, data:m.dataEntradaEtapa||M.todayISO()}];
+            mudou = true;
+          }
           if(m.checklist && m.checklist.length){
             m.checklist.forEach(c=>{
               const jaExiste = state.tarefas.some(t=>t.movelId===m.id && t.titulo===c.nome && t.origemChecklist);
@@ -434,6 +441,17 @@
       const i = ord.findIndex(e=>e.id===id);
       return i<0 ? ord.length : i;
     },
+    normalizarNumeroOS(numero){
+      const texto = String(numero||"").trim().toUpperCase();
+      if(!texto) return "";
+      const digitos = texto.replace(/\D/g, "");
+      return digitos || texto.replace(/\s+/g, "");
+    },
+    encontrarObraPorNumeroOS(numero){
+      const chave = Store.normalizarNumeroOS(numero);
+      if(!chave) return null;
+      return state.obras.find(o=>Store.normalizarNumeroOS(o.numeroOS)===chave) || null;
+    },
     proximaEtapaId(id){
       const ativas = Store.etapasAtivas();
       const pos = ativas.findIndex(e=>e.id===id);
@@ -671,8 +689,15 @@
           if(opts.novoResponsavel) f.m.responsavel = opts.novoResponsavel;
         }
       }
+      const etapaAnteriorId = f.m.etapa;
+      const agora = M.todayISO();
+      f.m.historicoEtapas = Array.isArray(f.m.historicoEtapas) ? f.m.historicoEtapas : [];
+      f.m.historicoEtapas.push({
+        de: etapaAnteriorId, para: novaEtapa.id, data: agora,
+        hora: new Date().toTimeString().slice(0,5), usuario: state.usuarioAtual,
+      });
       f.m.etapa = novaEtapa.id;
-      f.m.dataEntradaEtapa = M.todayISO();
+      f.m.dataEntradaEtapa = agora;
       Store.log(f.o.id, "MUDANCA_ETAPA", `${f.m.nome} → ${novaEtapa.nome}`);
       Store.criarTarefasPadraoParaEtapa(f, novaEtapa.id);
       emit();
@@ -908,10 +933,19 @@
 
     // ---------- nova obra ----------
     criarObra(obra){
+      const duplicada = Store.encontrarObraPorNumeroOS(obra && obra.numeroOS);
+      if(duplicada) return {ok:false, motivo:"OS_DUPLICADA", obra:duplicada};
+      const responsavel = obra && M.colabByNome(obra.responsavel);
+      if(!responsavel || responsavel.ativo===false) return {ok:false, motivo:"RESPONSAVEL_INVALIDO"};
+      if(!(Number(obra && obra.valorLiquido)>0)) return {ok:false, motivo:"VALOR_INVALIDO"};
       const processed = obra;
-      processed.fatorLiquido = processed.valorLiquido / processed.valorBruto;
+      const valorLiquido = Number(processed.valorLiquido) || 0;
+      const valorBrutoInformado = Number(processed.valorBruto) || 0;
+      processed.valorLiquido = valorLiquido;
+      processed.valorBruto = valorBrutoInformado>0 ? valorBrutoInformado : valorLiquido;
+      processed.fatorLiquido = processed.valorBruto>0 ? processed.valorLiquido / processed.valorBruto : 1;
       processed.desconto = processed.valorBruto - processed.valorLiquido;
-      processed.descontoPct = processed.desconto / processed.valorBruto;
+      processed.descontoPct = processed.valorBruto>0 ? processed.desconto / processed.valorBruto : 0;
       processed.ambientes.forEach(a=>{
         a.valorBruto = Math.round(processed.valorBruto * a.valorBrutoPct);
         a.valorLiquido = Math.round(a.valorBruto * processed.fatorLiquido);
@@ -927,6 +961,7 @@
           const primeiraEtapa = M.Store.etapasAtivas()[0];
           m.etapa = primeiraEtapa.id;
           m.requisitosOverride={}; m.dataEntradaEtapa=M.todayISO();
+          m.historicoEtapas = [{de:null, para:primeiraEtapa.id, data:m.dataEntradaEtapa, usuario:state.usuarioAtual}];
           // fase 2 do plano "obra no centro": sem checklist genérico (Corpo MDF,
           // Ferragens) — o trabalho real da etapa já vem de TAREFAS_PADRAO_ETAPA.
           // Só material especial vira componente crítico (exceção, não checklist).
@@ -951,7 +986,7 @@
       state.obras.push(processed);
       Store.log(processed.id, "OBRA_CRIADA", `Obra ${processed.numeroOS} criada a partir da importação.`);
       emit();
-      return processed;
+      return {ok:true, obra:processed};
     },
     // tarefa gerada a partir de um item de checklist de componente (ver criarObra
     // e migrarChecklistLegado) — não é obrigatória para avançar de etapa (nunca foi,
