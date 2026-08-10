@@ -58,6 +58,31 @@
     return pdfjsPromise;
   }
 
+  // page.getTextContent() do PDF.js usa "for await...of" direto num
+  // ReadableStream por baixo dos panos (streamTextContent + iteração
+  // assíncrona). Descobri via teste real num iPhone que o Safari/iOS
+  // não suporta esse protocolo de iteração assíncrona de ReadableStream
+  // de forma confiável (Symbol.asyncIterator) — quebra fundo dentro do
+  // PDF.js com "undefined is not a function", sem stack trace útil (o
+  // erro atravessa a fronteira do Web Worker e perde o stack original).
+  // Contorna lendo o mesmo stream manualmente com getReader() (suportado
+  // em qualquer navegador com Streams, inclusive Safari/iOS) em vez de
+  // depender da iteração assíncrona — mesmo resultado, sem depender do
+  // recurso que falha.
+  async function lerConteudoDaPagina(page){
+    const stream = page.streamTextContent({});
+    const reader = stream.getReader();
+    const textContent = { items: [], styles: Object.create(null), lang: null };
+    while(true){
+      const { done, value } = await reader.read();
+      if(done) break;
+      if(value.lang && !textContent.lang) textContent.lang = value.lang;
+      Object.assign(textContent.styles, value.styles);
+      textContent.items.push(...value.items);
+    }
+    return textContent;
+  }
+
   // --------------------------------------------------------------------
   // PDF → linhas de texto. Agrupa os itens de texto do PDF.js pela
   // posição Y (mesma linha visual = mesma linha do documento original,
@@ -78,7 +103,7 @@
       let page, content;
       try{ page = await pdf.getPage(p); }
       catch(err){ throw comEtapa(`abrir-pagina-${p}`, err); }
-      try{ content = await page.getTextContent(); }
+      try{ content = await lerConteudoDaPagina(page); }
       catch(err){ throw comEtapa(`ler-texto-pagina-${p}`, err); }
       let atualY = null, atual = [];
       content.items.forEach(item=>{
