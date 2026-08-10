@@ -5,7 +5,7 @@
   "use strict";
   const M = window.M;
   const UI = M.UI;
-  const APP_VERSION = "3.0.4";
+  const APP_VERSION = "3.0.5";
 
   function usuarioAtualColab(){
     return M.colabByNome(M.Store.state.usuarioAtual) || M.COLABORADORES[9];
@@ -54,6 +54,19 @@
   function connBadgeHtml(){
     const online = navigator.onLine!==false;
     return `<span class="conn-badge ${online?'':'offline'}" id="connBadge">${UI.icon(online?'wifi':'wifi-off',13)}${online?'Online':'Sem conexão'}</span>`;
+  }
+
+  // Toda tabela operacional precisa continuar utilizável no celular. Em vez
+  // de depender de cada página lembrar de criar seu próprio contêiner de
+  // rolagem, o shell normaliza automaticamente as tabelas renderizadas.
+  function prepararTabelasResponsivas(app){
+    app.querySelectorAll("table.tbl").forEach(tabela=>{
+      if(tabela.parentElement && tabela.parentElement.classList.contains("table-scroll")) return;
+      const wrapper = document.createElement("div");
+      wrapper.className = "table-scroll";
+      tabela.parentNode.insertBefore(wrapper,tabela);
+      wrapper.appendChild(tabela);
+    });
   }
 
   function shell(activeKey, page){
@@ -115,6 +128,7 @@
     }else{
       app.innerHTML = shell(key, page);
     }
+    prepararTabelasResponsivas(app);
     if(typeof page.afterRender === "function") page.afterRender();
     if(navegou) window.scrollTo(0,0);
     renderPwaBanner();

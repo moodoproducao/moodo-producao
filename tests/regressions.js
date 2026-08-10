@@ -31,6 +31,10 @@ assert.equal(app.M.todayISO(), hojeEsperado);
 
 // PDF: subtotal prevalece e, sem subtotal, quantidade multiplica valor unitário.
 executar(app, "js/pdf-import.js");
+const componentesDetectados = app.M.PdfImport.detectarComponentes("Painel com fita LED, espelho e estrutura em metalon");
+assert.equal(componentesDetectados.find(c=>c.tipo==="LED").geraPendenciaPadrao, false);
+assert.equal(componentesDetectados.find(c=>c.tipo==="Espelho").geraPendenciaPadrao, true);
+assert.equal(componentesDetectados.find(c=>c.tipo==="Serralheria").geraPendenciaPadrao, true);
 const doc = app.M.PdfImport.parseDocumento([
   "ORÇAMENTO Nº 2026/999", "Cliente: Teste Responsável: Willian Souza Telefone: 11 Email: teste@exemplo.com",
   "COZINHA", "Armário superior", "Quantidade: 2 Valor: R$ 100,00 Subtotal: R$ 200,00",
@@ -49,21 +53,41 @@ const combinadoSemValor = app.M.PdfImport.combinar(null, osSemValor);
 assert.equal(combinadoSemValor.valorBrutoTotal, 0);
 assert.equal(combinadoSemValor.temValores, false);
 
+// Nova Obra: componente desmarcado na revisão não pode virar pendência.
+app.M.UI = {};
+app.M.Pages = {};
+app.M.UIState = {novaObra:{
+  dados:{
+    numeroOS:"OS 9999/10", cliente:"Teste", responsavel:"Externo", valorBrutoTotal:100, valorFinalVendido:100,
+    data:app.M.todayISO(), dataEntregaPrevista:null, endereco:"", telefone:"", email:"",
+    itensOrc:[{ambiente:"SALA",item:"Painel",qtd:1,valorBruto:100}],
+    ambientes:[{nome:"SALA",itens:[{item:"Painel",materiaisEspeciais:[
+      {chave:"0:0:0",nome:"Espelho",tipo:"Espelho",geraPendenciaPadrao:true},
+      {chave:"0:0:1",nome:"LED",tipo:"LED",geraPendenciaPadrao:false},
+    ]}]}],
+  },
+  ambientesAjuste:{}, enderecoManual:"", numeroOSManual:"OS 9999/10", clienteManual:"Teste", responsavelProducao:"Willian Souza",
+  componentesSelecionados:{"0:0:0":true,"0:0:1":false},
+}};
+executar(app, "js/pages/novaObra.js");
+const obraMontada = app.M.Pages.novaObraMontar();
+assert.deepEqual(Array.from(obraMontada.ambientes[0].moveis[0].componentesCriticosIniciais, c=>c.tipo), ["Espelho"]);
+
 // Store: OS equivalente não pode entrar duas vezes.
 executar(app, "js/store.js");
 const existente = app.M.Store.state.obras[0];
 const antes = app.M.Store.state.obras.length;
-const duplicada = app.M.Store.criarObra({numeroOS:String(existente.numeroOS).replace("OS ", "os-")});
+const duplicada = app.M.Store.criarObra({numeroOS:String(existente.numeroOS).replace("OS ", "os-"),cliente:"Duplicada"});
 assert.equal(duplicada.ok, false);
 assert.equal(duplicada.motivo, "OS_DUPLICADA");
 assert.equal(app.M.Store.state.obras.length, antes);
-const invalida = app.M.Store.criarObra({numeroOS:"OS 9999/1", responsavel:"Pessoa Externa", valorLiquido:100});
+const invalida = app.M.Store.criarObra({numeroOS:"OS 9999/1", cliente:"Teste", responsavel:"Pessoa Externa", valorLiquido:100});
 assert.equal(invalida.motivo, "RESPONSAVEL_INVALIDO");
 assert.equal(app.M.Store.state.obras.length, antes);
 const semPreco = app.M.Store.criarObra({
   id:"obra-teste", numeroOS:"OS 9999/2", cliente:"Teste", responsavel:"Willian Souza",
   valorBruto:0, valorLiquido:100, ambientes:[{
-    id:"amb-teste", nome:"SALA", valorBrutoPct:1, moveis:[{
+    id:"amb-teste", nome:"SALA", valorBrutoPct:1, valorLiquido:100, moveis:[{
       id:"mov-teste", nome:"Painel", componentesCriticosIniciais:[], componentesCriticos:[], valorLiquido:100,
     }],
   }],
@@ -75,6 +99,17 @@ assert.equal(semPreco.obra.ambientes[0].valorLiquido, 100);
 assert.equal(semPreco.obra.ambientes[0].moveis[0].historicoEtapas.length, 1);
 assert.equal(app.M.Store.moverEtapa("mov-teste", "MEDICAO", {ignorarRequisitos:true}).ok, true);
 assert.equal(semPreco.obra.ambientes[0].moveis[0].historicoEtapas.length, 2);
+const rateioInvalido = app.M.Store.criarObra({
+  id:"obra-rateio-invalido", numeroOS:"OS 9999/3", cliente:"Teste", responsavel:"Willian Souza",
+  valorBruto:100, valorLiquido:100, ambientes:[{id:"amb-zero",nome:"SALA",valorBrutoPct:1,valorLiquido:0,moveis:[]}],
+});
+assert.equal(rateioInvalido.motivo, "RATEIO_INVALIDO");
+
+const fonteNovaObra = fs.readFileSync(path.join(root,"js/pages/novaObra.js"),"utf8");
+assert.match(fonteNovaObra, /Somente os itens marcados criarão uma pendência/);
+assert.match(fonteNovaObra, /não gerar/);
+const fonteMain = fs.readFileSync(path.join(root,"js/main.js"),"utf8");
+assert.match(fonteMain, /prepararTabelasResponsivas/);
 
 // Indicadores: marcos são contados no mês em que ocorreram, sem somar a
 // carteira inteira novamente todo mês.

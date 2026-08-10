@@ -93,7 +93,8 @@
     for(let i=0;i<startDow;i++) cells += `<div class="cal-cell empty"></div>`;
     for(let d=1; d<=dim; d++){
       const iso = `${ano}-${String(mes+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-      const isToday = d===M.TODAY.getDate() && mes===M.TODAY.getMonth() && ano===M.TODAY.getFullYear();
+      const hoje = new Date(M.todayISO()+"T12:00:00");
+      const isToday = d===hoje.getDate() && mes===hoje.getMonth() && ano===hoje.getFullYear();
       const dayEvts = evts[d]||[];
       const list = dayEvts.slice(0,3).map(e=>`<div class="cal-evt ${e.cls}" style="${e.cls?'':'background:var(--brand-wash);color:var(--brand-dark);'}">${UI.esc(e.label)}</div>`).join("");
       const more = dayEvts.length>3 ? `<div class="cal-more">+${dayEvts.length-3} mais</div>` : "";
@@ -114,7 +115,7 @@
           <b style="text-transform:capitalize;">${monthName}</b>
           <button class="btn-icon" onclick="Act.calNav(1)">${UI.icon('chevron-right',14)}</button>
         </div>
-        <div class="cal-grid">${dows}${cells}</div>
+        <div class="cal-scroll"><div class="cal-grid">${dows}${cells}</div></div>
       </div>
     `;
     return {title:"Calendário", crumb:"Medição, executivo, corte, fornecedores, entregas, montagens e prazos de pendência", html};

@@ -149,7 +149,7 @@ p{ margin:0; }
   .mobile-nav .m-link{ display:flex; flex-direction:column; align-items:center; gap:2px; color:#c9b8a4; font-size:9.5px; padding:6px 8px; border-radius:8px; }
   .mobile-nav .m-link.active{ color:#fff; }
   .mobile-nav .m-link .ico{ font-size:17px; }
-  .content{ padding-bottom:80px; }
+  .content{ padding:8px 16px 92px; }
 
   /* CORREÇÃO (auditoria UI/UX): no cabeçalho mobile, título longo + badge de
      conexão + botão de ação (ex.: "+ Nova Obra") não cabiam numa linha só —
@@ -163,6 +163,7 @@ p{ margin:0; }
 @media (max-width: 480px){
   .topbar{ flex-direction:column; align-items:stretch; }
   .topbar-actions{ width:100%; justify-content:flex-end; }
+  .topbar-actions .btn{ flex:1; justify-content:center; }
 }
 
 /* ============ buttons ============ */
@@ -178,9 +179,14 @@ p{ margin:0; }
 .btn.ghost:hover{ background:var(--surface-alt); }
 .btn.sm{ padding:5px 10px; font-size:12px; border-radius:7px; }
 .btn.danger{ color:var(--critical); border-color:var(--critical-bg); }
+@media (max-width:600px){
+  .btn{ min-height:42px; }
+  .btn.sm{ min-height:38px; }
+}
 .btn:disabled{ opacity:.45; cursor:not-allowed; }
 .btn-icon{ width:34px; height:34px; display:inline-flex; align-items:center; justify-content:center; border-radius:8px; border:1px solid var(--border-strong); background:var(--surface); cursor:pointer;}
 .btn-icon:hover{ background:var(--surface-alt); }
+@media (max-width:600px){ .btn-icon{ width:42px; height:42px; } }
 
 /* ============ chips / badges ============ */
 .chip{ display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:700; padding:3px 8px; border-radius:20px; white-space:nowrap;}
@@ -245,6 +251,9 @@ table.tbl th{ text-align:left; font-size:10.5px; text-transform:uppercase; lette
 table.tbl td{ padding:10px; border-bottom:1px solid var(--surface-alt); vertical-align:middle;}
 table.tbl tr:last-child td{ border-bottom:none;}
 table.tbl tr:hover td{ background:var(--surface-alt); }
+.table-scroll{ width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+.table-scroll table.tbl{ min-width:100%; }
+@media (max-width:600px){ .table-scroll table.tbl{ min-width:620px; } }
 
 /* ============ kanban ============ */
 .board-wrap{ overflow-x:auto; padding-bottom:12px; }
@@ -297,6 +306,16 @@ table.tbl tr:hover td{ background:var(--surface-alt); }
 .check-row:last-child{ border-bottom:none; }
 .check-row input[type=checkbox]{ width:16px;height:16px; accent-color:var(--brand); }
 .check-row.done .label{ text-decoration:line-through; color:var(--ink-mute); }
+@media (max-width:600px){
+  .overlay{ padding:0; align-items:stretch; }
+  .modal{ min-height:100dvh; margin:0; border-radius:0; border-left:0; border-right:0; }
+  .modal-head,.modal-body,.modal-foot{ padding-left:16px; padding-right:16px; }
+  .modal-close{ min-width:42px; min-height:42px; }
+  .modal-foot{ position:sticky; bottom:0; background:var(--surface); flex-wrap:wrap; }
+  .modal-foot .btn{ flex:1; justify-content:center; }
+  .field-row{ flex-direction:column; gap:0; }
+  .flex-between{ flex-wrap:wrap; gap:8px; }
+}
 
 .foto-galeria{ display:flex; flex-wrap:wrap; gap:10px; margin-top:8px; }
 .foto-thumb{ display:block; width:104px; height:104px; border-radius:10px; overflow:hidden; border:1px solid var(--border); flex-shrink:0; transition:opacity .15s; }
@@ -375,6 +394,7 @@ table.tbl tr:hover td{ background:var(--surface-alt); }
 /* calendar */
 .cal-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; font-size:15px; }
 .cal-grid{ display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:6px; }
+.cal-scroll{ overflow-x:auto; -webkit-overflow-scrolling:touch; }
 .cal-dow{ font-size:10.5px; color:var(--ink-mute); text-align:center; padding-bottom:4px; font-weight:700; text-transform:uppercase; min-width:0; overflow:hidden;}
 .cal-cell{ background:var(--surface); border:1px solid var(--border); border-radius:8px; min-height:86px; padding:6px; font-size:10.5px; min-width:0; overflow:hidden; cursor:pointer; transition:border-color .15s, box-shadow .15s;}
 .cal-cell:not(.empty):hover{ border-color:var(--brand); }
@@ -383,6 +403,10 @@ table.tbl tr:hover td{ background:var(--surface-alt); }
 .cal-daynum{ font-weight:700; color:var(--ink-soft); margin-bottom:4px;}
 .cal-evt{ font-size:9.5px; border-radius:5px; padding:2px 5px; margin-bottom:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:700;}
 .cal-more{ font-size:9.5px; color:var(--ink-mute); font-weight:700; margin-top:1px; }
+@media (max-width:600px){
+  .cal-grid{ min-width:560px; }
+  .cal-cell{ min-height:76px; }
+}
 
 /* TV mode — preto/dourado, alto contraste, industrial premium */
 body.tv-mode{ background:#0a0705; }
@@ -526,3 +550,15 @@ body.tv-mode .sidebar, body.tv-mode .mobile-nav, body.tv-mode .topbar-actions .h
 .oneform-section:last-child{ border-bottom:none; }
 .oneform-section .num-badge{ display:inline-flex; align-items:center; justify-content:center; width:24px;height:24px;border-radius:50%; background:var(--brand); color:#fff; font-size:11px; font-weight:800; margin-right:8px;}
 .oneform-section h2{ font-size:15px; display:flex; align-items:center; margin-bottom:14px;}
+.import-components{ display:flex; flex-direction:column; gap:8px; }
+.import-component{ display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:10px; border:1px solid var(--border); border-radius:9px; padding:9px 10px; cursor:pointer; }
+.import-component.selected{ border-color:rgba(178,58,46,.35); background:var(--critical-bg); }
+.import-component input{ width:17px; height:17px; accent-color:var(--brand); }
+.import-component > span:nth-child(2){ min-width:0; }
+.import-component > span:nth-child(2) .small{ display:block; margin-top:2px; overflow-wrap:anywhere; }
+@media (max-width:600px){
+  .oneform-section{ padding:18px 0; }
+  .dropzone{ padding:22px 12px; }
+  .import-component{ grid-template-columns:auto minmax(0,1fr); }
+  .import-component > .chip{ grid-column:2; justify-self:start; }
+}

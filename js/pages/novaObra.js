@@ -33,7 +33,9 @@
   function componentesEspeciaisFlat(dados){
     const out = [];
     dados.ambientes.forEach(a=> a.itens.forEach(it=>{
-      (it.materiaisEspeciais||[]).forEach(m=> out.push(`${m.nome} — ${it.item.slice(0,40)}${it.item.length>40?"…":""} (${a.nome})`));
+      (it.materiaisEspeciais||[]).forEach(m=> out.push(Object.assign({},m,{
+        descricaoItem:it.item, ambiente:a.nome,
+      })));
     }));
     return out;
   }
@@ -76,15 +78,22 @@
         const fator = brutoTotal>0 ? vendido/brutoTotal : 0;
         const rateioAuto = rateioAutomatico(grupos, vendido, brutoTotal);
         const componentesFlat = componentesEspeciaisFlat(dados);
-        const obraDuplicada = M.Store.encontrarObraPorNumeroOS(dados.numeroOS);
+        const numeroOSEfetivo = String(w.numeroOSManual||"").trim();
+        const clienteEfetivo = String(w.clienteManual||"").trim();
+        const obraDuplicada = M.Store.encontrarObraPorNumeroOS(numeroOSEfetivo);
 
         const somaLiquidoAjustado = Object.keys(grupos).reduce((s,nome)=>{
           const auto = rateioAuto[nome]||0;
           return s + (w.ambientesAjuste[nome]!=null? w.ambientesAjuste[nome] : auto);
         },0);
         const fecha = vendido>0 && Math.abs(somaLiquidoAjustado-vendido)<=0.01;
+        const rateioPositivo = Object.keys(grupos).length>0 && Object.keys(grupos).every(nome=>{
+          const valor = w.ambientesAjuste[nome]!=null ? w.ambientesAjuste[nome] : rateioAuto[nome];
+          return Number(valor)>0;
+        });
         const responsavelValido = M.COLABORADORES.some(c=>c.ativo!==false && c.nome===w.responsavelProducao);
-        const podeCriar = fecha && responsavelValido && !obraDuplicada;
+        const identificacaoValida = !!numeroOSEfetivo && !!clienteEfetivo;
+        const podeCriar = fecha && rateioPositivo && responsavelValido && identificacaoValida && !obraDuplicada;
 
         return `
       <div class="oneform-section">
@@ -92,7 +101,10 @@
         <p class="small muted">Confira — a leitura é automática (texto do PDF), então vale a pena revisar antes de criar a obra.</p>
         <div class="grid-2">
           <div class="card pad">
-            <p><b>${UI.esc(dados.numeroOS||"(número não identificado)")}</b> — ${UI.esc(dados.cliente||"(cliente não identificado)")}</p>
+            <div class="field-row">
+              <div class="field"><label>Número da OS *</label><input value="${UI.esc(w.numeroOSManual||'')}" placeholder="Ex.: OS 2026/336" onchange="Act.novaObraSetIdentificacao('numeroOS',this.value)"></div>
+              <div class="field"><label>Cliente *</label><input value="${UI.esc(w.clienteManual||'')}" placeholder="Nome do cliente" onchange="Act.novaObraSetIdentificacao('cliente',this.value)"></div>
+            </div>
             <p class="small muted">Responsável identificado no PDF: ${UI.esc(dados.responsavel||"—")}</p>
             <p class="small muted">${UI.esc(dados.telefone||"sem telefone")} · ${UI.esc(dados.email||"sem email")}</p>
             <p class="small muted">Entrega prevista: ${dados.dataEntregaPrevista? C.fmtDate(dados.dataEntregaPrevista) : "não identificada — ajuste depois na obra"}</p>
@@ -109,8 +121,15 @@
           </div>
           <div class="card pad">
             <div class="card-title">Componentes especiais identificados</div>
-            <p class="small muted" style="margin-top:-4px;">Detectado por palavra-chave no texto (vidro, espelho, serralheria, LED, pintura, estofado, material do cliente) — revise depois na obra, dá pra adicionar/remover em cada móvel.</p>
-            ${componentesFlat.length? `<ul style="margin:0 0 0 18px; font-size:12.5px; line-height:1.9;">${componentesFlat.map(c=>`<li>${UI.esc(c)}</li>`).join("")}</ul>`
+            <p class="small muted" style="margin-top:-4px;">Revise agora. Somente os itens marcados criarão uma pendência de alta prioridade e bloquearão o avanço normal do móvel. LED nasce desmarcado porque geralmente faz parte do próprio móvel.</p>
+            ${componentesFlat.length? `<div class="import-components">${componentesFlat.map(c=>{
+                const marcado = w.componentesSelecionados[c.chave]===true;
+                return `<label class="import-component ${marcado?'selected':''}">
+                  <input type="checkbox" ${marcado?'checked':''} onchange="Act.novaObraToggleComponente('${UI.esc(c.chave)}',this.checked)">
+                  <span><b>${UI.esc(c.nome)}</b><span class="small muted">${UI.esc(c.descricaoItem.slice(0,55))}${c.descricaoItem.length>55?'…':''} · ${UI.esc(c.ambiente)}</span></span>
+                  <span class="chip ${marcado?'critical':'neutral'}">${marcado?'gerar pendência':'não gerar'}</span>
+                </label>`;
+              }).join("")}</div>`
               : `<p class="small muted">Nenhum identificado automaticamente.</p>`}
           </div>
         </div>
@@ -122,7 +141,7 @@
         <div class="flex-gap" style="gap:20px;flex-wrap:wrap;margin-bottom:12px;">
           <div><div class="small muted">Valor bruto</div><b style="font-size:16px;">${C.fmtBRL(brutoTotal)}</b></div>
           <div><div class="small muted">Valor real vendido</div>
-            <input type="number" step="100" value="${vendido}" style="font-size:15px;font-weight:700;width:140px;padding:4px 6px;border-radius:6px;border:1px solid var(--border-strong);"
+            <input type="number" min="0" step="100" value="${vendido}" style="font-size:15px;font-weight:700;width:140px;padding:4px 6px;border-radius:6px;border:1px solid var(--border-strong);"
               onchange="Act.novaObraSetVendido(this.value)"></div>
           <div><div class="small muted">Desconto</div><b style="font-size:16px;">${brutoTotal>0 ? `${C.fmtBRL(brutoTotal-vendido)} (${Math.round((1-fator)*10000)/100}%)` : "não calculável sem orçamento"}</b></div>
         </div>
@@ -131,7 +150,7 @@
 
       <div class="oneform-section">
         <h2><span class="num-badge">4</span>Ambientes — rateio bruto → líquido</h2>
-        <table class="tbl">
+        <div class="table-scroll"><table class="tbl">
           <thead><tr><th>Ambiente</th><th>Itens</th><th>Valor bruto</th><th>Valor líquido (rateado)</th></tr></thead>
           <tbody>${Object.keys(grupos).map(nome=>{
             const bruto = grupos[nome].reduce((s,i)=>s+i.valorBruto,0);
@@ -142,11 +161,11 @@
               <td><b>${UI.esc(nome)}</b></td>
               <td class="small muted">${grupos[nome].length} item(ns)</td>
               <td>${C.fmtBRL(bruto)}</td>
-              <td><input type="number" step="100" value="${liquido}" style="width:130px;padding:6px 8px;border-radius:6px;border:1px solid var(--border-strong);"
+              <td><input type="number" min="0" step="100" value="${liquido}" style="width:130px;padding:6px 8px;border-radius:6px;border:1px solid var(--border-strong);"
                     onchange="Act.novaObraAjustarValor('${UI.esc(nome)}', this.value)"></td>
             </tr>`;
           }).join("")}</tbody>
-        </table>
+        </table></div>
         <div class="flex-between" style="margin-top:10px;">
           <button class="btn sm" onclick="Act.novaObraResetAjustes()">${UI.icon('refresh',13)} Recalcular rateio automático</button>
           <span class="small" style="${fecha?'color:var(--good);font-weight:700;':'color:var(--critical);font-weight:700;'}">
@@ -160,16 +179,21 @@
         ${dados.ambientes.map(a=>`
           <div class="card pad" style="margin-bottom:10px;">
             <div class="card-title">${UI.esc(a.nome)}</div>
-            ${a.itens.map(it=>`<div class="check-row"><span class="label"><b>${UI.esc(it.item)}</b>${it.materiaisEspeciais&&it.materiaisEspeciais.length? ` <span class="small muted">— ${it.materiaisEspeciais.map(m=>m.nome).join(", ")}</span>`:""}</span></div>`).join("")}
+            ${a.itens.map(it=>{
+              const ativos = (it.materiaisEspeciais||[]).filter(c=>w.componentesSelecionados[c.chave]===true);
+              return `<div class="check-row"><span class="label"><b>${UI.esc(it.item)}</b>${ativos.length? ` <span class="small muted">— pendências: ${ativos.map(m=>UI.esc(m.nome)).join(", ")}</span>`:""}</span></div>`;
+            }).join("")}
           </div>`).join("")}
       </div>
 
       <div class="oneform-section">
         <h2><span class="num-badge">6</span>Resumo</h2>
-        ${obraDuplicada? `<div class="help-banner" style="background:var(--critical-bg);border-color:var(--critical);color:var(--critical);margin-bottom:10px;">${UI.icon('alert',13)} A ${UI.esc(dados.numeroOS)} já existe para ${UI.esc(obraDuplicada.cliente)}. <a href="#/obra/${obraDuplicada.id}">Abrir obra existente</a>.</div>`:""}
-        <p class="small">Ao confirmar, a obra <b>${UI.esc(dados.numeroOS||"(sem número)")} — ${UI.esc(dados.cliente||"(sem cliente)")}</b> entra no Kanban de Produção na etapa inicial, com os ambientes e valores revisados acima.</p>
+        ${obraDuplicada? `<div class="help-banner" style="background:var(--critical-bg);border-color:var(--critical);color:var(--critical);margin-bottom:10px;">${UI.icon('alert',13)} A ${UI.esc(numeroOSEfetivo)} já existe para ${UI.esc(obraDuplicada.cliente)}. <a href="#/obra/${obraDuplicada.id}">Abrir obra existente</a>.</div>`:""}
+        <p class="small">Ao confirmar, a obra <b>${UI.esc(numeroOSEfetivo||"(sem número)")} — ${UI.esc(clienteEfetivo||"(sem cliente)")}</b> entra no Kanban de Produção na etapa inicial, com os ambientes e valores revisados acima.</p>
         <button class="btn primary" style="margin-top:10px;" ${podeCriar? "" : "disabled"} onclick="Act.novaObraCriar()">${UI.icon('check',14)} Criar obra</button>
         ${!fecha? `<p class="small critical" style="margin-top:6px;color:var(--critical);">Ajuste os valores líquidos por ambiente até a soma fechar com o valor vendido antes de criar a obra.</p>`:""}
+        ${fecha&&!rateioPositivo? `<p class="small critical" style="margin-top:6px;color:var(--critical);">Todos os ambientes precisam ter valor maior que zero.</p>`:""}
+        ${!identificacaoValida? `<p class="small critical" style="margin-top:6px;color:var(--critical);">Informe o número da OS e o nome do cliente.</p>`:""}
         ${!responsavelValido? `<p class="small critical" style="margin-top:6px;color:var(--critical);">Selecione um responsável pela produção.</p>`:""}
       </div>
       `; })() : ""}
@@ -205,7 +229,9 @@
           // separado, o trabalho real já é coberto pelas ações padrão de cada etapa
           // (TAREFAS_PADRAO_ETAPA). Só materiais especiais (vidro, espelho, serralheria...)
           // viram componente crítico — exceção, não checklist de todo mundo.
-          componentesCriticosIniciais: it.materiaisEspeciais||[],
+          componentesCriticosIniciais: (it.materiaisEspeciais||[])
+            .filter(c=>w.componentesSelecionados[c.chave]===true)
+            .map(c=>({nome:c.nome,tipo:c.tipo})),
           componentesCriticos:[], dataEntradaEtapa:M.todayISO(),
           dataPrevista: dados.dataEntregaPrevista || M.dOff(20), dataReal:null, valorLiquido:valorItem, requisitosOverride:{},
         };
@@ -214,7 +240,7 @@
     });
 
     return {
-      id: M.uid("obra"), numeroOS: dados.numeroOS || ("OS "+M.uid("").replace("-","")), cliente: dados.cliente || "Cliente não identificado",
+      id: M.uid("obra"), numeroOS: String(w.numeroOSManual||"").trim(), cliente: String(w.clienteManual||"").trim(),
       endereco: w.enderecoManual || dados.endereco || "", telefone: dados.telefone || "", email: dados.email || "",
       responsavel: w.responsavelProducao, responsavelDocumento:dados.responsavel||"", dataOS: dados.data || M.todayISO(),
       dataEntregaPrevista: dados.dataEntregaPrevista || M.dOff(20), dataEntregaReal:null,

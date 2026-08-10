@@ -933,11 +933,18 @@
 
     // ---------- nova obra ----------
     criarObra(obra){
+      if(!obra || !String(obra.numeroOS||"").trim() || !String(obra.cliente||"").trim()){
+        return {ok:false, motivo:"DADOS_OBRA_INVALIDOS"};
+      }
       const duplicada = Store.encontrarObraPorNumeroOS(obra && obra.numeroOS);
       if(duplicada) return {ok:false, motivo:"OS_DUPLICADA", obra:duplicada};
       const responsavel = obra && M.colabByNome(obra.responsavel);
       if(!responsavel || responsavel.ativo===false) return {ok:false, motivo:"RESPONSAVEL_INVALIDO"};
       if(!(Number(obra && obra.valorLiquido)>0)) return {ok:false, motivo:"VALOR_INVALIDO"};
+      const ambientesValidos = Array.isArray(obra.ambientes) && obra.ambientes.length>0
+        && obra.ambientes.every(a=>Number.isFinite(Number(a.valorBrutoPct)) && Number(a.valorBrutoPct)>0 && Number(a.valorLiquido)>0);
+      const somaPct = ambientesValidos ? obra.ambientes.reduce((s,a)=>s+Number(a.valorBrutoPct),0) : 0;
+      if(!ambientesValidos || Math.abs(somaPct-1)>0.001) return {ok:false, motivo:"RATEIO_INVALIDO"};
       const processed = obra;
       const valorLiquido = Number(processed.valorLiquido) || 0;
       const valorBrutoInformado = Number(processed.valorBruto) || 0;

@@ -13,7 +13,8 @@
     obraTab: {},
     obraFoco: {}, // {obraId: ambienteId} — ambiente em destaque na página operacional da obra (plano "obra no centro")
     novaObra: {osFileObj:null, osFileName:null, orcFileObj:null, orcFileName:null,
-      lendo:false, lido:false, erro:null, dados:null, enderecoManual:"", ambientesAjuste:{}, responsavelProducao:""},
+      lendo:false, lido:false, erro:null, dados:null, enderecoManual:"", numeroOSManual:"", clienteManual:"",
+      ambientesAjuste:{}, responsavelProducao:"", componentesSelecionados:{}},
     pendFiltro: {categoria:"", status:""},
     pendExpandido: null,
     tarefaFiltro: {responsavel:"", status:"", obraId:""},
@@ -444,7 +445,8 @@
       else { w.orcFileObj = file; w.orcFileName = file.name; }
       // troca de arquivo depois de já ter lido: limpa o resultado anterior,
       // senão a tela ficaria mostrando dados de um PDF que não é mais esse.
-      w.lido = false; w.dados = null; w.erro = null; w.responsavelProducao = "";
+      w.lido = false; w.dados = null; w.erro = null; w.responsavelProducao = ""; w.componentesSelecionados = {};
+      w.numeroOSManual = ""; w.clienteManual = "";
       Act.rerender();
     },
     async novaObraLerPdf(){
@@ -471,6 +473,12 @@
           const nomeDocumento = normalizarNome(dados.responsavel);
           const colaborador = M.COLABORADORES.find(c=>c.ativo!==false && normalizarNome(c.nome)===nomeDocumento);
           w.responsavelProducao = colaborador ? colaborador.nome : "";
+          w.numeroOSManual = dados.numeroOS || "";
+          w.clienteManual = dados.cliente || "";
+          w.componentesSelecionados = {};
+          dados.ambientes.forEach(a=>a.itens.forEach(it=>(it.materiaisEspeciais||[]).forEach(c=>{
+            w.componentesSelecionados[c.chave] = c.geraPendenciaPadrao!==false;
+          })));
           w.lido = true;
         }
       }catch(err){
@@ -483,18 +491,30 @@
     },
     novaObraRecomecar(){
       M.UIState.novaObra = {osFileObj:null, osFileName:null, orcFileObj:null, orcFileName:null,
-        lendo:false, lido:false, erro:null, dados:null, enderecoManual:"", ambientesAjuste:{}, responsavelProducao:""};
+        lendo:false, lido:false, erro:null, dados:null, enderecoManual:"", numeroOSManual:"", clienteManual:"",
+        ambientesAjuste:{}, responsavelProducao:"", componentesSelecionados:{}};
       Act.rerender();
     },
     novaObraSetEndereco(valor){ M.UIState.novaObra.enderecoManual = valor; },
+    novaObraSetIdentificacao(campo, valor){
+      if(campo==="numeroOS") M.UIState.novaObra.numeroOSManual = valor;
+      if(campo==="cliente") M.UIState.novaObra.clienteManual = valor;
+      Act.rerender();
+    },
     novaObraSetResponsavel(valor){ M.UIState.novaObra.responsavelProducao = valor; Act.rerender(); },
+    novaObraToggleComponente(chave, marcado){
+      M.UIState.novaObra.componentesSelecionados[chave] = !!marcado;
+      Act.rerender();
+    },
     novaObraSetVendido(valor){
-      M.UIState.novaObra.dados.valorFinalVendido = Number(valor);
+      const numero = Number(valor);
+      M.UIState.novaObra.dados.valorFinalVendido = Number.isFinite(numero) ? numero : 0;
       M.UIState.novaObra.ambientesAjuste = {}; // valor vendido mudou: rateio automático recalcula do zero
       Act.rerender();
     },
     novaObraAjustarValor(ambKey, valor){
-      M.UIState.novaObra.ambientesAjuste[ambKey] = Number(valor);
+      const numero = Number(valor);
+      M.UIState.novaObra.ambientesAjuste[ambKey] = Number.isFinite(numero) ? numero : 0;
       Act.rerender();
     },
     novaObraResetAjustes(){ M.UIState.novaObra.ambientesAjuste = {}; Act.rerender(); },
@@ -509,6 +529,10 @@
           UI.toast("Selecione um responsável válido da equipe antes de criar a obra.");
         } else if(resultado.motivo==="VALOR_INVALIDO"){
           UI.toast("Informe um valor real vendido maior que zero antes de criar a obra.");
+        } else if(resultado.motivo==="RATEIO_INVALIDO"){
+          UI.toast("Revise o rateio: todos os ambientes precisam ter valor positivo e a soma deve fechar.");
+        } else if(resultado.motivo==="DADOS_OBRA_INVALIDOS"){
+          UI.toast("Informe o número da OS e o nome do cliente antes de criar a obra.");
         }
         return;
       }

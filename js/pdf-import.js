@@ -151,16 +151,22 @@
     {re:/serralheria|metalon/i, tipo:"Serralheria"},
     {re:/pintur|pintad/i, tipo:"Pintura"},
     {re:/estofad/i, tipo:"Estofado"},
-    {re:/\bled\b|neon\s*led/i, tipo:"LED"},
+    // LED costuma fazer parte do próprio móvel e não deve bloquear a produção
+    // sozinho. Continua sendo sugerido, mas nasce desmarcado para revisão.
+    {re:/\bled\b|neon\s*led/i, tipo:"LED", geraPendenciaPadrao:false},
     {re:/fornecid[oa]s?\s+pel[ao]\s+client|n[aã]o\s+incluso/i, tipo:"Material do cliente"},
   ];
   // devolve {nome, tipo} — não só o tipo — pra Store.criarObra conseguir
   // gerar a pendência já com a categoria certa (Vidro/Serralheria/...) em vez
   // de cair no genérico "Material especial" (fluxo de pendência mais raso).
   function detectarComponentes(descricao){
-    const tipos = [];
-    PALAVRAS_COMPONENTE.forEach(p=>{ if(p.re.test(descricao)) tipos.push(p.tipo); });
-    return Array.from(new Set(tipos)).map(tipo=> ({ nome: tipo, tipo }));
+    const encontrados = [];
+    PALAVRAS_COMPONENTE.forEach(p=>{
+      if(p.re.test(descricao) && !encontrados.some(x=>x.tipo===p.tipo)){
+        encontrados.push({nome:p.tipo, tipo:p.tipo, geraPendenciaPadrao:p.geraPendenciaPadrao!==false});
+      }
+    });
+    return encontrados;
   }
   PdfImport.detectarComponentes = detectarComponentes;
 
@@ -267,9 +273,12 @@
     const fonteAmbientes = (orc && orc.ambientes && orc.ambientes.length) ? orc.ambientes : ((os && os.ambientes) || []);
     if(!fonteAmbientes.length) return null;
 
-    const ambientes = fonteAmbientes.map(a=>({
+    const ambientes = fonteAmbientes.map((a,ambIdx)=>({
       nome: a.nome,
-      itens: a.itens.map(it=>({ item: it.descricao, qtd: it.quantidade||1, materiaisEspeciais: it.materiaisEspeciais||[] })),
+      itens: a.itens.map((it,itemIdx)=>({
+        item: it.descricao, qtd: it.quantidade||1,
+        materiaisEspeciais: (it.materiaisEspeciais||[]).map((m,compIdx)=>Object.assign({},m,{chave:`${ambIdx}:${itemIdx}:${compIdx}`})),
+      })),
     }));
     const itensOrc = [];
     fonteAmbientes.forEach(a=> a.itens.forEach(it=>{
