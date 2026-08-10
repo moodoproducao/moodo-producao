@@ -30,16 +30,30 @@
   const SCRIPT_SRC = document.currentScript && document.currentScript.src;
   const BASE = SCRIPT_SRC ? SCRIPT_SRC.replace(/[^\/]*$/, "") : "js/";
 
+  // marca cada erro com a etapa exata em que ele aconteceu — sem isso, um
+  // erro dentro do PDF.js (worker, minificado) chega na tela só como
+  // "undefined is not a function" sem dizer QUAL chamada falhou. Cada
+  // rótulo abaixo aparece entre colchetes no início da mensagem exibida,
+  // pra dar pra diagnosticar remotamente (sem devtools no aparelho de
+  // quem está usando) qual etapa exata travou.
+  function comEtapa(etapa, erroOriginal){
+    const msg = (erroOriginal && erroOriginal.message) || String(erroOriginal);
+    const e = new Error(`[${etapa}] ${msg}`);
+    e.etapaOriginal = etapa;
+    return e;
+  }
+
   let pdfjsPromise = null;
   function carregarPdfJs(){
     if(pdfjsPromise) return pdfjsPromise;
     pdfjsPromise = import(BASE + "vendor/pdfjs/pdf.min.mjs").then(mod=>{
       mod.GlobalWorkerOptions.workerSrc = BASE + "vendor/pdfjs/pdf.worker.min.mjs";
+      PdfImport._pdfjsLib = mod; // acessível pelo console pra diagnóstico remoto, se precisar
       return mod;
     }).catch(err=>{
       pdfjsPromise = null;
       console.error("[Moodo] falha ao carregar PDF.js:", err);
-      throw new Error("Não consegui carregar o leitor de PDF. Recarregue a página e tente de novo.");
+      throw comEtapa("carregar-biblioteca", err);
     });
     return pdfjsPromise;
   }
@@ -51,12 +65,21 @@
   // --------------------------------------------------------------------
   PdfImport.extrairLinhas = async function(file){
     const pdfjsLib = await carregarPdfJs();
-    const buffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+    let buffer;
+    try{ buffer = await file.arrayBuffer(); }
+    catch(err){ throw comEtapa("ler-arquivo", err); }
+
+    let pdf;
+    try{ pdf = await pdfjsLib.getDocument({ data: buffer }).promise; }
+    catch(err){ throw comEtapa("abrir-pdf", err); }
+
     const linhas = [];
     for(let p=1; p<=pdf.numPages; p++){
-      const page = await pdf.getPage(p);
-      const content = await page.getTextContent();
+      let page, content;
+      try{ page = await pdf.getPage(p); }
+      catch(err){ throw comEtapa(`abrir-pagina-${p}`, err); }
+      try{ content = await page.getTextContent(); }
+      catch(err){ throw comEtapa(`ler-texto-pagina-${p}`, err); }
       let atualY = null, atual = [];
       content.items.forEach(item=>{
         if(!item.str || !item.str.trim()) return;

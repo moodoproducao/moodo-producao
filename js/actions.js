@@ -455,9 +455,14 @@
           w.orcFileObj ? M.PdfImport.extrairLinhas(w.orcFileObj) : Promise.resolve(null),
           w.osFileObj ? M.PdfImport.extrairLinhas(w.osFileObj) : Promise.resolve(null),
         ]);
-        const orcParsed = orcLinhas ? M.PdfImport.parseDocumento(orcLinhas) : null;
-        const osParsed = osLinhas ? M.PdfImport.parseDocumento(osLinhas) : null;
-        const dados = M.PdfImport.combinar(orcParsed, osParsed);
+        let orcParsed, osParsed, dados;
+        try{
+          orcParsed = orcLinhas ? M.PdfImport.parseDocumento(orcLinhas) : null;
+          osParsed = osLinhas ? M.PdfImport.parseDocumento(osLinhas) : null;
+          dados = M.PdfImport.combinar(orcParsed, osParsed);
+        }catch(err){
+          throw new Error("[interpretar-conteudo] " + ((err && err.message) || err));
+        }
         if(!dados){
           w.erro = "Não consegui identificar os ambientes/itens neste PDF. Confira se é o formato padrão da Moodo (Orçamento ou Ordem de Serviço).";
         } else {
@@ -466,7 +471,8 @@
         }
       }catch(err){
         console.error("[Moodo] erro ao ler PDF:", err);
-        w.erro = err.message || "Erro ao ler o PDF.";
+        const nome = err && err.name && err.name!=="Error" ? err.name+": " : "";
+        w.erro = nome + ((err && err.message) || "Erro ao ler o PDF.");
       }
       w.lendo = false;
       Act.rerender();
