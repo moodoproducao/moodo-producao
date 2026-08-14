@@ -62,6 +62,38 @@
     return {nivel, diasEntrega, pendencias:pend, progresso:prog.pct};
   }
 
+  // ---------- situação centralizada (Fase 1 — Fundação) ----------
+  // Único lugar que decide o "tom" (cor semântica) de um móvel/obra. Antes,
+  // Dashboard, Produção e Obra calculavam essa mesma coisa cada um do seu
+  // jeito (ex.: `bloqueios.length?'critical':movelConcluido?'good':'neutral'`
+  // repetido em duas páginas, e o mapeamento de cor de risco duplicado entre
+  // ui.js e o Dashboard). Fase 1 só ORGANIZA a leitura do que já existe hoje
+  // — não muda o modelo de dados nem introduz o status "Travado" de verdade
+  // (isso é Fase 4 · Montagem, com motivo obrigatório por ambiente). O tom
+  // "blocked" já existe aqui e no CSS (.chip.blocked/.dot.blocked/hachura)
+  // pronto pra quando essa fase chegar.
+  function situacaoMovel(m){
+    const bloqueios = M.Store.bloqueiosMovel(m.id);
+    if(bloqueios.length){
+      return {key:"BLOQUEADO", label:"Bloqueado", tone:"critical", detalhe:bloqueios[0].categoria};
+    }
+    if(movelConcluido(m)){
+      return {key:"CONCLUIDO", label:"Concluído", tone:"good"};
+    }
+    if(!m.dataReal && m.dataPrevista && diasAte(m.dataPrevista) < 0){
+      return {key:"ATRASADO", label:`Atrasado ${-diasAte(m.dataPrevista)}d`, tone:"warning"};
+    }
+    const etapa = M.Store.etapaById(m.etapa);
+    return {key:"EM_ANDAMENTO", label: etapa? (etapa.nomeCurto||etapa.nome) : "Em andamento", tone:"neutral"};
+  }
+
+  function situacaoObra(o){
+    const r = riscoObra(o); // reaproveita o cálculo de risco já existente — não duplica
+    const tonePorNivel = {ALTO:"critical", MEDIO:"warning", BAIXO:"good"};
+    const labelPorNivel = {ALTO:"Risco alto", MEDIO:"Risco médio", BAIXO:"Risco baixo"};
+    return Object.assign({}, r, {tone: tonePorNivel[r.nivel]||"neutral", label: labelPorNivel[r.nivel]||r.nivel});
+  }
+
   function wipPorEtapa(){
     const etapas = M.Store.etapasOrdenadas();
     const rows = etapas.map(e=>({etapa:e.id, label:e.nomeCurto||e.nome, qtd:0, valor:0}));
@@ -74,29 +106,7 @@
     return rows;
   }
 
-  function periodoMesAtual(){
-    const inicio = M.todayISO().slice(0,7) + "-01";
-    const [ano, mes] = inicio.split("-").map(Number);
-    const proximo = new Date(ano, mes, 1);
-    const fim = `${proximo.getFullYear()}-${String(proximo.getMonth()+1).padStart(2,"0")}-01`;
-    return {inicio, fim};
-  }
-  function dataPrimeiraPassagem(m, etapaMarco){
-    const marco = pos(etapaMarco);
-    const historico = Array.isArray(m.historicoEtapas) && m.historicoEtapas.length
-      ? m.historicoEtapas
-      : [{de:null, para:m.etapa, data:m.dataEntradaEtapa}];
-    return historico
-      .filter(h=>h && h.data && pos(h.para)>=marco)
-      .slice()
-      .sort((a,b)=>`${a.data} ${a.hora||""}`.localeCompare(`${b.data} ${b.hora||""}`))[0]?.data || null;
-  }
-  function dentroDoPeriodo(data, periodo){
-    return !!data && data>=periodo.inicio && data<periodo.fim;
-  }
-
-  function indicadores(periodo){
-    periodo = periodo || periodoMesAtual();
+  function indicadores(){
     let liberado=0, produzido=0, entregue=0, montado=0, emProducao=0, aguardandoMontagem=0;
     let moveisProduzidos=0;
     const pLiberada = pos("LIBERADA"), pEmbalagem = pos("EMBALAGEM"), pEntrega = pos("ENTREGA"),
@@ -104,14 +114,14 @@
     M.Store.allMoveis().forEach(({m})=>{
       const v = m.valorLiquido||0;
       const pm = pos(m.etapa);
-      if(dentroDoPeriodo(dataPrimeiraPassagem(m,"LIBERADA"), periodo)) liberado += v;
-      if(dentroDoPeriodo(dataPrimeiraPassagem(m,"EMBALAGEM"), periodo)){ produzido += v; moveisProduzidos++; }
-      if(dentroDoPeriodo(dataPrimeiraPassagem(m,"ENTREGA"), periodo)) entregue += v;
-      if(dentroDoPeriodo(dataPrimeiraPassagem(m,"MONTAGEM"), periodo)) montado += v;
+      if(pm>=pLiberada) liberado += v;
+      if(pm>=pEmbalagem){ produzido += v; moveisProduzidos++; }
+      if(pm>=pEntrega) entregue += v;
+      if(pm>=pMontagem) montado += v;
       if(pm>=pCorte && pm<pEmbalagem) emProducao += v;
       if(m.etapa==="ENTREGA") aguardandoMontagem += v;
     });
-    return {liberado, produzido, entregue, montado, emProducao, aguardandoMontagem, moveisProduzidos, periodo};
+    return {liberado, produzido, entregue, montado, emProducao, aguardandoMontagem, moveisProduzidos};
   }
 
   function parseHora(hhmm){ if(!hhmm) return null; const [h,m] = hhmm.split(":").map(Number); return h*60+m; }
@@ -337,11 +347,11 @@
   M.Calc = {
     fmtBRL, fmtBRLk, fmtDate, fmtPct, daysBetween, diasDesde, diasAte,
     movelConcluido, progressoGrupo, progressoObra, progressoAmbiente,
-    itemCriticoGrupo, pendenciasAbertasDe, riscoObra, wipPorEtapa, indicadores,
+    itemCriticoGrupo, pendenciasAbertasDe, riscoObra, situacaoMovel, situacaoObra, wipPorEtapa, indicadores,
     parseHora, duracaoHoras, valorProcessadoTarefa, desempenhoColaborador,
     paraFinalizar, paraFinalizarTotal, alertasGlobais,
     indiceDesempenho, pendenciasDoColaborador, rankingColaboradores,
-    assistenciasResumo, auditoriaResumo, metaMensalProgresso, origemProblemaResumo, periodoMesAtual,
+    assistenciasResumo, auditoriaResumo, metaMensalProgresso, origemProblemaResumo,
     producaoHoje,
   };
 })();

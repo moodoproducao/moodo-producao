@@ -31,7 +31,7 @@
     const wip = C.wipPorEtapa().filter(r=>r.etapa!=="FINALIZADA");
     const maxWip = Math.max(...wip.map(r=>r.qtd),1);
 
-    const riscoRows = obras.map(o=>({o, risco:C.riscoObra(o)}))
+    const riscoRows = obras.map(o=>({o, risco:C.situacaoObra(o)}))
       .sort((a,b)=> ({ALTO:0,MEDIO:1,BAIXO:2}[a.risco.nivel]) - ({ALTO:0,MEDIO:1,BAIXO:2}[b.risco.nivel]));
 
     const html = `
@@ -73,9 +73,9 @@
             <div class="risk-card" style="margin-bottom:10px;">
               <div class="flex-between">
                 <div><b>${UI.esc(o.cliente)}</b><div class="small muted">${o.numeroOS}</div></div>
-                ${UI.riscoChip(risco.nivel)}
+                ${UI.riscoChip(risco)}
               </div>
-              <div class="risk-bar"><div style="width:${risco.progresso}%;height:100%;background:${risco.nivel==='ALTO'?'var(--critical)':risco.nivel==='MEDIO'?'var(--warning-fill)':'var(--good)'};border-radius:4px;"></div></div>
+              <div class="risk-bar"><div style="width:${risco.progresso}%;height:100%;background:var(--${risco.tone});border-radius:var(--radius-sm);"></div></div>
               <div class="flex-between small muted">
                 <span>${risco.progresso}% concluído</span>
                 <span>${risco.pendencias} pendência(s) · ${risco.diasEntrega<0? `${-risco.diasEntrega}d atrasada`: `entrega em ${risco.diasEntrega}d`}</span>

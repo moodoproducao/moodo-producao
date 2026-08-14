@@ -258,9 +258,10 @@
         <div style="margin-top:10px;">
           ${a.moveis.map(m=>{
             const bloqueiosM = M.Store.bloqueiosMovel(m.id);
+            const sit = C.situacaoMovel(m);
             return `
             <div class="check-row" style="cursor:pointer;" onclick="Act.openMovel('${m.id}')">
-              <span class="dot ${bloqueiosM.length?'critical':C.movelConcluido(m)?'good':'neutral'}"></span>
+              <span class="dot ${sit.tone}"></span>
               <span class="label"><b>${UI.esc(m.nome)}</b> <span class="chip neutral" style="margin-left:4px;">${UI.esc(M.Store.etapaById(m.etapa).nome)}</span>
                 <div class="small muted">resp. ${UI.esc(m.responsavel)} · ${UI.valorOuOculto(C.fmtBRL(m.valorLiquido))}${bloqueiosM.length? " · ⏳ "+UI.esc(bloqueiosM[0].categoria)+(bloqueiosM.length>1?` +${bloqueiosM.length-1}`:''):""}</div></span>
             </div>`;}).join("")}
@@ -369,7 +370,7 @@
     if(!o) return {title:"Obra não encontrada", html:`<p>Obra não encontrada. <a href="#/obras">Voltar</a></p>`};
     const tab = M.UIState.obraTab[o.id] || "geral";
     const prog = C.progressoObra(o);
-    const risco = C.riscoObra(o);
+    const risco = C.situacaoObra(o);
 
     const header = `
       <div class="card pad" style="margin-bottom:16px;">
@@ -382,7 +383,7 @@
             <div><div class="small muted">Valor líquido</div><b>${UI.valorOuOculto(C.fmtBRL(o.valorLiquido))}</b></div>
             <div><div class="small muted">Progresso</div><b>${prog.pct}%</b></div>
             <div><div class="small muted">Entrega</div><b>${C.fmtDate(o.dataEntregaPrevista)}</b></div>
-            <div><div class="small muted">Risco</div>${UI.riscoChip(risco.nivel)}</div>
+            <div><div class="small muted">Risco</div>${UI.riscoChip(risco)}</div>
           </div>
         </div>
         <div style="margin-top:10px;">${UI.progressBar(prog.pct)}</div>

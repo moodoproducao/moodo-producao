@@ -73,9 +73,16 @@
   }
   function person(nome){ return `<span class="person">${avatar(nome,"sm")} ${esc(nome)}</span>`; }
 
-  function riscoChip(nivel){
+  // recebe o nível (compat com quem só tem o nível em mãos) OU o objeto
+  // {tone,label} de M.Calc.situacaoObra — evita reimplementar aqui o
+  // mapeamento nível→cor que já existe centralizado em calc.js.
+  function riscoChip(nivelOuSituacao){
+    if(nivelOuSituacao && typeof nivelOuSituacao==="object"){
+      const {tone,label} = nivelOuSituacao;
+      return `<span class="chip ${tone}"><span class="dot ${tone}"></span>${label}</span>`;
+    }
     const map = {BAIXO:["good","Risco baixo"], MEDIO:["warning","Risco médio"], ALTO:["critical","Risco alto"]};
-    const [cls,label] = map[nivel]||["neutral",nivel];
+    const [cls,label] = map[nivelOuSituacao]||["neutral",nivelOuSituacao];
     return `<span class="chip ${cls}"><span class="dot ${cls}"></span>${label}</span>`;
   }
   function statusPendenciaChip(status){

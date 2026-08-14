@@ -15,7 +15,7 @@
     const obras = restrito ? M.Store.state.obras.filter(o=>meuObraIds.has(o.id)) : M.Store.state.obras;
     const rows = obras.map(o=>{
       const prog = C.progressoObra(o);
-      const risco = C.riscoObra(o);
+      const risco = C.situacaoObra(o);
       return `<tr onclick="Act.go('#/obra/${o.id}')" style="cursor:pointer;">
         <td><b>${UI.esc(o.cliente)}</b><div class="small muted">${o.numeroOS}</div></td>
         <td>${o.ambientes.length} amb. · ${o.ambientes.reduce((s,a)=>s+a.moveis.length,0)} móveis</td>
@@ -23,7 +23,7 @@
         <td>${UI.valorOuOculto(C.fmtBRL(o.valorLiquido))}</td>
         <td>${C.fmtDate(o.dataEntregaPrevista)} ${risco.diasEntrega<0?`<span class="chip critical">${-risco.diasEntrega}d atraso</span>`:""}</td>
         <td>${risco.pendencias? `<span class="chip critical">${risco.pendencias}</span>` : `<span class="chip good">0</span>`}</td>
-        <td>${UI.riscoChip(risco.nivel)}</td>
+        <td>${UI.riscoChip(risco)}</td>
       </tr>`;
     }).join("");
 

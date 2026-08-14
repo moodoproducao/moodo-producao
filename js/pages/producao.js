@@ -253,9 +253,10 @@
     const prog = C.progressoAmbiente(a);
     const rows = a.moveis.map(m=>{
       const bloqueiosM = M.Store.bloqueiosMovel(m.id);
+      const sit = C.situacaoMovel(m);
       return `
       <div class="check-row" style="cursor:pointer;" onclick="UI.closeModal();Act.openMovel('${m.id}')">
-        <span class="dot ${bloqueiosM.length?'critical':C.movelConcluido(m)?'good':'neutral'}"></span>
+        <span class="dot ${sit.tone}"></span>
         <span class="label"><b>${UI.esc(m.nome)}</b> <span class="chip neutral" style="margin-left:4px;">${UI.esc(M.Store.etapaById(m.etapa).nome)}</span>
           <div class="small muted">resp. ${UI.esc(m.responsavel)}${bloqueiosM.length? " · ⏳ "+UI.esc(bloqueiosM[0].categoria)+(bloqueiosM.length>1?` +${bloqueiosM.length-1}`:''):""}</div></span>
       </div>`;}).join("");
