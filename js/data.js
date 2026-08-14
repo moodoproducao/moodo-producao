@@ -7,20 +7,9 @@ window.M = window.M || {};
   "use strict";
 
   // ---------- datas utilitárias ----------
-  function inicioDoDiaAtual(){
-    const agora = new Date();
-    return new Date(agora.getFullYear(), agora.getMonth(), agora.getDate());
-  }
-  function dataLocalISO(data){
-    const pad = n=>String(n).padStart(2,"0");
-    return `${data.getFullYear()}-${pad(data.getMonth()+1)}-${pad(data.getDate())}`;
-  }
-  // TODAY continua sendo a referência inicial do calendário desta sessão. Já
-  // todayISO()/dOff() consultam o relógio a cada chamada, inclusive se o PWA
-  // permanecer aberto durante a virada do dia.
-  const TODAY = inicioDoDiaAtual();
-  function dOff(days){ const x = inicioDoDiaAtual(); x.setDate(x.getDate()+days); return dataLocalISO(x); }
-  function todayISO(){ return dataLocalISO(inicioDoDiaAtual()); }
+  const TODAY = new Date(2026,7,8); // 8 ago 2026
+  function dOff(days){ const x = new Date(TODAY); x.setDate(x.getDate()+days); return x.toISOString().slice(0,10); }
+  function todayISO(){ return TODAY.toISOString().slice(0,10); }
 
   // ---------- etapas do pipeline (seção 68-72: agora dados configuráveis, não constantes) ----------
   // Isto é só a SEMENTE inicial — a partir daqui quem manda é Store.state.etapas
@@ -146,6 +135,80 @@ window.M = window.M || {};
   // origem do problema (seção 47) — alimenta indicadores de qualidade
   const ORIGENS_PROBLEMA = ["Projeto","Medição","Corte","Usinagem","Fitagem","Pré-montagem","Transporte","Montagem","Fornecedor","Cliente","Obra civil","Não identificado"];
 
+  // ============================================================
+  // FASE 2 (handoff) — modelo de Pendência: tipo + impacto (campo único,
+  // "bloqueia fechamento" sempre derivado, nunca manual) + origem × responsável.
+  // Convive com o modelo anterior (categoria → fluxo operacional): categoria
+  // continua guiando o passo-a-passo do fluxo (Configurações → Fluxos), tipo é
+  // a classificação nova pedida no handoff, usada em filtros/Kanban/Lista.
+  // ============================================================
+  const TIPOS_PENDENCIA = ["Material","Projeto","Produção","Montagem","Fornecedor","Obra civil","Decisão","Assistência","Outro"];
+
+  // categoria (interna, já existia) → tipo (handoff) — todo pendência nova ou
+  // migrada de dado antigo ganha um tipo plausível sem obrigar preenchimento
+  // duplicado; o formulário deixa o usuário corrigir se o padrão não servir.
+  const CATEGORIA_TO_TIPO = {
+    "Falta MDF":"Material", "Falta ferragem":"Material", "Falta material":"Material",
+    "Peça para refazer":"Produção", "Peça danificada":"Produção",
+    "Vidro":"Material", "Espelho":"Material", "Serralheria":"Material", "Pintura":"Produção", "Estofado":"Material",
+    "Fornecedor":"Fornecedor", "Cliente":"Decisão", "Obra civil":"Obra civil",
+    "Medição":"Projeto", "Aprovação":"Decisão", "Outro":"Outro",
+  };
+  // dado de demonstração (seed) tem categoria em texto livre mais antigo
+  // ("Aguardando vidro", "Falta ferragem" etc.) que não bate exato com a
+  // lista acima — casa por palavra-chave antes de cair em "Outro", só pra
+  // migração de dado legado/seed ficar com um tipo mais fiel.
+  const CATEGORIA_PALAVRA_CHAVE_TO_TIPO = [
+    [/vidro|espelho/i, "Material"], [/serralheria|metalon/i, "Material"], [/estofado/i, "Material"],
+    [/mdf|ferragem|material|chapa|fita de borda/i, "Material"], [/pintura/i, "Produção"],
+    [/dani(f|ficada)|refazer|retrabalho/i, "Produção"], [/fornecedor/i, "Fornecedor"],
+    [/obra civil/i, "Obra civil"], [/medição/i, "Projeto"], [/aprovação|cliente/i, "Decisão"],
+  ];
+  function derivarTipoDeCategoria(categoria){
+    if(!categoria) return "Outro";
+    if(CATEGORIA_TO_TIPO[categoria]) return CATEGORIA_TO_TIPO[categoria];
+    const achado = CATEGORIA_PALAVRA_CHAVE_TO_TIPO.find(([re])=> re.test(categoria));
+    return achado ? achado[1] : "Outro";
+  }
+
+  // Impacto — campo único; "bloqueia fechamento" e o estado do ambiente são
+  // sempre LEITURA do impacto, nunca campo separado (handoff · wireframes 3b).
+  const IMPACTOS_PENDENCIA_DEF = [
+    {key:"INFORMATIVO",       label:"Informativo",         bloqueiaFechamento:false, estadoAmbiente:null,                 tone:"info"},
+    {key:"NAO_IMPEDE",        label:"Não impede",          bloqueiaFechamento:false, estadoAmbiente:"Em montagem",        tone:"neutral"},
+    {key:"IMPEDE_FINALIZAR",  label:"Impede finalizar",    bloqueiaFechamento:true,  estadoAmbiente:"Em montagem · não fecha", tone:"warning"},
+    {key:"BLOQUEIA_AMBIENTE", label:"Bloqueia o ambiente", bloqueiaFechamento:true,  estadoAmbiente:"Travado",            tone:"critical"},
+    {key:"BLOQUEIA_OBRA",     label:"Bloqueia a obra",     bloqueiaFechamento:true,  estadoAmbiente:"Travado + alerta na obra", tone:"critical"},
+  ];
+  const impactoDef = (key)=> IMPACTOS_PENDENCIA_DEF.find(i=>i.key===key) || IMPACTOS_PENDENCIA_DEF[1];
+  const bloqueiaFechamento = (impactoKey)=> impactoDef(impactoKey).bloqueiaFechamento;
+  // ordem de severidade — usada pra ordenar Pendências "por impacto, depois prazo"
+  const IMPACTO_SEVERIDADE = {BLOQUEIA_OBRA:0, BLOQUEIA_AMBIENTE:1, IMPEDE_FINALIZAR:2, NAO_IMPEDE:3, INFORMATIVO:4};
+
+  // Origem (de onde veio) × responsável (quem age agora) — campos distintos
+  // (handoff · wireframes 3b, "Origem × responsável"). Lista própria da
+  // Pendência — não confundir com ORIGENS_PROBLEMA (usado em Tarefa/Assistência).
+  const ORIGENS_PENDENCIA = ["Produção","PCP/Projeto","Montagem","Fornecedor","Obra civil","Cliente","Arquiteto","Terceiro"];
+
+  // Prioridade — ALTA/MEDIA/BAIXA já existiam; CRITICA é novo (handoff mostra
+  // "Crítica" no topo da lista de prioridade nas telas de Pendências).
+  const PRIORIDADES_PENDENCIA_DEF = [
+    {key:"CRITICA", label:"Crítica", tone:"critical"},
+    {key:"ALTA",    label:"Alta",    tone:"warning"},
+    {key:"MEDIA",   label:"Média",   tone:"info"},
+    {key:"BAIXA",   label:"Baixa",   tone:"neutral"},
+  ];
+
+  // Status — Aberta → Em tratamento → Aguardando → Resolvida (handoff). O
+  // status antigo "EM_COBRANCA" é migrado uma vez pra "EM_TRATAMENTO" (ver
+  // Store, migração de dado legado) — mantido aqui só como alias de leitura.
+  const STATUS_PENDENCIA_DEF = [
+    {key:"ABERTA",        label:"Aberta"},
+    {key:"EM_TRATAMENTO", label:"Em tratamento"},
+    {key:"AGUARDANDO",    label:"Aguardando"},
+    {key:"RESOLVIDA",     label:"Resolvida"},
+  ];
+
   // perfis de acesso (seção 53-57)
   const PERFIS = [
     {key:"ADMIN",     label:"Administrador",   descricao:"Acesso total, inclusive configurações e permissões.",
@@ -189,7 +252,7 @@ window.M = window.M || {};
 
   function movel(o){
     const checklistSrc = o.checklist || COMPONENTES_CHECKLIST_PADRAO.slice(0,4);
-    const item = Object.assign({
+    return Object.assign({
       id: uid("mov"),
       componentesCriticos: [],
       bloqueio: null,
@@ -203,8 +266,6 @@ window.M = window.M || {};
       // precisa vir DEPOIS de "o" para não ser sobrescrito pela lista crua de strings
       checklist: checklistSrc.map(n=>({id:uid("chk"),nome:n,concluido:false})),
     });
-    item.historicoEtapas = item.historicoEtapas || [{de:null, para:item.etapa, data:item.dataEntradaEtapa}];
-    return item;
   }
 
   // ============================================================
@@ -580,7 +641,7 @@ window.M = window.M || {};
   const PESOS_DESEMPENHO_DEFAULT = { valorProcessado:30, pontualidade:20, qualidade:20, pendencias:15, velocidadeResolucao:10, participacao:5 };
 
   // meta mensal (seção 67)
-  const META_MENSAL = { valor: 1360000, mes: TODAY.toLocaleDateString("pt-BR",{month:"long",year:"numeric"}) };
+  const META_MENSAL = { valor: 1360000, mes: "Agosto/2026" };
 
   // notificações — quais alertas ficam ativos (seção 72)
   const NOTIFICACOES_DEFAULT = {
@@ -621,6 +682,16 @@ window.M = window.M || {};
   M.TIPO_COMPONENTE_TO_CATEGORIA = TIPO_COMPONENTE_TO_CATEGORIA;
   M.COMPONENTES_CHECKLIST_PADRAO = COMPONENTES_CHECKLIST_PADRAO;
   M.ORIGENS_PROBLEMA = ORIGENS_PROBLEMA;
+  M.TIPOS_PENDENCIA = TIPOS_PENDENCIA;
+  M.CATEGORIA_TO_TIPO = CATEGORIA_TO_TIPO;
+  M.derivarTipoDeCategoria = derivarTipoDeCategoria;
+  M.IMPACTOS_PENDENCIA_DEF = IMPACTOS_PENDENCIA_DEF;
+  M.impactoDef = impactoDef;
+  M.bloqueiaFechamento = bloqueiaFechamento;
+  M.IMPACTO_SEVERIDADE = IMPACTO_SEVERIDADE;
+  M.ORIGENS_PENDENCIA = ORIGENS_PENDENCIA;
+  M.PRIORIDADES_PENDENCIA_DEF = PRIORIDADES_PENDENCIA_DEF;
+  M.STATUS_PENDENCIA_DEF = STATUS_PENDENCIA_DEF;
   M.PERFIS = PERFIS;
   M.perfilDef = perfilDef;
   M.COLABORADORES = COLABORADORES;

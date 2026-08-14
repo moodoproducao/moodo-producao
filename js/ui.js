@@ -85,13 +85,25 @@
     const [cls,label] = map[nivelOuSituacao]||["neutral",nivelOuSituacao];
     return `<span class="chip ${cls}"><span class="dot ${cls}"></span>${label}</span>`;
   }
+  // Aberta → Em tratamento → Aguardando → Resolvida (handoff). EM_COBRANCA
+  // fica só como alias de leitura pra qualquer dado que escape da migração.
   function statusPendenciaChip(status){
-    const map = {ABERTA:["critical","Aberta"], EM_COBRANCA:["warning","Em cobrança"], RESOLVIDA:["good","Resolvida"]};
+    const map = {ABERTA:["critical","Aberta"], EM_TRATAMENTO:["warning","Em tratamento"], EM_COBRANCA:["warning","Em tratamento"],
+      AGUARDANDO:["info","Aguardando"], RESOLVIDA:["good","Resolvida"]};
     const [cls,label] = map[status]||["neutral",status];
     return `<span class="chip ${cls}">${label}</span>`;
   }
+  // Impacto — campo único do handoff; "bloqueia fechamento" nunca é campo,
+  // é leitura direta do impacto (ver M.bloqueiaFechamento).
+  function impactoChip(impactoKey){
+    const def = M.impactoDef(impactoKey);
+    return `<span class="chip ${def.tone}">${esc(def.label)}</span>`;
+  }
+  function tipoChip(tipo){ return `<span class="chip neutral">${esc(tipo||"—")}</span>`; }
   function prioridadeChip(p){
-    const map = {ALTA:["critical","Alta"], MEDIA:["warning","Média"], BAIXA:["neutral","Baixa"]};
+    const def = (M.PRIORIDADES_PENDENCIA_DEF||[]).find(x=>x.key===p);
+    if(def) return `<span class="chip ${def.tone}">${esc(def.label)}</span>`;
+    const map = {ALTA:["warning","Alta"], MEDIA:["info","Média"], BAIXA:["neutral","Baixa"]};
     const [cls,label] = map[p]||["neutral",p];
     return `<span class="chip ${cls}">${label}</span>`;
   }
@@ -200,8 +212,9 @@
   function fotosGaleriaHtml(fotos){
     if(!fotos || !fotos.length) return "";
     return `<div class="foto-galeria">${fotos.map(f=>`
-      <a href="${f.url}" target="_blank" rel="noopener" class="foto-thumb" title="${esc(f.nome||'')}">
+      <a href="${f.url}" target="_blank" rel="noopener" class="foto-thumb" style="position:relative;" title="${esc(f.nome||'')}${f.enviadoPor?' — '+esc(f.enviadoPor):''}${f.data?' · '+esc(f.data):''}">
         <img src="${f.url}" alt="${esc(f.nome||'foto')}" loading="lazy">
+        ${f.principal? `<span class="size-pill" style="position:absolute;top:4px;left:4px;background:rgba(18,18,19,.72);color:#fff;">princ.</span>`:""}
       </a>`).join("")}</div>`;
   }
 
@@ -248,7 +261,7 @@
   }
 
   const UI = {
-    esc, initials, avatar, person, riscoChip, statusPendenciaChip, prioridadeChip,
+    esc, initials, avatar, person, riscoChip, statusPendenciaChip, prioridadeChip, impactoChip, tipoChip,
     tarefaStatusChip, resultadoChip, progressBar, stageDaysChip, icon, ICONS,
     assistenciaStatusChip, perfilChip, valorOuOculto, tarefaAcoesHtml,
     statTile, card, progressRow, attentionItem, pageSearchInput, attachQuickSearch,

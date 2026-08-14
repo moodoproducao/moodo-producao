@@ -26,8 +26,21 @@
   function novaPendenciaObj(p){
     const def = M.categoriaDef(p.categoria);
     const passos = (state.fluxosPadrao[def.fluxo]||["Resolver"]).slice();
-    return Object.assign({id:M.uid("pnd"), status:"ABERTA", anexo:false, abertura:M.todayISO(),
-      fluxoTipo:def.fluxo, fluxoPassos:passos, passoAtual:0, origem:p.origem||null}, p);
+    // FASE 2 (handoff): tipo/impacto são os campos novos. Se quem chamou não
+    // informou tipo, deriva de categoria (CATEGORIA_TO_TIPO); impacto default
+    // "Impede finalizar" — nem passa despercebido (Informativo) nem já nasce
+    // travando ambiente/obra sem o usuário ter escolhido isso de propósito.
+    const tipo = p.tipo || M.derivarTipoDeCategoria(p.categoria);
+    const impacto = p.impacto || "IMPEDE_FINALIZAR";
+    const agora = M.todayISO();
+    const usuario = state.usuarioAtual || null;
+    return Object.assign({id:M.uid("pnd"), status:"ABERTA", anexo:false, abertura:agora,
+      fluxoTipo:def.fluxo, fluxoPassos:passos, passoAtual:0, origem:p.origem||null,
+      fotosAbertura: p.fotos||p.fotosAbertura||[], fotosResolucao:[],
+      // rastreabilidade preparada mesmo sem Auth real (usa o usuário ativo atual)
+      criadoPor:usuario, criadoEm:agora, atualizadoPor:usuario, atualizadoEm:agora,
+      resolvidoPor:null, resolvidoEm:null,
+    }, p, {tipo, impacto});
   }
   function criarPendenciaDoComponente(f, comp){
     const categoria = M.TIPO_COMPONENTE_TO_CATEGORIA[comp.tipo] || "Outro";
@@ -163,13 +176,6 @@
     (state.obras||[]).forEach(o=>{
       (o.ambientes||[]).forEach(a=>{
         (a.moveis||[]).forEach(m=>{
-          // Histórico estruturado é a base dos indicadores mensais. Dados
-          // antigos não registravam as passagens de etapa; preservamos o que
-          // é comprovável (etapa atual + data de entrada) sem inventar datas.
-          if(!Array.isArray(m.historicoEtapas) || !m.historicoEtapas.length){
-            m.historicoEtapas = [{de:null, para:m.etapa, data:m.dataEntradaEtapa||M.todayISO()}];
-            mudou = true;
-          }
           if(m.checklist && m.checklist.length){
             m.checklist.forEach(c=>{
               const jaExiste = state.tarefas.some(t=>t.movelId===m.id && t.titulo===c.nome && t.origemChecklist);
@@ -203,6 +209,30 @@
       });
     });
     if(mudou) emit();
+  }
+
+  // FASE 2 (handoff) — migração de dado legado do modelo de Pendência: dá
+  // tipo/impacto/status novo pra pendência salva ANTES desta versão, sem
+  // mudar o que a pessoa já via na tela. Regra: pendência antiga sem impacto
+  // ganha "Bloqueia o ambiente" (o modelo antigo tratava QUALQUER pendência
+  // aberta como bloqueio — isso preserva esse comportamento visual pra dado
+  // já existente); pendência criada a partir de agora usa o default mais
+  // moderado definido em novaPendenciaObj ("Impede finalizar"). Idempotente:
+  // roda toda vez que o app carrega, mas só mexe em quem ainda não migrou.
+  function migrarPendenciasParaModeloHandoff(){
+    (state.pendencias||[]).forEach(p=>{
+      if(!p.tipo) p.tipo = M.derivarTipoDeCategoria(p.categoria);
+      if(!p.impacto) p.impacto = "BLOQUEIA_AMBIENTE";
+      if(p.status==="EM_COBRANCA") p.status = "EM_TRATAMENTO";
+      if(!p.fotosAbertura) p.fotosAbertura = p.fotos || [];
+      if(!p.fotosResolucao) p.fotosResolucao = [];
+      if(p.criadoEm===undefined) p.criadoEm = p.abertura || null;
+      if(p.criadoPor===undefined) p.criadoPor = null;
+      if(p.atualizadoEm===undefined) p.atualizadoEm = p.abertura || null;
+      if(p.atualizadoPor===undefined) p.atualizadoPor = null;
+      if(p.resolvidoEm===undefined) p.resolvidoEm = p.status==="RESOLVIDA" ? (p.atualizadoEm||p.abertura||null) : null;
+      if(p.resolvidoPor===undefined) p.resolvidoPor = null;
+    });
   }
 
   function persist(){
@@ -283,6 +313,9 @@
     if(!remoto) return;
     Object.keys(state).forEach(k=>{ delete state[k]; });
     Object.assign(state, remoto);
+    // estado vindo da nuvem pode ter sido salvo por uma versão anterior do
+    // app (antes da Fase 2) — mesma migração leve do boot local.
+    migrarPendenciasParaModeloHandoff();
     persist();
     listeners.forEach(fn=>fn());
   }
@@ -353,8 +386,12 @@
     // QUALQUER pendência do móvel, mesmo com outra ainda aberta. Removido o campo
     // duplicado: agora deriva sempre de state.pendencias (a única fonte de verdade),
     // então nunca fica desatualizado.
+    // FASE 2 (handoff): bloqueio real = pendência aberta cujo IMPACTO derive
+    // "bloqueia fechamento" (Impede finalizar / Bloqueia o ambiente / Bloqueia
+    // a obra) — não mais "qualquer pendência aberta". Pendência Informativo ou
+    // Não impede aparece na obra mas não trava nada (handoff · wireframes 3b).
     bloqueiosMovel(movelId){
-      return state.pendencias.filter(p=>p.movelId===movelId && p.status!=="RESOLVIDA");
+      return state.pendencias.filter(p=>p.movelId===movelId && p.status!=="RESOLVIDA" && M.bloqueiaFechamento(p.impacto));
     },
     findAmbiente(ambienteId){
       for(const o of state.obras) for(const a of o.ambientes) if(a.id===ambienteId) return {o,a};
@@ -440,17 +477,6 @@
       const ord = Store.etapasOrdenadas();
       const i = ord.findIndex(e=>e.id===id);
       return i<0 ? ord.length : i;
-    },
-    normalizarNumeroOS(numero){
-      const texto = String(numero||"").trim().toUpperCase();
-      if(!texto) return "";
-      const digitos = texto.replace(/\D/g, "");
-      return digitos || texto.replace(/\s+/g, "");
-    },
-    encontrarObraPorNumeroOS(numero){
-      const chave = Store.normalizarNumeroOS(numero);
-      if(!chave) return null;
-      return state.obras.find(o=>Store.normalizarNumeroOS(o.numeroOS)===chave) || null;
     },
     proximaEtapaId(id){
       const ativas = Store.etapasAtivas();
@@ -689,15 +715,8 @@
           if(opts.novoResponsavel) f.m.responsavel = opts.novoResponsavel;
         }
       }
-      const etapaAnteriorId = f.m.etapa;
-      const agora = M.todayISO();
-      f.m.historicoEtapas = Array.isArray(f.m.historicoEtapas) ? f.m.historicoEtapas : [];
-      f.m.historicoEtapas.push({
-        de: etapaAnteriorId, para: novaEtapa.id, data: agora,
-        hora: new Date().toTimeString().slice(0,5), usuario: state.usuarioAtual,
-      });
       f.m.etapa = novaEtapa.id;
-      f.m.dataEntradaEtapa = agora;
+      f.m.dataEntradaEtapa = M.todayISO();
       Store.log(f.o.id, "MUDANCA_ETAPA", `${f.m.nome} → ${novaEtapa.nome}`);
       Store.criarTarefasPadraoParaEtapa(f, novaEtapa.id);
       emit();
@@ -735,7 +754,8 @@
       const p = state.pendencias.find(x=>x.id===pendId); if(!p) return;
       if(p.passoAtual < p.fluxoPassos.length-1){
         p.passoAtual++;
-        p.status = "EM_COBRANCA";
+        p.status = "EM_TRATAMENTO";
+        p.atualizadoPor = state.usuarioAtual||null; p.atualizadoEm = M.todayISO();
         Store.log(p.obraId, "PENDENCIA_AVANCOU", `${p.categoria}: passo "${p.fluxoPassos[p.passoAtual]}"`);
       } else {
         Store.atualizarStatusPendencia(pendId, "RESOLVIDA");
@@ -747,8 +767,10 @@
       const p = state.pendencias.find(x=>x.id===pendId); if(!p) return;
       const eraResolvida = p.status==="RESOLVIDA";
       p.status = status;
+      p.atualizadoPor = state.usuarioAtual||null; p.atualizadoEm = M.todayISO();
       if(status==="RESOLVIDA"){
         p.passoAtual = p.fluxoPassos ? p.fluxoPassos.length-1 : 0;
+        p.resolvidoPor = state.usuarioAtual||null; p.resolvidoEm = M.todayISO();
         Store.log(p.obraId, "PENDENCIA_RESOLVIDA", `${p.categoria}: ${p.descricao}`);
         // pendência vinculada a um componente crítico: resolver a pendência aqui
         // (tela de Pendências) também resolve o componente — senão os dois saem
@@ -756,12 +778,25 @@
         if(p.componenteCriticoId) Store._sincronizarComponenteDaPendencia(p, "RESOLVIDO");
       }
       if(status==="ABERTA" && eraResolvida){
+        p.resolvidoPor = null; p.resolvidoEm = null;
         Store.log(p.obraId, "PENDENCIA_REABERTA", `${p.categoria}: ${p.descricao}`);
         Store.audit({categoria:"QUALIDADE", tipo:"PENDENCIA_REABERTA", obraId:p.obraId, movelId:p.movelId,
           descricao:`Pendência "${p.categoria}" reaberta — ${p.descricao}`});
         if(p.componenteCriticoId) Store._sincronizarComponenteDaPendencia(p, "AGUARDANDO");
       }
       emit();
+    },
+    // FASE 2 (handoff): "serão exigidas [fotos] ao marcar como resolvida" —
+    // fluxo dedicado (Act.abrirResolverPendencia) pra anexar fotosResolucao
+    // (autor+data próprios, separadas das fotosAbertura) na hora de resolver.
+    resolverPendencia(pendId, {fotosResolucao, observacao} = {}){
+      const p = state.pendencias.find(x=>x.id===pendId); if(!p) return;
+      const agora = M.todayISO();
+      const autor = state.usuarioAtual||null;
+      p.fotosResolucao = (p.fotosResolucao||[]).concat((fotosResolucao||[]).map(url=>
+        (typeof url === "string" ? {url, autor, data:agora, principal:false} : url)));
+      if(observacao) p.observacaoResolucao = observacao;
+      Store.atualizarStatusPendencia(pendId, "RESOLVIDA");
     },
     reabrirPendencia(pendId){ Store.atualizarStatusPendencia(pendId, "ABERTA"); },
     // grava o novo status diretamente no componente vinculado, sem passar de
@@ -933,26 +968,10 @@
 
     // ---------- nova obra ----------
     criarObra(obra){
-      if(!obra || !String(obra.numeroOS||"").trim() || !String(obra.cliente||"").trim()){
-        return {ok:false, motivo:"DADOS_OBRA_INVALIDOS"};
-      }
-      const duplicada = Store.encontrarObraPorNumeroOS(obra && obra.numeroOS);
-      if(duplicada) return {ok:false, motivo:"OS_DUPLICADA", obra:duplicada};
-      const responsavel = obra && M.colabByNome(obra.responsavel);
-      if(!responsavel || responsavel.ativo===false) return {ok:false, motivo:"RESPONSAVEL_INVALIDO"};
-      if(!(Number(obra && obra.valorLiquido)>0)) return {ok:false, motivo:"VALOR_INVALIDO"};
-      const ambientesValidos = Array.isArray(obra.ambientes) && obra.ambientes.length>0
-        && obra.ambientes.every(a=>Number.isFinite(Number(a.valorBrutoPct)) && Number(a.valorBrutoPct)>0 && Number(a.valorLiquido)>0);
-      const somaPct = ambientesValidos ? obra.ambientes.reduce((s,a)=>s+Number(a.valorBrutoPct),0) : 0;
-      if(!ambientesValidos || Math.abs(somaPct-1)>0.001) return {ok:false, motivo:"RATEIO_INVALIDO"};
       const processed = obra;
-      const valorLiquido = Number(processed.valorLiquido) || 0;
-      const valorBrutoInformado = Number(processed.valorBruto) || 0;
-      processed.valorLiquido = valorLiquido;
-      processed.valorBruto = valorBrutoInformado>0 ? valorBrutoInformado : valorLiquido;
-      processed.fatorLiquido = processed.valorBruto>0 ? processed.valorLiquido / processed.valorBruto : 1;
+      processed.fatorLiquido = processed.valorLiquido / processed.valorBruto;
       processed.desconto = processed.valorBruto - processed.valorLiquido;
-      processed.descontoPct = processed.valorBruto>0 ? processed.desconto / processed.valorBruto : 0;
+      processed.descontoPct = processed.desconto / processed.valorBruto;
       processed.ambientes.forEach(a=>{
         a.valorBruto = Math.round(processed.valorBruto * a.valorBrutoPct);
         a.valorLiquido = Math.round(a.valorBruto * processed.fatorLiquido);
@@ -968,7 +987,6 @@
           const primeiraEtapa = M.Store.etapasAtivas()[0];
           m.etapa = primeiraEtapa.id;
           m.requisitosOverride={}; m.dataEntradaEtapa=M.todayISO();
-          m.historicoEtapas = [{de:null, para:primeiraEtapa.id, data:m.dataEntradaEtapa, usuario:state.usuarioAtual}];
           // fase 2 do plano "obra no centro": sem checklist genérico (Corpo MDF,
           // Ferragens) — o trabalho real da etapa já vem de TAREFAS_PADRAO_ETAPA.
           // Só material especial vira componente crítico (exceção, não checklist).
@@ -993,7 +1011,7 @@
       state.obras.push(processed);
       Store.log(processed.id, "OBRA_CRIADA", `Obra ${processed.numeroOS} criada a partir da importação.`);
       emit();
-      return {ok:true, obra:processed};
+      return processed;
     },
     // tarefa gerada a partir de um item de checklist de componente (ver criarObra
     // e migrarChecklistLegado) — não é obrigatória para avançar de etapa (nunca foi,
@@ -1072,6 +1090,7 @@
   // upgrade transparente de dados antigos (ver função acima) — precisa rodar
   // depois que Store existe (usa Store.criarTarefaDeChecklist).
   migrarChecklistLegado();
+  migrarPendenciasParaModeloHandoff();
   // primeira gravação (local — instantânea)
   persist();
   // SUPABASE: dispara a sincronização em segundo plano (não bloqueia o boot)

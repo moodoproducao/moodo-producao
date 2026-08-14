@@ -62,8 +62,12 @@
       .sort((x,y)=> (x.status==="EM_ANDAMENTO"?0:x.status==="PLANEJADA"?1:2) - (y.status==="EM_ANDAMENTO"?0:y.status==="PLANEJADA"?1:2))
       .map(t=> Object.assign({}, t, {_prefixo: varios ? t.movelNome+" — " : ""}));
   }
+  // FASE 2 (handoff): pendência aberta ≠ bloqueio — só quem tem impacto que
+  // deriva "bloqueia fechamento" (Impede finalizar/Bloqueia o ambiente/Bloqueia
+  // a obra) entra aqui; pendenciasAbertasObra() traz todas (inclui Informativo
+  // e Não impede), usada só na aba Pendências (lista completa da obra).
   function bloqueiosDaObra(o){
-    return C.pendenciasAbertasDe(o.id).slice().sort((x,y)=>{
+    return C.pendenciasBloqueantesDe(o.id).slice().sort((x,y)=>{
       const ux = x.prazo? C.diasAte(x.prazo) : 999, uy = y.prazo? C.diasAte(y.prazo) : 999;
       return ux-uy;
     });
@@ -185,7 +189,7 @@
     const bloqueiosHtml = bloqueios.length ? bloqueios.map(p=>{
       const proxima = p.fluxoPassos ? p.fluxoPassos[p.passoAtual] : null;
       return `<div class="help-banner" style="background:var(--critical-bg);border-color:var(--critical);color:var(--critical);margin-bottom:10px;">
-        <div style="font-weight:800;">${UI.icon('alert',13)} ${UI.esc(p.categoria)}</div>
+        <div style="font-weight:800;">${UI.icon('alert',13)} ${UI.esc(p.categoria)} ${UI.impactoChip(p.impacto)}</div>
         <div style="color:var(--ink);margin:3px 0;">${UI.esc(p.descricao)}</div>
         <div class="small" style="color:var(--ink-soft);">${UI.person(p.responsavel)}${p.prazo?" · prazo "+C.fmtDate(p.prazo):""}</div>
         ${proxima? `<div class="small" style="margin-top:3px;"><b>Próxima ação:</b> ${UI.esc(proxima)}</div>`:""}
@@ -301,11 +305,12 @@
     const pend = M.Store.state.pendencias.filter(p=>p.obraId===o.id);
     if(!pend.length) return `<p class="small muted">Nenhuma pendência nesta obra.</p>`;
     return `<div class="card pad"><table class="tbl">
-      <thead><tr><th>Categoria</th><th>Local</th><th>Responsável</th><th>Prazo</th><th>Status</th><th></th></tr></thead>
+      <thead><tr><th>Tipo · Categoria</th><th>Local</th><th>Impacto</th><th>Responsável</th><th>Prazo</th><th>Status</th><th></th></tr></thead>
       <tbody>${pend.map(p=>`
-        <tr><td>${UI.esc(p.categoria)}<div class="small muted">${UI.esc(p.descricao)}</div>
-            ${p.fotos&&p.fotos.length? UI.fotosGaleriaHtml(p.fotos) : ""}</td>
+        <tr><td>${UI.tipoChip(p.tipo)} ${UI.esc(p.categoria)}<div class="small muted">${UI.esc(p.descricao)}</div>
+            ${(p.fotosAbertura&&p.fotosAbertura.length)? UI.fotosGaleriaHtml(p.fotosAbertura) : (p.fotos&&p.fotos.length? UI.fotosGaleriaHtml(p.fotos):"")}</td>
           <td class="small muted">${UI.esc(p.ambienteNome)} · ${UI.esc(p.movelNome)}</td>
+          <td>${UI.impactoChip(p.impacto)}</td>
           <td>${UI.person(p.responsavel)}</td><td>${C.fmtDate(p.prazo)}</td><td>${UI.statusPendenciaChip(p.status)}</td>
           <td>${p.status!=='RESOLVIDA'? `<button class="btn sm primary" onclick="Act.setPendenciaStatus('${p.id}','RESOLVIDA')">Resolver</button>`:""}</td>
         </tr>`).join("")}</tbody></table></div>`;

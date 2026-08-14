@@ -577,6 +577,17 @@ body.tv-mode .sidebar, body.tv-mode .mobile-nav, body.tv-mode .topbar-actions .h
 /* ============ status badges assistência/pendência ============ */
 .status-pill{ display:inline-flex; align-items:center; gap:6px; font-size:11px; font-weight:700; padding:4px 10px; border-radius:var(--radius-sm); }
 
+/* ============ impacto da pendência (handoff — Fase 2) ============
+   "Barra vertical de 3px em cinco níveis" — geométrico, não só cor, pra
+   não depender de distinguir tom pra ler o impacto de relance. */
+.impacto-bar{ width:3px; align-self:stretch; border-radius:2px; flex-shrink:0; }
+.impacto-bar.info{ background:var(--info); }
+.impacto-bar.neutral{ background:var(--neutral); }
+.impacto-bar.warning{ background:var(--warning); }
+.impacto-bar.critical{ background:var(--critical); }
+.pend-row{ display:flex; gap:10px; align-items:stretch; }
+.pend-row .pend-body{ flex:1; min-width:0; }
+
 /* ============ single-page nova obra ============ */
 .oneform-section{ padding:22px 0; border-bottom:1px solid var(--border); }
 .oneform-section:last-child{ border-bottom:none; }

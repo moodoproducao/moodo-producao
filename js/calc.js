@@ -49,6 +49,12 @@
   function pendenciasAbertasDe(obraId){
     return M.Store.state.pendencias.filter(p=> p.obraId===obraId && p.status!=="RESOLVIDA");
   }
+  // FASE 2 (handoff): só as que realmente travam algo (impacto deriva
+  // bloqueia fechamento) — distinto de "toda pendência aberta" acima, que
+  // inclui Informativo/Não impede (não bloqueiam nada, só ficam registradas).
+  function pendenciasBloqueantesDe(obraId){
+    return pendenciasAbertasDe(obraId).filter(p=> M.bloqueiaFechamento(p.impacto));
+  }
 
   function riscoObra(o){
     const prog = progressoObra(o);
@@ -347,7 +353,7 @@
   M.Calc = {
     fmtBRL, fmtBRLk, fmtDate, fmtPct, daysBetween, diasDesde, diasAte,
     movelConcluido, progressoGrupo, progressoObra, progressoAmbiente,
-    itemCriticoGrupo, pendenciasAbertasDe, riscoObra, situacaoMovel, situacaoObra, wipPorEtapa, indicadores,
+    itemCriticoGrupo, pendenciasAbertasDe, pendenciasBloqueantesDe, riscoObra, situacaoMovel, situacaoObra, wipPorEtapa, indicadores,
     parseHora, duracaoHoras, valorProcessadoTarefa, desempenhoColaborador,
     paraFinalizar, paraFinalizarTotal, alertasGlobais,
     indiceDesempenho, pendenciasDoColaborador, rankingColaboradores,

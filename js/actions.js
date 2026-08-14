@@ -13,10 +13,10 @@
     obraTab: {},
     obraFoco: {}, // {obraId: ambienteId} — ambiente em destaque na página operacional da obra (plano "obra no centro")
     novaObra: {osFileObj:null, osFileName:null, orcFileObj:null, orcFileName:null,
-      lendo:false, lido:false, erro:null, dados:null, enderecoManual:"", numeroOSManual:"", clienteManual:"",
-      ambientesAjuste:{}, responsavelProducao:"", componentesSelecionados:{}},
-    pendFiltro: {categoria:"", status:""},
+      lendo:false, lido:false, erro:null, dados:null, enderecoManual:"", ambientesAjuste:{}},
+    pendFiltro: {categoria:"", status:"", tipo:"", obraId:"", responsavel:"", prioridade:"", bloqueiaFechamento:false, busca:""},
     pendExpandido: null,
+    pendView: "lista", // "lista" | "kanban" (handoff — Fase 2)
     tarefaFiltro: {responsavel:"", status:"", obraId:""},
     calMonth: M.TODAY.getMonth(), calYear: M.TODAY.getFullYear(),
     calFiltros: new Set(["PRODUCAO","ENTREGAS","MONTAGENS","PENDENCIAS","FORNECEDORES","ASSISTENCIAS"]),
@@ -47,7 +47,8 @@
       const { error } = await M.Supa.client.storage.from("arquivos-obra").upload(path, file);
       if(error){ UI.toast("Erro ao enviar "+file.name+": "+error.message); continue; }
       const { data: urlData } = M.Supa.client.storage.from("arquivos-obra").getPublicUrl(path);
-      arquivos.push({nome:file.name, url:urlData.publicUrl, tipo:file.type, tamanho:file.size, enviadoPor:M.Store.state.usuarioAtual});
+      arquivos.push({nome:file.name, url:urlData.publicUrl, tipo:file.type, tamanho:file.size,
+        enviadoPor:M.Store.state.usuarioAtual, data:M.todayISO(), principal:arquivos.length===0});
     }
     return arquivos;
   }
@@ -289,18 +290,43 @@
           obraId: fd.get("obraId"), ambienteId: fd.get("ambienteId")||null, movelId: mv||null,
           obraNome: f? f.o.cliente : (M.Store.getObra(fd.get("obraId"))||{}).cliente,
           ambienteNome: f? f.a.nome : "", movelNome: f? f.m.nome : (fd.get("descricaoLivre")||"Item avulso"),
-          categoria: fd.get("categoria"), descricao: fd.get("descricao"), responsavel: fd.get("responsavel"),
+          categoria: fd.get("categoria"), tipo: fd.get("tipo")||null, impacto: fd.get("impacto")||null,
+          descricao: fd.get("descricao"), responsavel: fd.get("responsavel"),
           fornecedor: fd.get("fornecedor"), prazo: fd.get("prazo")||null, prioridade: fd.get("prioridade"),
           origem: fd.get("origem")||null, fotos,
         });
         UI.closeModal(); UI.toast("Pendência criada — fluxo iniciado.");
       });
     },
-    setPendenciaStatus(id, status){ M.Store.atualizarStatusPendencia(id, status); UI.toast(status==="RESOLVIDA"?"Pendência resolvida.":"Status atualizado."); },
+    setPendenciaStatus(id, status){
+      // "Resolvida" pede fotos de resolução (handoff) — abre um passo extra em
+      // vez de resolver na hora; qualquer outro status muda direto.
+      if(status==="RESOLVIDA"){ Act.abrirResolverPendencia(id); return; }
+      M.Store.atualizarStatusPendencia(id, status); UI.toast("Status atualizado.");
+    },
     avancarFluxo(id){ M.Store.avancarFluxoPendencia(id); UI.toast("Pendência avançou no fluxo."); },
     reabrirPendencia(id){ M.Store.reabrirPendencia(id); UI.toast("Pendência reaberta."); },
     setPendFiltro(campo, val){ M.UIState.pendFiltro[campo]=val; Act.rerender(); },
+    limparPendFiltros(){ M.UIState.pendFiltro = {categoria:"", status:"", tipo:"", obraId:"", responsavel:"", prioridade:"", bloqueiaFechamento:false, busca:""}; Act.rerender(); },
+    setPendView(v){ M.UIState.pendView = v; Act.rerender(); },
     togglePendExpandido(id){ M.UIState.pendExpandido = (M.UIState.pendExpandido===id)?null:id; Act.rerender(); },
+
+    // "Serão exigidas [fotos] ao marcar como resolvida" (handoff) — passo
+    // dedicado, com fotos de resolução separadas das fotos de abertura.
+    abrirResolverPendencia(id){
+      const p = M.Store.state.pendencias.find(x=>x.id===id); if(!p) return;
+      UI.openModal(M.Pages.resolverPendenciaFormHtml(p), {});
+      const form = document.getElementById("formResolverPendencia");
+      form.addEventListener("submit", async (e)=>{
+        e.preventDefault();
+        const fd = new FormData(form);
+        const submitBtn = form.querySelector('button[type=submit]');
+        if(submitBtn) submitBtn.disabled = true;
+        const fotosResolucao = await uploadArquivos(fd.getAll("fotos").filter(x=>x && x.size), (p.obraId||"avulsas")+"/pendencias-resolucao");
+        M.Store.resolverPendencia(id, {fotosResolucao, observacao: fd.get("observacao")||""});
+        UI.closeModal(); UI.toast("Pendência resolvida.");
+      });
+    },
 
     // ---------- tarefas ----------
     openTarefaForm(obraId){
@@ -445,8 +471,7 @@
       else { w.orcFileObj = file; w.orcFileName = file.name; }
       // troca de arquivo depois de já ter lido: limpa o resultado anterior,
       // senão a tela ficaria mostrando dados de um PDF que não é mais esse.
-      w.lido = false; w.dados = null; w.erro = null; w.responsavelProducao = ""; w.componentesSelecionados = {};
-      w.numeroOSManual = ""; w.clienteManual = "";
+      w.lido = false; w.dados = null; w.erro = null;
       Act.rerender();
     },
     async novaObraLerPdf(){
@@ -469,16 +494,6 @@
           w.erro = "Não consegui identificar os ambientes/itens neste PDF. Confira se é o formato padrão da Moodo (Orçamento ou Ordem de Serviço).";
         } else {
           w.dados = dados;
-          const normalizarNome = (valor)=>String(valor||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim().toLowerCase().replace(/\s+/g," ");
-          const nomeDocumento = normalizarNome(dados.responsavel);
-          const colaborador = M.COLABORADORES.find(c=>c.ativo!==false && normalizarNome(c.nome)===nomeDocumento);
-          w.responsavelProducao = colaborador ? colaborador.nome : "";
-          w.numeroOSManual = dados.numeroOS || "";
-          w.clienteManual = dados.cliente || "";
-          w.componentesSelecionados = {};
-          dados.ambientes.forEach(a=>a.itens.forEach(it=>(it.materiaisEspeciais||[]).forEach(c=>{
-            w.componentesSelecionados[c.chave] = c.geraPendenciaPadrao!==false;
-          })));
           w.lido = true;
         }
       }catch(err){
@@ -491,54 +506,26 @@
     },
     novaObraRecomecar(){
       M.UIState.novaObra = {osFileObj:null, osFileName:null, orcFileObj:null, orcFileName:null,
-        lendo:false, lido:false, erro:null, dados:null, enderecoManual:"", numeroOSManual:"", clienteManual:"",
-        ambientesAjuste:{}, responsavelProducao:"", componentesSelecionados:{}};
+        lendo:false, lido:false, erro:null, dados:null, enderecoManual:"", ambientesAjuste:{}};
       Act.rerender();
     },
     novaObraSetEndereco(valor){ M.UIState.novaObra.enderecoManual = valor; },
-    novaObraSetIdentificacao(campo, valor){
-      if(campo==="numeroOS") M.UIState.novaObra.numeroOSManual = valor;
-      if(campo==="cliente") M.UIState.novaObra.clienteManual = valor;
-      Act.rerender();
-    },
-    novaObraSetResponsavel(valor){ M.UIState.novaObra.responsavelProducao = valor; Act.rerender(); },
-    novaObraToggleComponente(chave, marcado){
-      M.UIState.novaObra.componentesSelecionados[chave] = !!marcado;
-      Act.rerender();
-    },
     novaObraSetVendido(valor){
-      const numero = Number(valor);
-      M.UIState.novaObra.dados.valorFinalVendido = Number.isFinite(numero) ? numero : 0;
+      M.UIState.novaObra.dados.valorFinalVendido = Number(valor);
       M.UIState.novaObra.ambientesAjuste = {}; // valor vendido mudou: rateio automático recalcula do zero
       Act.rerender();
     },
     novaObraAjustarValor(ambKey, valor){
-      const numero = Number(valor);
-      M.UIState.novaObra.ambientesAjuste[ambKey] = Number.isFinite(numero) ? numero : 0;
+      M.UIState.novaObra.ambientesAjuste[ambKey] = Number(valor);
       Act.rerender();
     },
     novaObraResetAjustes(){ M.UIState.novaObra.ambientesAjuste = {}; Act.rerender(); },
     novaObraCriar(){
       const nova = M.Pages.novaObraMontar();
-      const resultado = M.Store.criarObra(nova);
-      if(!resultado.ok){
-        if(resultado.motivo==="OS_DUPLICADA"){
-          UI.toast(`A ${nova.numeroOS} já existe. Abrindo a obra cadastrada.`);
-          location.hash = "#/obra/"+resultado.obra.id;
-        } else if(resultado.motivo==="RESPONSAVEL_INVALIDO"){
-          UI.toast("Selecione um responsável válido da equipe antes de criar a obra.");
-        } else if(resultado.motivo==="VALOR_INVALIDO"){
-          UI.toast("Informe um valor real vendido maior que zero antes de criar a obra.");
-        } else if(resultado.motivo==="RATEIO_INVALIDO"){
-          UI.toast("Revise o rateio: todos os ambientes precisam ter valor positivo e a soma deve fechar.");
-        } else if(resultado.motivo==="DADOS_OBRA_INVALIDOS"){
-          UI.toast("Informe o número da OS e o nome do cliente antes de criar a obra.");
-        }
-        return;
-      }
+      M.Store.criarObra(nova);
       UI.toast("Obra criada com sucesso!");
       Act.novaObraRecomecar();
-      location.hash = "#/obra/"+resultado.obra.id;
+      location.hash = "#/obra/"+nova.id;
     },
 
     // ---------- calendário ----------
