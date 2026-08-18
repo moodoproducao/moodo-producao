@@ -25,8 +25,8 @@
     calFiltros: new Set(["PRODUCAO","ENTREGAS","MONTAGENS","PENDENCIAS","FORNECEDORES","ASSISTENCIAS"]),
     desempenhoSel: null,
     selecaoLote: new Set(),
-    auditoriaFiltro: {periodo:30, categoria:"", somenteExcecoes:false},
-    assistFiltro: {status:""},
+    auditoriaFiltro: {periodo:30, categoria:"", somenteExcecoes:false, area:"", usuario:"", obraId:"", view:"cronologico"},
+    assistFiltro: {status:"", garantia:""},
     assistExpandido: null,
     tvWidgets: null, // preenchido a partir de M.Store.state se necessário
     fluxoDraft: null, // {tipo, passos:[]} — rascunho em edição do editor de fluxo padrão de pendência (item 12)
@@ -453,6 +453,7 @@
           ambienteNome: fd.get("ambienteNome"), movelNome: fd.get("movelNome"),
           descricao: fd.get("descricao"), categoria: fd.get("categoria"), origem: fd.get("origem"),
           prioridade: fd.get("prioridade"), responsavel: fd.get("responsavel"), prazo: fd.get("prazo")||null, fotos,
+          garantia: fd.get("garantia")||"EM_ANALISE",
         });
         UI.closeModal(); UI.toast("Assistência registrada.");
       });
@@ -460,6 +461,37 @@
     setAssistenciaStatus(id, status){ M.Store.atualizarAssistencia(id,{status}); UI.toast("Status da assistência atualizado."); },
     setAssistFiltro(campo,val){ M.UIState.assistFiltro[campo]=val; Act.rerender(); },
     toggleAssistExpandido(id){ M.UIState.assistExpandido = (M.UIState.assistExpandido===id)?null:id; Act.rerender(); },
+    // ---------- N visitas por chamado + garantia (Fase 5 — handoff) ----------
+    mudarGarantiaAssistencia(id, garantia){
+      const r = M.Store.definirGarantiaAssistencia(id, garantia);
+      if(!r.ok){
+        if(r.motivo==="SEM_PERMISSAO") UI.toast("Só PCP, Liderança ou Administrador podem marcar \"Cortesia\" — é decisão comercial da Moodo.");
+        Act.rerender(); // desfaz visualmente a troca no <select>, já que o estado não mudou
+        return;
+      }
+      UI.toast("Garantia atualizada.");
+    },
+    abrirRegistrarVisita(assistId){
+      UI.openModal(M.Pages.registrarVisitaHtml(assistId), {});
+      const form = document.getElementById("formRegistrarVisita");
+      form.addEventListener("submit", async (e)=>{
+        e.preventDefault();
+        const fd = new FormData(form);
+        const desfecho = fd.get("desfecho");
+        if(!desfecho){ UI.toast("Escolha o resultado desta visita."); return; }
+        const fotosVisita = await uploadArquivos(fd.getAll("fotosVisita").filter(x=>x && x.size), assistId+"/visitas");
+        const pecaNecessaria = document.getElementById("chkPeca") && document.getElementById("chkPeca").checked
+          ? {categoria: fd.get("pecaCategoria"), descricao: fd.get("pecaDescricao"), prazo: fd.get("pecaPrazo")||null}
+          : null;
+        const r = M.Store.registrarVisitaAssistencia(assistId, {
+          data: fd.get("data")||M.todayISO(), tecnico: fd.get("tecnico"), diagnostico: fd.get("diagnostico"),
+          fotos: fotosVisita, desfecho, proximoStatus: fd.get("proximoStatus"), pecaNecessaria,
+        });
+        if(!r.ok){ UI.toast("Escolha o resultado desta visita."); return; }
+        UI.closeModal();
+        UI.toast(r.pendenciaGerada? "Visita registrada — pendência de peça criada." : (desfecho==="RESOLVIDA"? "Assistência resolvida!" : "Visita registrada — retorno necessário."));
+      });
+    },
 
     // ---------- montagem ----------
     abrirEncerramentoMontagem(movelId){
@@ -472,6 +504,60 @@
         const r = M.Store.concluirMontagem(movelId, `${checks}/${total}`, temPendenciasInformado);
         UI.closeModal();
         UI.toast(r.temPendencias? "Montagem encerrada como concluída com pendências — segue visível em Para Finalizar." : "Montagem concluída!");
+      });
+    },
+    // ---------- finalizar AMBIENTE (Fase 4 — handoff) ----------
+    abrirFinalizarAmbiente(ambienteId){
+      const f = M.Store.findAmbiente(ambienteId); if(!f) return;
+      UI.openModal(M.Pages.finalizarAmbienteHtml(f), {});
+      const form = document.getElementById("formFinalizarAmbiente");
+      form.addEventListener("submit", (e)=>{
+        e.preventDefault();
+        const fd = new FormData(form);
+        const checklist = {};
+        document.querySelectorAll(".amb-check").forEach(el=>{ checklist[el.dataset.item] = el.checked; });
+        const ressalvaEl = document.getElementById("ambRessalva");
+        const ressalva = ressalvaEl ? ressalvaEl.checked : false;
+        const r = M.Store.finalizarAmbiente(ambienteId, {checklist, ressalva, motivo: fd.get("motivo")||"", pendenciaVinculada: fd.get("pendenciaVinculada")||null});
+        if(!r.ok){
+          if(r.motivo==="MOTIVO_OBRIGATORIO"){ UI.toast("Descreva o motivo da ressalva antes de finalizar."); return; }
+          if(r.motivo==="SEM_PERMISSAO"){ UI.toast("Seu perfil não pode finalizar com ressalva — peça para PCP, Liderança ou Administrador."); return; }
+          UI.toast("Ainda há pendências — marque \"Finalizar com ressalva\" ou resolva antes."); return;
+        }
+        UI.closeModal();
+        UI.toast(r.ressalva? "Ambiente finalizado com ressalva." : "Ambiente finalizado!");
+      });
+    },
+    // recalcula, em tempo real (sem re-render de tela), o contador do
+    // checklist e o texto do botão do modal "Finalizar ambiente" conforme
+    // o usuário marca/desmarca itens — o valor gravado de fato só acontece
+    // no submit (ver abrirFinalizarAmbiente), isto é só o feedback visual.
+    atualizarFinalizarAmbiente(){
+      const form = document.getElementById("formFinalizarAmbiente");
+      if(!form) return;
+      const total = document.querySelectorAll(".amb-check").length;
+      const feitos = document.querySelectorAll(".amb-check:checked").length;
+      const label = document.getElementById("faChecklistLabel");
+      if(label) label.textContent = `Checklist de finalização · ${feitos}/${total}`;
+      const bloqueios = parseInt(form.dataset.bloqueios||"0",10);
+      const naoMontados = parseInt(form.dataset.naoMontados||"0",10);
+      const pendente = bloqueios>0 || feitos<total || naoMontados>0;
+      const pendSection = document.getElementById("faPendenteSection");
+      const prontoMsg = document.getElementById("faProntoMsg");
+      if(pendSection) pendSection.style.display = pendente? "block":"none";
+      if(prontoMsg) prontoMsg.style.display = pendente? "none":"block";
+      const btn = document.getElementById("faSubmitBtn");
+      if(btn) btn.textContent = pendente? "Finalizar com ressalva":"Finalizar ambiente";
+      if(!pendente){
+        const ressalvaEl = document.getElementById("ambRessalva");
+        if(ressalvaEl) ressalvaEl.checked = false;
+        const fields = document.getElementById("ambRessalvaFields");
+        if(fields) fields.style.display = "none";
+      }
+    },
+    reabrirAmbiente(ambienteId){
+      UI.confirm("Reabrir este ambiente? Ele volta a aparecer como pendente de fechamento.", ()=>{
+        M.Store.reabrirAmbiente(ambienteId); UI.toast("Ambiente reaberto.");
       });
     },
 
@@ -583,6 +669,17 @@
       Act.rerender();
     },
     toggleSomenteExcecoes(){ M.UIState.auditoriaFiltro.somenteExcecoes = !M.UIState.auditoriaFiltro.somenteExcecoes; Act.rerender(); },
+    // exporta exatamente o que está filtrado na tela, como CSV (handoff: botão "Exportar")
+    exportarAuditoria(){
+      const csv = M.Pages._auditoriaExportarCsv();
+      const blob = new Blob(["﻿"+csv], {type:"text/csv;charset=utf-8;"});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `auditoria_${M.todayISO()}.csv`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      UI.toast("Auditoria exportada.");
+    },
 
     // ---------- configurações ----------
     salvarPesosDesempenho(form){

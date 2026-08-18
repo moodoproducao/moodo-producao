@@ -209,6 +209,41 @@ window.M = window.M || {};
     {key:"RESOLVIDA",     label:"Resolvida"},
   ];
 
+  // ============================================================
+  // FASE 4 (handoff) — Montagem: status de AMBIENTE (6 valores, todos
+  // derivados — nunca campo manual, ver M.Calc.situacaoAmbiente) e checklist
+  // de encerramento por ambiente (handoff: "móveis instalados · portas ·
+  // frentes · puxadores · acabamentos · rodapés · tamponamentos · limpeza ·
+  // fotos finais · pendências resolvidas · ferragens reguladas" — 11 itens,
+  // citação literal). Distinto do checklist antigo de MÓVEL já existente em
+  // js/pages/montagem.js (CHECKLIST_ENCERRAMENTO) — este é por ambiente.
+  // ============================================================
+  const STATUS_AMBIENTE_DEF = [
+    {key:"NAO_INICIADO",       label:"Não iniciado",             tone:"neutral"},
+    {key:"EM_MONTAGEM",        label:"Em montagem",              tone:"neutral"},
+    {key:"TRAVADO",            label:"Travado",                  tone:"blocked"},
+    {key:"PRONTO",             label:"Pronto para finalizar",    tone:"info"},
+    {key:"FINALIZADO",         label:"Finalizado",               tone:"good"},
+    {key:"FINALIZADO_RESSALVA",label:"Finalizado com ressalva",  tone:"warning"},
+  ];
+  const CHECKLIST_ENCERRAMENTO_AMBIENTE = [
+    "Móveis instalados","Portas reguladas","Frentes","Puxadores","Acabamentos",
+    "Rodapés","Tamponamentos","Ferragens reguladas","Limpeza","Fotos finais","Pendências resolvidas",
+  ];
+
+  // ---------- garantia da assistência (Fase 5 — handoff) ----------
+  // "Garantia usa os mesmos marcadores de status já definidos: círculo cheio
+  // para coberto, hachura para não coberto, contorno para em análise, marrom
+  // Moodo para cortesia — a única aparição da cor da marca como marcador,
+  // porque cortesia é decisão comercial da Moodo." (citação literal do handoff)
+  const GARANTIA_DEF = [
+    {key:"COBERTO",     label:"Coberto",      tone:"good",    desc:"Dentro da garantia"},
+    {key:"NAO_COBERTO", label:"Não coberto",  tone:"blocked", desc:"Mau uso, fora do prazo"},
+    {key:"EM_ANALISE",  label:"Em análise",   tone:"outline", desc:"Ainda sem definição"},
+    {key:"CORTESIA",    label:"Cortesia",     tone:"gold",    desc:"Não é garantia — atendido sem custo por decisão comercial da Moodo"},
+  ];
+  const garantiaDef = (key)=> GARANTIA_DEF.find(g=>g.key===key) || GARANTIA_DEF[2];
+
   // perfis de acesso (seção 53-57)
   const PERFIS = [
     {key:"ADMIN",     label:"Administrador",   descricao:"Acesso total, inclusive configurações e permissões.",
@@ -656,13 +691,37 @@ window.M = window.M || {};
   const ASSISTENCIAS = [
     { id:uid("asst"), obraId:"real-bothanic", obraNome:"Ricardo Bothanic (Apto 901B)", ambienteNome:"Cozinha", movelNome:"Armário Superior + Inferior",
       cliente:"Ricardo Bothanic", descricao:"Gaveta da bancada não fecha totalmente", categoria:"Gaveta", origem:"Montagem",
-      data:dOff(-6), prioridade:"MEDIA", responsavel:"Roberto Diniz", prazo:dOff(2), status:"AGENDADA", foto:null },
+      data:dOff(-6), prioridade:"MEDIA", responsavel:"Roberto Diniz", prazo:dOff(2), status:"AGENDADA", foto:null,
+      garantia:"COBERTO", visitas:[] },
     { id:uid("asst"), obraId:"odonto-radi", obraNome:"Clínica Odonto Radi", ambienteNome:"Recepção", movelNome:"Balcão de Recepção",
       cliente:"Clínica Odonto Radi", descricao:"Porta do balcão desalinhada após uso", categoria:"Porta", origem:"Transporte",
-      data:dOff(-2), prioridade:"BAIXA", responsavel:"Roberto Diniz", prazo:dOff(5), status:"ABERTA", foto:null },
+      data:dOff(-2), prioridade:"BAIXA", responsavel:"Roberto Diniz", prazo:dOff(5), status:"ABERTA", foto:null,
+      garantia:"EM_ANALISE", visitas:[] },
     { id:uid("asst"), obraId:"os336", obraNome:"Marcela e Cristiano", ambienteNome:"Térreo Sala", movelNome:"Buffet Suspenso",
       cliente:"Marcela e Cristiano", descricao:"Cliente pediu troca de puxador — solicitação de garantia", categoria:"Ferragem", origem:"Cliente",
-      data:dOff(-1), prioridade:"BAIXA", responsavel:"Fernanda Costa", prazo:dOff(10), status:"EM_TRIAGEM", foto:null },
+      data:dOff(-1), prioridade:"BAIXA", responsavel:"Fernanda Costa", prazo:dOff(10), status:"AGUARDANDO_MATERIAL", foto:null,
+      garantia:"EM_ANALISE",
+      visitas:[
+        {id:uid("visit"), data:dOff(-1), tecnico:"Fernanda Costa", diagnostico:"Puxador riscado, cliente quer trocar por outro modelo — aguardando definição de garantia.", fotos:[], desfecho:"RETORNO_NECESSARIO"},
+      ] },
+    // exemplo com histórico de 2 visitas (padrão N-visitas do handoff): 1ª
+    // visita identifica peça a fabricar, 2ª visita instala e resolve.
+    { id:uid("asst"), obraId:"casa-augusto", obraNome:"Augusto Ferraz", ambienteNome:"Suíte", movelNome:"Cabeceira",
+      cliente:"Augusto Ferraz", descricao:"Porta empenada após 40 dias de uso", categoria:"Porta", origem:"Fabricação",
+      data:dOff(-18), prioridade:"MEDIA", responsavel:"Roberto Diniz", prazo:null, status:"CONCLUIDA", foto:null,
+      garantia:"COBERTO",
+      visitas:[
+        {id:uid("visit"), data:dOff(-13), tecnico:"Roberto Diniz", diagnostico:"Frente empenada, regulagem não resolve. Peça a fabricar.", fotos:[], desfecho:"RETORNO_NECESSARIO"},
+        {id:uid("visit"), data:dOff(-3), tecnico:"Roberto Diniz", diagnostico:"Frente nova instalada. Porta regulada e funcionando.", fotos:[], desfecho:"RESOLVIDA"},
+      ] },
+    // exemplo "cortesia" (fora da garantia, atendido sem custo por decisão comercial)
+    { id:uid("asst"), obraId:"cozinha-iris", obraNome:"Íris Almeida", ambienteNome:"Cozinha", movelNome:"Prateleira",
+      cliente:"Íris Almeida", descricao:"Prateleira arranhada — cliente relata mau uso, mas pediu atendimento", categoria:"Acabamento", origem:"Cliente",
+      data:dOff(-9), prioridade:"BAIXA", responsavel:"Roberto Diniz", prazo:null, status:"CONCLUIDA", foto:null,
+      garantia:"CORTESIA",
+      visitas:[
+        {id:uid("visit"), data:dOff(-4), tecnico:"Roberto Diniz", diagnostico:"Prateleira polida e reposicionada — fora da garantia, atendido como cortesia.", fotos:[], desfecho:"RESOLVIDA"},
+      ] },
   ];
 
   // ============================================================
@@ -692,6 +751,10 @@ window.M = window.M || {};
   M.ORIGENS_PENDENCIA = ORIGENS_PENDENCIA;
   M.PRIORIDADES_PENDENCIA_DEF = PRIORIDADES_PENDENCIA_DEF;
   M.STATUS_PENDENCIA_DEF = STATUS_PENDENCIA_DEF;
+  M.STATUS_AMBIENTE_DEF = STATUS_AMBIENTE_DEF;
+  M.CHECKLIST_ENCERRAMENTO_AMBIENTE = CHECKLIST_ENCERRAMENTO_AMBIENTE;
+  M.GARANTIA_DEF = GARANTIA_DEF;
+  M.garantiaDef = garantiaDef;
   M.PERFIS = PERFIS;
   M.perfilDef = perfilDef;
   M.COLABORADORES = COLABORADORES;

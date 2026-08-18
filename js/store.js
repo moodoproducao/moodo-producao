@@ -393,6 +393,13 @@
     bloqueiosMovel(movelId){
       return state.pendencias.filter(p=>p.movelId===movelId && p.status!=="RESOLVIDA" && M.bloqueiaFechamento(p.impacto));
     },
+    // FASE 4 (handoff — Montagem): "Travado" no nível de AMBIENTE é o mesmo
+    // mecanismo do bloqueio de móvel (Fase 2) — pendência aberta cujo impacto
+    // deriva "bloqueia fechamento" — só que filtrada por ambienteId em vez de
+    // movelId (pendência avulsa de ambiente, sem móvel específico, também trava).
+    bloqueiosAmbiente(ambienteId){
+      return state.pendencias.filter(p=>p.ambienteId===ambienteId && p.status!=="RESOLVIDA" && M.bloqueiaFechamento(p.impacto));
+    },
     findAmbiente(ambienteId){
       for(const o of state.obras) for(const a of o.ambientes) if(a.id===ambienteId) return {o,a};
       return null;
@@ -947,7 +954,11 @@
 
     // ---------- assistências (seção 44-47) ----------
     criarAssistencia(a){
-      const item = Object.assign({id:M.uid("asst"), status:"ABERTA", data:M.todayISO()}, a);
+      // Fase 5 (handoff): toda assistência nasce com garantia (default "Em
+      // análise" — não é nem coberto nem não-coberto até alguém decidir) e
+      // com o histórico de visitas vazio (N visitas por chamado).
+      const item = Object.assign({id:M.uid("asst"), status:"ABERTA", data:M.todayISO(),
+        garantia:a.garantia||"EM_ANALISE", visitas:a.visitas||[]}, a);
       state.assistencias.unshift(item);
       Store.audit({categoria:"QUALIDADE", tipo:"ASSISTENCIA_ABERTA", obraId:a.obraId,
         descricao:`Assistência aberta — ${a.categoria}: ${a.descricao}`, motivo:a.origem||"-"});
@@ -961,6 +972,64 @@
         Store.audit({categoria:"QUALIDADE", tipo:"ASSISTENCIA_CONCLUIDA", obraId:a.obraId, descricao:`Assistência concluída — ${a.categoria}: ${a.descricao}`});
       }
       emit();
+    },
+    // ---------- assistência: N visitas por chamado (Fase 5 — handoff) ----------
+    // "N visitas por assistência; cada visita termina em resolvida ou retorno
+    // necessário." "Retorno necessário → volta para Aguardando (peça,
+    // fornecedor, cliente) e agenda a próxima visita." "Peça necessária vira
+    // pendência tipo Assistência." Aditivo: não mexe em criarAssistencia/
+    // atualizarAssistencia acima, só acrescenta o histórico de visitas.
+    registrarVisitaAssistencia(assistId, opts){
+      opts = opts || {};
+      const a = state.assistencias.find(x=>x.id===assistId); if(!a) return {ok:false};
+      if(!opts.desfecho) return {ok:false, motivo:"DESFECHO_OBRIGATORIO"};
+      a.visitas = a.visitas || [];
+      const numero = a.visitas.length + 1;
+      const visita = {id:M.uid("visit"), data: opts.data||M.todayISO(), tecnico: opts.tecnico||state.usuarioAtual||null,
+        diagnostico: opts.diagnostico||"", fotos: opts.fotos||[], desfecho: opts.desfecho, registradoEm:M.todayISO()};
+      let pendenciaGerada = null;
+      if(opts.pecaNecessaria && opts.pecaNecessaria.descricao){
+        pendenciaGerada = Store.criarPendencia({
+          obraId:a.obraId, ambienteNome:a.ambienteNome, movelNome:a.movelNome, obraNome:a.obraNome,
+          tipo:"Assistência", categoria: opts.pecaNecessaria.categoria || "Peça para refazer",
+          descricao: opts.pecaNecessaria.descricao, responsavel: opts.tecnico||a.responsavel,
+          prazo: opts.pecaNecessaria.prazo||null, prioridade:"ALTA", impacto:"IMPEDE_FINALIZAR",
+        });
+        visita.pendenciaGeradaId = pendenciaGerada.id;
+      }
+      a.visitas.push(visita);
+      a.ultimaVisitaEm = visita.data;
+      if(opts.desfecho==="RESOLVIDA"){
+        a.status = "CONCLUIDA";
+        a.resolvidoPor = state.usuarioAtual||null; a.resolvidoEm = M.todayISO();
+        Store.audit({categoria:"QUALIDADE", tipo:"ASSISTENCIA_CONCLUIDA", obraId:a.obraId,
+          descricao:`Assistência concluída — ${a.categoria}: ${a.descricao}`});
+      } else {
+        // "retorno necessário" — volta pra Aguardando (peça/fornecedor/
+        // cliente) ou já agenda a próxima visita, conforme o que faltar.
+        a.status = opts.proximoStatus || "AGUARDANDO_MATERIAL";
+      }
+      // formato do evento de auditoria segue a citação literal do handoff:
+      // "Elias registrou a 2ª visita de assistência · resultado: retorno necessário"
+      const nomeAtual = state.usuarioAtual ? state.usuarioAtual.split(" ")[0] : "Alguém";
+      Store.audit({categoria:"QUALIDADE", tipo:"ASSISTENCIA_VISITA_REGISTRADA", obraId:a.obraId, ambienteId:a.ambienteId||null,
+        descricao:`${nomeAtual} registrou a ${numero}ª visita de assistência · resultado: ${opts.desfecho==="RESOLVIDA"?"resolvida":"retorno necessário"}`,
+        motivo: pendenciaGerada? `Gerou pendência ${pendenciaGerada.id}` : undefined});
+      emit();
+      return {ok:true, visita, pendenciaGerada};
+    },
+    // "Cortesia" é decisão comercial da Moodo — gate de permissão igual ao
+    // usado pra ressalva (Fase 4) e pra impacto "bloqueia" (Fase 2): reaproveita
+    // M.Store.pode("liberarExcecao") como proxy simplificado de "Líder ou acima".
+    definirGarantiaAssistencia(assistId, garantia){
+      const a = state.assistencias.find(x=>x.id===assistId); if(!a) return {ok:false};
+      if(garantia==="CORTESIA" && !Store.pode("liberarExcecao")) return {ok:false, motivo:"SEM_PERMISSAO"};
+      const anterior = a.garantia;
+      a.garantia = garantia;
+      Store.audit({categoria:"QUALIDADE", tipo:"ASSISTENCIA_GARANTIA_DEFINIDA", obraId:a.obraId,
+        descricao:`Garantia de "${a.descricao}" definida como ${M.garantiaDef(garantia).label}`, motivo: anterior!==garantia? `Era: ${M.garantiaDef(anterior).label}`:undefined});
+      emit();
+      return {ok:true};
     },
 
     // ---------- usuário / permissões ----------
@@ -1069,6 +1138,62 @@
       Store.moverEtapa(movelId, "FINALIZADA", {ignorarRequisitos:true});
       emit();
       return {ok:true, temPendencias, pendReais};
+    },
+
+    // ---------- montagem: finalizar AMBIENTE (Fase 4 — handoff) ----------
+    // Distinto de concluirMontagem (acima, por MÓVEL/etapa de fábrica): esta é
+    // a ação nova de nível de ambiente que o handoff descreve — "Finalizar
+    // Cozinha?", checklist de 11 itens, e "Finalizar com ressalva" só com
+    // motivo + permissão. Aditivo: não mexe no concluirMontagem existente.
+    checklistEncerramentoAmbiente(a){
+      const feito = a.montagemChecklist || {};
+      return M.CHECKLIST_ENCERRAMENTO_AMBIENTE.map(item=>({item, feito: !!feito[item]}));
+    },
+    finalizarAmbiente(ambienteId, opts){
+      opts = opts || {};
+      const f = Store.findAmbiente(ambienteId); if(!f) return {ok:false};
+      const {o,a} = f;
+      const bloqueios = Store.bloqueiosAmbiente(ambienteId);
+      // usa o checklist recém-marcado no formulário (opts.checklist), não o
+      // que já estava salvo antes — senão marcar tudo agora e enviar nunca
+      // seria suficiente pra fechar sem ressalva (o "salvo" só é atualizado
+      // depois deste próprio cálculo, mais abaixo).
+      const checklistState = opts.checklist || a.montagemChecklist || {};
+      const checklist = M.CHECKLIST_ENCERRAMENTO_AMBIENTE.map(item=>({item, feito: !!checklistState[item]}));
+      const itensChecklistFaltando = checklist.filter(c=>!c.feito).map(c=>c.item);
+      const naoMontados = a.moveis.filter(m=> Store.posicaoEtapa(m.etapa) < Store.posicaoEtapa("MONTAGEM")).length;
+      const pendente = bloqueios.length>0 || itensChecklistFaltando.length>0 || naoMontados>0;
+      if(pendente && !opts.ressalva){
+        return {ok:false, motivo:"PENDENTE", bloqueios, itensChecklistFaltando, naoMontados};
+      }
+      if(opts.ressalva){
+        if(!Store.pode("liberarExcecao")) return {ok:false, motivo:"SEM_PERMISSAO"};
+        if(!opts.motivo) return {ok:false, motivo:"MOTIVO_OBRIGATORIO"};
+      }
+      a.montagemChecklist = checklistState;
+      a.montagemStatus = opts.ressalva ? "FINALIZADA_RESSALVA" : "FINALIZADA";
+      a.finalizadoPor = state.usuarioAtual || null;
+      a.finalizadoEm = M.todayISO();
+      if(opts.ressalva){
+        a.montagemRessalva = {motivo:opts.motivo, autorizadoPor: state.usuarioAtual, pendenciaVinculada: opts.pendenciaVinculada||null, data:M.todayISO()};
+        Store.log(o.id, "AMBIENTE_FINALIZADO_RESSALVA", `${a.nome} finalizado com ressalva: ${opts.motivo}`);
+        Store.audit({categoria:"GOVERNANCA", tipo:"AVANCO_COM_RESSALVA", obraId:o.id, ambienteId:a.id,
+          descricao:`${a.nome} finalizado com ressalva — ${opts.motivo}`, motivo:opts.motivo});
+      } else {
+        a.montagemRessalva = null;
+        Store.log(o.id, "AMBIENTE_FINALIZADO", `${a.nome} finalizado.`);
+      }
+      emit();
+      return {ok:true, ressalva: !!opts.ressalva};
+    },
+    reabrirAmbiente(ambienteId){
+      const f = Store.findAmbiente(ambienteId); if(!f) return;
+      const eraRessalva = f.a.montagemStatus==="FINALIZADA_RESSALVA";
+      f.a.montagemStatus = null;
+      Store.log(f.o.id, "AMBIENTE_REABERTO", `${f.a.nome} reaberto${eraRessalva?" (estava finalizado com ressalva)":""}.`);
+      Store.audit({categoria:"QUALIDADE", tipo:"PENDENCIA_REABERTA", obraId:f.o.id, ambienteId:f.a.id,
+        descricao:`${f.a.nome} reaberto depois de finalizado.`});
+      emit();
     },
 
     // ---------- configurações ----------

@@ -1,0 +1,718 @@
+From cca6c376a71a97909e08ccda3deb45d39269d74b Mon Sep 17 00:00:00 2001
+From: Paulo Henrique <mdamoveis@gmail.com>
+Date: Tue, 18 Aug 2026 22:38:12 +0000
+Subject: [PATCH] Fase 6: Admin + Auditoria + TV
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Auditoria (js/pages/auditoria.js, js/actions.js, css/styles.css):
+- Frases humanizadas por evento (auditoriaFrase) — "Paulo liberou um avanço
+  com ressalva · ..." em vez da descrição crua de log; MUDANCA_RESPONSAVEL
+  ganha "— de X para Y" quando o evento traz responsavelAnterior/novoResponsavel.
+- Marcador visual por tipo de evento (marcadorHtml/.audit-marker.*), com
+  fallback pro .audit-cat por categoria já existente pra tipos sem marcador
+  dedicado.
+- Área (Pendência/Montagem/Assistência/Acesso) como filtro por abas, além
+  dos filtros de período/categoria/somente-exceções já existentes.
+- Novos filtros por usuário e por obra (<select>).
+- 3 modos de visualização: Cronológico (atual), Por obra, Por usuário —
+  segmentado no topo, cada um agrupando os mesmos eventos filtrados.
+- Exportar CSV (Act.exportarAuditoria) dos eventos filtrados.
+- Escopo deliberadamente MANTIDO: Auditoria continua exceções e alterações
+  críticas (state.auditoria), não foi fundida com state.historico — o
+  wireframe do handoff mostra exemplos mais operacionais ("Jonas finalizou
+  o ambiente..."), mas isso pertenceria ao histórico geral por obra, uma
+  mudança de escopo maior que fica fora desta fase.
+
+TV — novo painel #/tv (js/pages/tv.js, calc.js, css/styles.css, router.js,
+main.js, index.html, service-worker.js):
+- 3 modos rotativos a cada 30s: Produção (C.tvResumoProducao — em produção/
+  em risco/paradas/entregas em 7d + prioridades do dia), Montagem
+  (C.agregarMontagem + C.prioridadeParaFinalizar + "oportunidade de
+  fechamento hoje"), Atenção (C.tvAtencaoItens — o que trava o fechamento
+  agora, responsável só por função).
+- Namespace CSS novo .tv3-* (screen/head/kpi/list/modos/disclaimer/bigpct),
+  ao lado do .tv-* já existente do Chão de Fábrica — não conflita, não
+  reaproveita 1:1 pra manter a leitura "wireframe do handoff" (números
+  grandes, alto contraste, poucos itens por tela) sem misturar com o
+  visual "preto/dourado premium" do painel atual.
+- Regra de privacidade do handoff ("sem dado de cliente, valor ou contato")
+  respeitada usando numeroOS como identificador de obra em vez de cliente
+  (nome real do cliente) — adaptação porque o app não tem um "apelido"
+  de projeto como o wireframe do handoff sugere. Responsável aparece só
+  pela função (M.perfilDef), nunca pelo nome da pessoa.
+- Rota NOVA (#/tv), somada ao #/chao-de-fabrica já existente — o painel
+  antigo continua funcionando sem alterações (mesmo padrão "Dashboard→Hoje"
+  da Fase 3: nada é removido, só deixa de ser o único caminho).
+- Em aberto (citado no próprio handoff como "falta decidir"): se o ciclo de
+  30s deveria pular a tela Atenção quando vazia — implementado sempre
+  rotacionando as 3, sem pular.
+
+Admin — regrupamento visual do menu (router.js, main.js):
+- FOOTER (Equipe + Configurações) ganha rótulo "Administração" no mesmo
+  padrão .nav-label usado nos outros grupos do menu — só isso. NÃO muda
+  visibilidade/permissão (PCP/Liderança continuam vendo, OPERADOR/MONTADOR
+  continuam só com FOOTER_OPERADOR sem o rótulo, idêntico a hoje) e NÃO é
+  a reestruturação maior em páginas separadas (Usuários/Perfis e permissões/
+  Processos/Tipos de pendência/Checklists) que o handoff descreve — isso
+  exigiria páginas novas e ficou fora do escopo desta fase.
+
+Não fiz nesta fase (fora de escopo, mantido como estava):
+- Taxonomia de 7 perfis do app vs. 6 papéis do handoff — não reconciliada.
+- Fusão de state.historico com state.auditoria.
+
+Testado localmente (Playwright, desktop 1440/1920 + mobile 390): rota
+smoke em todas as páginas, Auditoria nos 3 modos de visualização + filtros
++ export CSV + frase humanizada com dados reais (setResponsavel, retrabalho),
+TV nos 3 modos com checagem automatizada de que nenhum nome de cliente
+aparece em nenhuma das telas, nav "Administração" visível pro Administrador
+e ausente pro Operador. Sem erros novos de console além do fallback
+Supabase-CDN esperado neste sandbox.
+
+APP_VERSION/CACHE_NAME 3.5.0 → 3.6.0.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013KosEJZQn2LJLEwqimExYG
+---
+ css/styles.css        |  54 +++++++++++++
+ index.html            |   1 +
+ js/actions.js         |  13 ++-
+ js/calc.js            |  62 ++++++++++++++-
+ js/main.js            |  13 ++-
+ js/pages/auditoria.js | 180 +++++++++++++++++++++++++++++++++++++-----
+ js/pages/tv.js        | 120 ++++++++++++++++++++++++++++
+ js/router.js          |   2 +
+ service-worker.js     |   3 +-
+ 9 files changed, 423 insertions(+), 25 deletions(-)
+ create mode 100644 js/pages/tv.js
+
+diff --git a/css/styles.css b/css/styles.css
+index a9edbcc..77ea959 100644
+--- a/css/styles.css
++++ b/css/styles.css
+@@ -476,6 +476,47 @@ body.tv-mode .sidebar, body.tv-mode .mobile-nav, body.tv-mode .topbar-actions .h
+ .tv-meta-ring{ display:flex; align-items:center; gap:18px; }
+ .tv-meta-ring svg{ flex-shrink:0; }
+ 
++/* TV3 — modo "Painel de Chão" (handoff): 3 telas rotativas, leitura a distância */
++:root{ --tv-critical:#E0655A; --tv-warning:#D89A3C; --tv-info:#5C93C9; }
++.tv3-screen{ background:radial-gradient(ellipse at top,#181009 0%,#0a0705 60%); min-height:100vh; color:#fff; padding:34px 48px 26px; display:flex; flex-direction:column; }
++.tv3-head{ display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:22px; border-bottom:1px solid rgba(212,175,110,0.18); padding-bottom:16px;}
++.tv3-head .brandmark{ font-size:12px; letter-spacing:.15em; text-transform:uppercase; color:var(--gold-soft); font-weight:800; margin-bottom:4px;}
++.tv3-head h1{ font-size:26px; color:#fff; font-weight:800; letter-spacing:-0.01em;}
++.tv3-head .tv-clock{ font-size:30px; font-weight:800; color:#fff; text-align:right; letter-spacing:.02em; font-variant-numeric:tabular-nums;}
++.tv3-head .tv-date{ font-size:12px; color:var(--gold-soft); text-align:right; text-transform:capitalize; margin-top:2px;}
++.tv3-kpi-row{ display:grid; grid-template-columns:repeat(4,1fr); gap:20px; margin-bottom:26px; }
++.tv3-kpi{ background:rgba(212,175,110,0.05); border:1px solid rgba(212,175,110,0.14); border-radius:16px; padding:20px 18px; text-align:center; }
++.tv3-kpi .value{ font-size:104px; font-weight:800; letter-spacing:-0.03em; line-height:1; color:#fff; }
++.tv3-kpi .value.critical{ color:var(--tv-critical); }
++.tv3-kpi .value.warning{ color:var(--tv-warning); }
++.tv3-kpi .value.info{ color:var(--tv-info); }
++.tv3-kpi .label{ font-size:13px; color:#c9b8a4; text-transform:uppercase; letter-spacing:.06em; font-weight:700; margin-top:8px; }
++.tv3-list-title{ font-size:13.5px; color:var(--gold-soft); text-transform:uppercase; letter-spacing:.08em; font-weight:800; margin-bottom:14px; }
++.tv3-list-item{ display:flex; align-items:center; justify-content:space-between; gap:18px; background:rgba(255,255,255,0.045); border:1px solid rgba(255,255,255,0.06); border-radius:12px; padding:16px 22px; margin-bottom:12px; }
++.tv3-list-item .obra{ font-size:38px; font-weight:800; color:#fff; letter-spacing:-0.01em; min-width:220px; }
++.tv3-list-item .motivo{ font-size:16px; color:#c9b8a4; text-align:right; flex:1; }
++.tv3-modos{ display:flex; gap:10px; justify-content:center; margin-top:auto; padding-top:22px; }
++.tv3-modos .tv3-modo{ font-size:12px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:#7a6b5a; padding:6px 16px; border-radius:20px; border:1px solid rgba(255,255,255,0.08); }
++.tv3-modos .tv3-modo.active{ color:#0a0705; background:var(--gold-soft); border-color:var(--gold-soft); }
++.tv3-updated{ position:absolute; bottom:16px; right:24px; font-size:11px; color:#7a6b5a; }
++.tv3-disclaimer{ text-align:center; font-size:11px; color:#7a6b5a; margin-top:10px; letter-spacing:.02em; }
++.tv3-split{ display:grid; grid-template-columns:1.1fr 1fr; gap:26px; flex:1; min-height:0; }
++.tv3-bigpct{ display:flex; flex-direction:column; align-items:center; justify-content:center; background:rgba(212,175,110,0.05); border:1px solid rgba(212,175,110,0.14); border-radius:16px; padding:20px; }
++.tv3-bigpct .value{ font-size:148px; font-weight:800; color:var(--gold-soft); letter-spacing:-0.04em; line-height:1; }
++.tv3-bigpct .label{ font-size:14px; color:#c9b8a4; text-transform:uppercase; letter-spacing:.06em; font-weight:700; margin-top:6px; }
++/* TV é primariamente um painel de parede (1080p+), mas degrada com bom senso
++   se aberto num celular/tablet pra conferência rápida. */
++@media (max-width:900px){
++  .tv3-screen{ padding:20px 18px 18px; }
++  .tv3-kpi-row{ grid-template-columns:repeat(2,1fr); gap:12px; }
++  .tv3-kpi .value{ font-size:56px; }
++  .tv3-list-item{ flex-direction:column; align-items:flex-start; gap:4px; padding:12px 16px; }
++  .tv3-list-item .obra{ font-size:24px; min-width:0; }
++  .tv3-list-item .motivo{ text-align:left; font-size:13px; }
++  .tv3-split{ grid-template-columns:1fr; }
++  .tv3-bigpct .value{ font-size:80px; }
++}
++
+ .toast-wrap{ position:fixed; bottom:18px; right:18px; z-index:200; display:flex; flex-direction:column; gap:8px;}
+ .toast{ background:var(--brand-darker); color:#fff; padding:11px 16px; border-radius:var(--radius); font-size:12.5px; font-weight:600; box-shadow:var(--shadow-lg); animation:toastin .15s ease; }
+ @keyframes toastin{ from{ transform:translateY(6px); opacity:0;} to{ transform:translateY(0); opacity:1;} }
+@@ -562,6 +603,19 @@ body.tv-mode .sidebar, body.tv-mode .mobile-nav, body.tv-mode .topbar-actions .h
+ .audit-cat.QUALIDADE{ background:var(--critical); }
+ .audit-cat.GOVERNANCA{ background:var(--brand-dark); }
+ .audit-time{ font-family:var(--font-mono); font-size:10.5px; color:var(--ink-mute); white-space:nowrap; }
++/* marcador por TIPO de objeto afetado (Fase 6 — handoff, mais específico que
++   o marcador por categoria acima): "pendência aberta em vermelho, finalização
++   em verde, travamento hachurado, ressalva em verde riscado, assistência em
++   marrom, ação administrativa em contorno cinza." Tipo sem marcador aqui cai
++   no .audit-cat por categoria (fallback acima, nunca quebra). */
++.audit-marker{ width:9px; height:9px; border-radius:50%; margin-top:5px; flex-shrink:0; }
++.audit-marker.aberta{ background:var(--critical); }
++.audit-marker.finalizacao{ background:var(--good); }
++.audit-marker.travamento{ background:var(--blocked); border-radius:1px; }
++.audit-marker.ressalva{ background:var(--good); position:relative; }
++.audit-marker.ressalva::after{ content:""; position:absolute; top:50%; left:-1.5px; right:-1.5px; height:1.4px; background:var(--critical); transform:rotate(-38deg); }
++.audit-marker.assistencia{ background:var(--gold); }
++.audit-marker.administrativa{ background:transparent; border:1.4px solid var(--ink-mute); box-sizing:border-box; }
+ 
+ /* ============ minha produção (mobile) ============ */
+ .mp-now{ background:linear-gradient(155deg, var(--on-dark-bg), #000); color:#fff; border-radius:var(--radius-lg); padding:22px; box-shadow:var(--shadow-lg);}
+diff --git a/index.html b/index.html
+index 24557fa..5533e1b 100644
+--- a/index.html
++++ b/index.html
+@@ -51,6 +51,7 @@
+   <script src="js/pages/lotes.js"></script>
+   <script src="js/pages/montagem.js"></script>
+   <script src="js/pages/chaoDeFabrica.js"></script>
++  <script src="js/pages/tv.js"></script>
+   <script src="js/pages/equipe.js"></script>
+   <script src="js/pages/configuracoes.js"></script>
+   <script src="js/pages/meuPainel.js"></script>
+diff --git a/js/actions.js b/js/actions.js
+index 13e7715..65edaa7 100644
+--- a/js/actions.js
++++ b/js/actions.js
+@@ -25,7 +25,7 @@
+     calFiltros: new Set(["PRODUCAO","ENTREGAS","MONTAGENS","PENDENCIAS","FORNECEDORES","ASSISTENCIAS"]),
+     desempenhoSel: null,
+     selecaoLote: new Set(),
+-    auditoriaFiltro: {periodo:30, categoria:"", somenteExcecoes:false},
++    auditoriaFiltro: {periodo:30, categoria:"", somenteExcecoes:false, area:"", usuario:"", obraId:"", view:"cronologico"},
+     assistFiltro: {status:"", garantia:""},
+     assistExpandido: null,
+     tvWidgets: null, // preenchido a partir de M.Store.state se necessário
+@@ -669,6 +669,17 @@
+       Act.rerender();
+     },
+     toggleSomenteExcecoes(){ M.UIState.auditoriaFiltro.somenteExcecoes = !M.UIState.auditoriaFiltro.somenteExcecoes; Act.rerender(); },
++    // exporta exatamente o que está filtrado na tela, como CSV (handoff: botão "Exportar")
++    exportarAuditoria(){
++      const csv = M.Pages._auditoriaExportarCsv();
++      const blob = new Blob(["﻿"+csv], {type:"text/csv;charset=utf-8;"});
++      const url = URL.createObjectURL(blob);
++      const a = document.createElement("a");
++      a.href = url; a.download = `auditoria_${M.todayISO()}.csv`;
++      document.body.appendChild(a); a.click(); document.body.removeChild(a);
++      URL.revokeObjectURL(url);
++      UI.toast("Auditoria exportada.");
++    },
+ 
+     // ---------- configurações ----------
+     salvarPesosDesempenho(form){
+diff --git a/js/calc.js b/js/calc.js
+index aead4c3..bca7691 100644
+--- a/js/calc.js
++++ b/js/calc.js
+@@ -458,6 +458,66 @@
+     return Object.entries(out).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
+   }
+ 
++  // ---------- TV da fábrica — 3 modos (Fase 6 — handoff) ----------
++  // TV1 "Produção": os mesmos 5 números do painel macro de Produção (Fase 3),
++  // recalculados aqui (não importados de pages/producao.js, que é local à
++  // página) + "prioridades do dia" — até 4 obras que mais exigem ação agora.
++  // Identifica obra por número de OS, nunca por nome do cliente — a TV fica
++  // num painel de parede visível a qualquer um no chão de fábrica.
++  function tvResumoProducao(){
++    const obras = M.Store.state.obras;
++    const emProducao = obras.filter(o=> o.status!=="FINALIZADA");
++    const emRisco = obras.filter(o=> situacaoObra(o).nivel!=="BAIXO");
++    const paradas = obras.filter(o=> obraParada(o));
++    const bloqueios = obras.reduce((s,o)=> s + pendenciasBloqueantesDe(o.id).length, 0);
++    const entregas7d = obras.filter(o=> o.status!=="FINALIZADA" && diasAte(o.dataEntregaPrevista)>=0 && diasAte(o.dataEntregaPrevista)<=7);
++    const candidatas = obras.filter(o=> o.status!=="FINALIZADA" && (obraParada(o) || situacaoObra(o).nivel==="ALTO" ||
++      (diasAte(o.dataEntregaPrevista)>=0 && diasAte(o.dataEntregaPrevista)<=7 && pendenciasAbertasDe(o.id).length)));
++    candidatas.sort((x,y)=>{
++      const px = obraParada(x)?diasParada(x):0, py = obraParada(y)?diasParada(y):0;
++      if(px!==py) return py-px;
++      return diasAte(x.dataEntregaPrevista) - diasAte(y.dataEntregaPrevista);
++    });
++    const prioridades = candidatas.slice(0,4).map(o=>{
++      const dEntrega = diasAte(o.dataEntregaPrevista);
++      let motivo;
++      if(obraParada(o)){
++        const bloq = pendenciasBloqueantesDe(o.id)[0];
++        motivo = `Parada há ${diasParada(o)} dia(s)${bloq? " · "+bloq.categoria : ""}`;
++      } else if(dEntrega<0){
++        const travados = o.ambientes.filter(a=> situacaoAmbiente(a).key==="TRAVADO").length;
++        motivo = `Atraso ${-dEntrega} dia(s)${travados? ` · ${travados} ambiente(s) travado(s)`:""}`;
++      } else {
++        const pend = pendenciasAbertasDe(o.id).length;
++        motivo = `Entrega em ${dEntrega} dia(s)${pend? ` · ${pend} pendência(s) aberta(s)`:""}`;
++      }
++      return {obraId:o.id, numeroOS:o.numeroOS, motivo};
++    });
++    return {emProducao:emProducao.length, emRisco:emRisco.length, paradas:paradas.length, bloqueios, entregas7d:entregas7d.length, prioridades};
++  }
++
++  // TV3 "Atenção": até 4 itens que travam fechamento agora. Regra de
++  // privacidade do handoff (citação literal): "Responsável aparece por
++  // função (PCP, Compras, Projeto), não por pessoa — evita exposição no chão
++  // de fábrica" + "Sem dado de cliente, valor ou contato nesta tela".
++  function tvAtencaoItens(){
++    const pend = M.Store.state.pendencias.filter(p=> p.status!=="RESOLVIDA" && M.bloqueiaFechamento(p.impacto));
++    const comPrazo = pend.map(p=> Object.assign({_dias: p.prazo? diasAte(p.prazo) : 999}, p));
++    comPrazo.sort((x,y)=> x._dias - y._dias);
++    return comPrazo.slice(0,4).map(p=>{
++      const obra = M.Store.getObra(p.obraId);
++      const colab = M.colabByNome(p.responsavel);
++      const funcao = colab? M.perfilDef(colab.perfil).label : "—";
++      const prazoTxt = !p.prazo? "sem prazo" : p._dias<0? "Venceu" : p._dias===0? "Hoje" : p._dias===1? "Amanhã" : fmtDate(p.prazo);
++      return {
++        obraLabel: obra? obra.numeroOS : "—",
++        local: [p.ambienteNome, p.movelNome].filter(Boolean).join(" · "),
++        descricao: p.descricao||p.categoria,
++        funcao, prazoTxt,
++      };
++    });
++  }
++
+   M.Calc = {
+     fmtBRL, fmtBRLk, fmtDate, fmtPct, daysBetween, diasDesde, diasAte,
+     movelConcluido, progressoGrupo, progressoObra, progressoAmbiente,
+@@ -467,6 +527,6 @@
+     paraFinalizar, paraFinalizarTotal, alertasGlobais,
+     indiceDesempenho, pendenciasDoColaborador, rankingColaboradores,
+     assistenciasResumo, auditoriaResumo, metaMensalProgresso, origemProblemaResumo,
+-    producaoHoje,
++    producaoHoje, tvResumoProducao, tvAtencaoItens,
+   };
+ })();
+diff --git a/js/main.js b/js/main.js
+index 183656b..6585eb6 100644
+--- a/js/main.js
++++ b/js/main.js
+@@ -5,7 +5,7 @@
+   "use strict";
+   const M = window.M;
+   const UI = M.UI;
+-  const APP_VERSION = "3.5.0";
++  const APP_VERSION = "3.6.0";
+ 
+   function usuarioAtualColab(){
+     return M.colabByNome(M.Store.state.usuarioAtual) || M.COLABORADORES[9];
+@@ -35,7 +35,12 @@
+   function footerHtml(activeKey, colab){
+     const op = isOperador(colab);
+     const footer = op ? M.Router.FOOTER_OPERADOR : M.Router.FOOTER;
+-    return footer.map(it=> `<a class="nav-link ${it.key===activeKey?'active':''}" href="${it.route}">${UI.icon(it.icon,16)}${it.label}</a>`).join("");
++    const links = footer.map(it=> `<a class="nav-link ${it.key===activeKey?'active':''}" href="${it.route}">${UI.icon(it.icon,16)}${it.label}</a>`).join("");
++    // regrupamento visual (Fase 6 — handoff): rótulo "Administração" sobre os
++    // mesmos links Equipe/Configurações já existentes — não muda visibilidade
++    // nem permissão (OPERADOR/MONTADOR continuam só com FOOTER_OPERADOR, sem
++    // o rótulo, igual hoje), é só o mesmo padrão .nav-label usado no menu.
++    return op ? links : `<div class="nav-label">Administração</div>${links}`;
+   }
+ 
+   function perfilSwitcherHtml(colab){
+@@ -108,9 +113,9 @@
+       console.error(e);
+       page = {title:"Erro", html:`<div class="card pad"><b>Ocorreu um erro ao renderizar esta página.</b><pre style="white-space:pre-wrap;font-size:11px;color:#a33">${UI.esc(e.message)}\n${UI.esc(e.stack||"")}</pre></div>`};
+     }
+-    document.body.classList.toggle("tv-mode", key==="chao-de-fabrica");
++    document.body.classList.toggle("tv-mode", key==="chao-de-fabrica" || key==="tv");
+     const app = document.getElementById("app");
+-    if(key==="chao-de-fabrica"){
++    if(key==="chao-de-fabrica" || key==="tv"){
+       app.innerHTML = page.html;
+     }else{
+       app.innerHTML = shell(key, page);
+diff --git a/js/pages/auditoria.js b/js/pages/auditoria.js
+index aa15a17..9664993 100644
+--- a/js/pages/auditoria.js
++++ b/js/pages/auditoria.js
+@@ -1,5 +1,12 @@
+ /* ============================================================
+    PÁGINA: Auditoria (seções 48-52) — exceções e alterações críticas
++   FASE 6 (handoff "UI · Admin/Auditoria"): "frase legível por gestor, não
++   linha de log" — cada evento vira uma frase única (hora — ator · o quê),
++   com marcador geométrico por TIPO de objeto afetado (não só por
++   categoria), tabs de área (Tudo/Pendência/Montagem/Assistência/Acesso),
++   filtro por usuário/obra e 3 modos de visão (Cronológico/Por obra/Por
++   usuário). Mantém como estava (aditivo): o escopo continua "exceções e
++   alterações críticas", não um log geral — ver disclosure no commit.
+    ============================================================ */
+ (function(){
+   "use strict";
+@@ -10,21 +17,149 @@
+     AVANCO_COM_RESSALVA:"Avanço com ressalva", MUDANCA_RESPONSAVEL:"Mudança de responsável",
+     PENDENCIA_REABERTA:"Pendência reaberta", RETRABALHO:"Retrabalho", ASSISTENCIA_ABERTA:"Assistência aberta",
+     ASSISTENCIA_CONCLUIDA:"Assistência concluída", ALTERACAO_PROCESSO:"Alteração de processo",
+-    MONTAGEM_COM_PENDENCIA:"Montagem com pendência",
+-    // Fase 5 (handoff) — N visitas por chamado + decisão de garantia
++    MONTAGEM_COM_PENDENCIA:"Montagem com pendência", RESSALVA_RESOLVIDA:"Ressalva resolvida",
+     ASSISTENCIA_VISITA_REGISTRADA:"Visita de assistência registrada",
+     ASSISTENCIA_GARANTIA_DEFINIDA:"Garantia definida",
+   };
+ 
+-  M.Pages.auditoria = function(){
+-    if(!M.Store.pode("verAuditoria")){
+-      return {title:"Auditoria", html:`<div class="card pad"><p>Seu perfil (<b>${UI.esc(M.Store.perfilAtual().label)}</b>) não tem acesso à Auditoria.</p></div>`};
++  // área (tabs "Tudo/Pendência/Montagem/Assistência/Acesso" do handoff)
++  const TIPO_AREA = {
++    PENDENCIA_REABERTA:"Pendência",
++    AVANCO_COM_RESSALVA:"Montagem", RESSALVA_RESOLVIDA:"Montagem", MUDANCA_RESPONSAVEL:"Montagem",
++    RETRABALHO:"Montagem", MONTAGEM_COM_PENDENCIA:"Montagem",
++    ASSISTENCIA_ABERTA:"Assistência", ASSISTENCIA_CONCLUIDA:"Assistência",
++    ASSISTENCIA_VISITA_REGISTRADA:"Assistência", ASSISTENCIA_GARANTIA_DEFINIDA:"Assistência",
++    ALTERACAO_PROCESSO:"Acesso",
++  };
++  const AREAS = ["Pendência","Montagem","Assistência","Acesso"];
++
++  // marcador por TIPO de objeto afetado (handoff, citação literal): "pendência
++  // aberta em vermelho, finalização em verde, travamento hachurado, ressalva
++  // em verde riscado, assistência em marrom, ação administrativa em contorno
++  // cinza". "Aberta" e "travamento" ficam sem tipo mapeado hoje porque a
++  // Auditoria (exceções/críticas) não registra abertura nem travamento como
++  // eventos próprios — só ressalva, resolução, assistência e administração.
++  // Tipo sem marcador aqui cai no marcador antigo por categoria (fallback,
++  // nunca quebra).
++  const TIPO_MARCADOR = {
++    ASSISTENCIA_ABERTA:"assistencia", ASSISTENCIA_CONCLUIDA:"assistencia",
++    ASSISTENCIA_VISITA_REGISTRADA:"assistencia", ASSISTENCIA_GARANTIA_DEFINIDA:"assistencia",
++    AVANCO_COM_RESSALVA:"ressalva",
++    RESSALVA_RESOLVIDA:"finalizacao",
++    ALTERACAO_PROCESSO:"administrativa",
++  };
++
++  function primeiroNome(nome){ return (nome||"Alguém").split(" ")[0]; }
++
++  // lead-in curto por tipo, pra compor "Fulano <lead-in> · <descrição>" numa
++  // frase só (handoff: "frase legível por gestor, não linha de log").
++  const TIPO_FRASE_PREFIXO = {
++    ALTERACAO_PROCESSO:"fez uma alteração de processo",
++    AVANCO_COM_RESSALVA:"liberou um avanço com ressalva",
++    RESSALVA_RESOLVIDA:"resolveu uma ressalva",
++    PENDENCIA_REABERTA:"reabriu",
++    RETRABALHO:"gerou um retrabalho",
++    ASSISTENCIA_ABERTA:"abriu uma assistência",
++    ASSISTENCIA_CONCLUIDA:"concluiu uma assistência",
++    MONTAGEM_COM_PENDENCIA:"encerrou uma montagem com pendência",
++  };
++  // prefixos já embutidos na descrição (escritos no Store.audit() de origem)
++  // que ficariam redundantes se repetidos no lead-in — remove antes de compor.
++  const PREFIXO_REDUNDANTE = {
++    ASSISTENCIA_ABERTA:"Assistência aberta — ",
++    ASSISTENCIA_CONCLUIDA:"Assistência concluída — ",
++  };
++
++  function auditoriaFrase(e){
++    const nome = primeiroNome(e.usuario);
++    // Fase 5 já constrói a frase inteira (com ator embutido) pra visita/garantia — usa direto.
++    if(e.tipo==="ASSISTENCIA_VISITA_REGISTRADA" || e.tipo==="ASSISTENCIA_GARANTIA_DEFINIDA"){
++      return e.descricao;
++    }
++    if(e.tipo==="MUDANCA_RESPONSAVEL"){
++      const obj = (e.descricao.match(/"([^"]+)"/)||[])[1] || "item";
++      return `${nome} reatribuiu "${obj}"${e.responsavelAnterior&&e.novoResponsavel? ` — de ${e.responsavelAnterior} para ${e.novoResponsavel}`:""}`;
+     }
++    let desc = e.descricao||"";
++    const redundante = PREFIXO_REDUNDANTE[e.tipo];
++    if(redundante && desc.startsWith(redundante)) desc = desc.slice(redundante.length);
++    const prefixo = TIPO_FRASE_PREFIXO[e.tipo];
++    if(!prefixo) return `${nome} · ${desc}`; // fallback genérico — nunca quebra pra tipo novo/desconhecido
++    return `${nome} ${prefixo} · ${desc}`;
++  }
++
++  function marcadorHtml(e){
++    const m = TIPO_MARCADOR[e.tipo];
++    if(m) return `<span class="audit-marker ${m}" title="${UI.esc(TIPO_LABEL[e.tipo]||e.tipo)}"></span>`;
++    return `<span class="audit-cat ${e.categoria}" title="${UI.esc(TIPO_LABEL[e.tipo]||e.tipo)}"></span>`;
++  }
++
++  function exportarCsv(eventos){
++    const linhas = [["Data","Hora","Usuário","Área","Tipo","Descrição","Obra"].join(";")];
++    eventos.forEach(e=>{
++      const obra = e.obraId? (M.Store.getObra(e.obraId)||{}).cliente||"" : "";
++      linhas.push([e.data, e.hora||"", e.usuario||"", TIPO_AREA[e.tipo]||"", TIPO_LABEL[e.tipo]||e.tipo, (e.descricao||"").replace(/;/g,","), obra].join(";"));
++    });
++    return linhas.join("\n");
++  }
++  // filtragem compartilhada — usada tanto pela tela quanto pelo Exportar,
++  // pra exportar sempre exatamente o que está na tela (mesmo filtro ativo).
++  function eventosFiltrados(){
+     const filtro = M.UIState.auditoriaFiltro;
+     const resumo = C.auditoriaResumo(filtro.periodo);
+     let eventos = resumo.eventos;
+     if(filtro.categoria) eventos = eventos.filter(e=>e.categoria===filtro.categoria);
+     if(filtro.somenteExcecoes) eventos = eventos.filter(e=> e.categoria!=="OPERACIONAL");
++    if(filtro.area) eventos = eventos.filter(e=> TIPO_AREA[e.tipo]===filtro.area);
++    if(filtro.usuario) eventos = eventos.filter(e=> e.usuario===filtro.usuario);
++    if(filtro.obraId) eventos = eventos.filter(e=> e.obraId===filtro.obraId);
++    return eventos;
++  }
++  M.Pages._auditoriaExportarCsv = ()=> exportarCsv(eventosFiltrados()); // exposto pra Act.exportarAuditoria
++
++  M.Pages.auditoria = function(){
++    if(!M.Store.pode("verAuditoria")){
++      return {title:"Auditoria", html:`<div class="card pad"><p>Seu perfil (<b>${UI.esc(M.Store.perfilAtual().label)}</b>) não tem acesso à Auditoria.</p></div>`};
++    }
++    const filtro = M.UIState.auditoriaFiltro;
++    const resumo = C.auditoriaResumo(filtro.periodo);
++    const eventos = eventosFiltrados();
++
++    const usuarios = Array.from(new Set(resumo.eventos.map(e=>e.usuario).filter(Boolean))).sort();
++    const obrasComEvento = Array.from(new Set(resumo.eventos.map(e=>e.obraId).filter(Boolean)))
++      .map(id=>M.Store.getObra(id)).filter(Boolean);
++
++    function linhaHtml(e){
++      return `<div class="audit-row">
++        ${marcadorHtml(e)}
++        <div style="flex:1;">
++          <div class="flex-between">
++            <b>${UI.esc(auditoriaFrase(e))}</b>
++            <span class="audit-time">${C.fmtDate(e.data)} ${e.hora||""}</span>
++          </div>
++          <div class="small muted">${e.obraId? `<a href="#/obra/${e.obraId}">${UI.esc((M.Store.getObra(e.obraId)||{}).cliente||"")}</a> · `:""}${UI.esc(TIPO_LABEL[e.tipo]||e.tipo)}${e.motivo && e.motivo!=="-" ? " · motivo: "+UI.esc(e.motivo):""}${e.novoPrazo? " · novo prazo: "+C.fmtDate(e.novoPrazo):""}</div>
++        </div>
++      </div>`;
++    }
++
++    let corpoHtml;
++    if(!eventos.length){
++      corpoHtml = `<p class="small muted">Nenhum evento de auditoria no período/filtro selecionado.</p>`;
++    } else if(filtro.view==="obra"){
++      const grupos = {};
++      eventos.forEach(e=>{ const k = e.obraId? ((M.Store.getObra(e.obraId)||{}).cliente||"Obra") : "Sem obra"; (grupos[k]=grupos[k]||[]).push(e); });
++      corpoHtml = Object.keys(grupos).sort().map(k=>`
++        <div class="small" style="font-weight:700;color:var(--ink-soft);margin:10px 0 2px;">${UI.esc(k)} <span class="muted" style="font-weight:400;">(${grupos[k].length})</span></div>
++        ${grupos[k].map(linhaHtml).join("")}`).join("");
++    } else if(filtro.view==="usuario"){
++      const grupos = {};
++      eventos.forEach(e=>{ const k = e.usuario||"Sistema"; (grupos[k]=grupos[k]||[]).push(e); });
++      corpoHtml = Object.keys(grupos).sort().map(k=>`
++        <div class="small" style="font-weight:700;color:var(--ink-soft);margin:10px 0 2px;">${UI.person(k)} <span class="muted" style="font-weight:400;">(${grupos[k].length})</span></div>
++        ${grupos[k].map(linhaHtml).join("")}`).join("");
++    } else {
++      corpoHtml = eventos.map(linhaHtml).join("");
++    }
+ 
+     const html = `
+       <div class="help-banner">${UI.icon('shield',13)} Registra exceções e alterações críticas — avanços com ressalva, overrides, retrabalhos, assistências e mudanças de processo. O objetivo é identificar falhas de processo, não culpar indivíduos.</div>
+@@ -39,6 +174,14 @@
+       </div>
+ 
+       <div class="card pad" style="margin-bottom:14px;">
++        <div class="flex-gap" style="flex-wrap:wrap;margin-bottom:10px;">
++          <div class="segmented">
++            <button class="${(!filtro.view||filtro.view==='cronologico')?'active':''}" onclick="Act.setAuditoriaFiltro('view','cronologico')">Cronológico</button>
++            <button class="${filtro.view==='obra'?'active':''}" onclick="Act.setAuditoriaFiltro('view','obra')">Por obra</button>
++            <button class="${filtro.view==='usuario'?'active':''}" onclick="Act.setAuditoriaFiltro('view','usuario')">Por usuário</button>
++          </div>
++          <button class="btn sm" onclick="Act.exportarAuditoria()">${UI.icon('download',12)} Exportar</button>
++        </div>
+         <div class="flex-gap" style="flex-wrap:wrap;">
+           <select onchange="Act.setAuditoriaFiltro('periodo', Number(this.value))">
+             <option value="7" ${filtro.periodo===7?'selected':''}>Últimos 7 dias</option>
+@@ -51,24 +194,25 @@
+             <option value="QUALIDADE" ${filtro.categoria==='QUALIDADE'?'selected':''}>Qualidade</option>
+             <option value="GOVERNANCA" ${filtro.categoria==='GOVERNANCA'?'selected':''}>Governança</option>
+           </select>
++          <select onchange="Act.setAuditoriaFiltro('usuario', this.value)">
++            <option value="">+ Usuário</option>
++            ${usuarios.map(u=>`<option value="${UI.esc(u)}" ${filtro.usuario===u?'selected':''}>${UI.esc(u)}</option>`).join("")}
++          </select>
++          <select onchange="Act.setAuditoriaFiltro('obraId', this.value)">
++            <option value="">+ Obra</option>
++            ${obrasComEvento.map(o=>`<option value="${o.id}" ${filtro.obraId===o.id?'selected':''}>${o.numeroOS} — ${UI.esc(o.cliente)}</option>`).join("")}
++          </select>
+           <label class="chip ${filtro.somenteExcecoes?'brand':'neutral'}" style="cursor:pointer;" onclick="Act.toggleSomenteExcecoes()">Somente exceções (qualidade/governança)</label>
+         </div>
++        <div class="flex-gap" style="flex-wrap:wrap;margin-top:10px;">
++          <label class="chip ${!filtro.area?'brand':'neutral'}" style="cursor:pointer;" onclick="Act.setAuditoriaFiltro('area','')">Tudo</label>
++          ${AREAS.map(a=>`<label class="chip ${filtro.area===a?'brand':'neutral'}" style="cursor:pointer;" onclick="Act.setAuditoriaFiltro('area','${a}')">${a}</label>`).join("")}
++        </div>
+       </div>
+ 
+       <div class="card pad">
+-        <div class="card-title">Linha do tempo</div>
+-        ${eventos.length ? eventos.map(e=>`
+-          <div class="audit-row">
+-            <span class="audit-cat ${e.categoria}"></span>
+-            <div style="flex:1;">
+-              <div class="flex-between">
+-                <b>${UI.esc(TIPO_LABEL[e.tipo]||e.tipo)}</b>
+-                <span class="audit-time">${C.fmtDate(e.data)} ${e.hora||""}</span>
+-              </div>
+-              <div class="small">${UI.esc(e.descricao)}</div>
+-              <div class="small muted">${UI.esc(e.usuario)}${e.motivo && e.motivo!=="-" ? " · motivo: "+UI.esc(e.motivo):""}${e.novoResponsavel? " · novo responsável: "+UI.esc(e.novoResponsavel):""}${e.novoPrazo? " · novo prazo: "+C.fmtDate(e.novoPrazo):""}</div>
+-            </div>
+-          </div>`).join("") : `<p class="small muted">Nenhum evento de auditoria no período selecionado.</p>`}
++        <div class="card-title">${eventos.length} evento${eventos.length===1?"":"s"} ${filtro.periodo? `nos últimos ${filtro.periodo} dias`:""}</div>
++        ${corpoHtml}
+       </div>
+     `;
+     return {title:"Auditoria", crumb:"Exceções, overrides e alterações críticas", html};
+diff --git a/js/pages/tv.js b/js/pages/tv.js
+new file mode 100644
+index 0000000..c148503
+--- /dev/null
++++ b/js/pages/tv.js
+@@ -0,0 +1,120 @@
++/* ============================================================
++   PÁGINA: TV (Fase 6 — handoff seções TV) — painel de parede, 3 modos
++   rotativos a cada 30s: Produção · Montagem · Atenção.
++   Rota NOVA (#/tv), somada ao Chão de Fábrica (#/chao-de-fabrica) já
++   existente — o TV antigo continua funcionando sem alterações, este é
++   um painel adicional fiel ao wireframe do handoff (preto/fundo, texto
++   grande, leitura a distância, zero dado sensível de cliente/valor).
++   ============================================================ */
++(function(){
++  "use strict";
++  const M = window.M, UI = M.UI, C = M.Calc;
++  M.Pages = M.Pages || {};
++
++  const MODOS = ["producao", "montagem", "atencao"];
++  const MODO_LABEL = {producao:"Produção", montagem:"Montagem", atencao:"Atenção"};
++
++  function head(titulo){
++    return `
++      <div class="tv3-head">
++        <div><div class="brandmark">Moodo Produção</div><h1>${UI.esc(titulo)}</h1></div>
++        <div style="text-align:right;">
++          <div class="tv-clock" id="tvClock"></div>
++          <div class="tv-date" id="tvDate"></div>
++        </div>
++      </div>`;
++  }
++
++  function modosStrip(ativo){
++    return `<div class="tv3-modos">${MODOS.map(m=>`<span class="tv3-modo ${m===ativo?'active':''}">${MODO_LABEL[m]}</span>`).join("")}</div>`;
++  }
++
++  // ---------- Modo 1: Produção ----------
++  function telaProducao(){
++    const r = C.tvResumoProducao();
++    const kpis = [
++      {value:r.emProducao, label:"Em produção", tone:""},
++      {value:r.emRisco, label:"Em risco", tone: r.emRisco?"warning":""},
++      {value:r.paradas, label:"Paradas", tone: r.paradas?"critical":""},
++      {value:r.entregas7d, label:"Entregas em 7 dias", tone: r.entregas7d?"info":""},
++    ];
++    return `
++      <div class="tv3-screen">
++        ${head("Produção")}
++        <div class="tv3-kpi-row">
++          ${kpis.map(k=>`<div class="tv3-kpi"><div class="value ${k.tone}">${k.value}</div><div class="label">${UI.esc(k.label)}</div></div>`).join("")}
++        </div>
++        <div class="tv3-list-title">Prioridades do dia ${r.prioridades.length? `<span style="opacity:.55;">${r.prioridades.length}</span>`:""}</div>
++        ${r.prioridades.length ? r.prioridades.map(p=>`
++          <div class="tv3-list-item"><div class="obra">${UI.esc(p.numeroOS)}</div><div class="motivo">${UI.esc(p.motivo)}</div></div>
++        `).join("") : `<div class="tv3-list-item"><div class="motivo" style="text-align:left;opacity:.6;">Nada exigindo ação agora — tudo em dia.</div></div>`}
++        ${modosStrip("producao")}
++        <div class="tv3-disclaimer">Sem dado de cliente, valor ou contato nesta tela · identificação por número de OS</div>
++      </div>`;
++  }
++
++  // ---------- Modo 2: Montagem ----------
++  function telaMontagem(){
++    const obras = M.Store.state.obras;
++    const agg = C.agregarMontagem(obras);
++    const fila = C.prioridadeParaFinalizar(obras).slice(0,4);
++    // "Oportunidade": fechamento projetado se a fila de prioridade (poucos
++    // itens faltando) fosse concluída hoje — dá ao chão de fábrica um alvo
++    // concreto e alcançável, não só o número frio de hoje.
++    const projFinalizados = Math.min(agg.ambientesTotal, agg.ambientesFinalizados + fila.length);
++    const oportunidadePct = agg.ambientesTotal ? Math.round(100*projFinalizados/agg.ambientesTotal) : agg.fechamento;
++    return `
++      <div class="tv3-screen">
++        ${head("Montagem")}
++        <div class="tv3-split">
++          <div>
++            <div class="tv3-list-title">Prioridade para finalizar ${fila.length? `<span style="opacity:.55;">${fila.length}</span>`:""}</div>
++            ${fila.length ? fila.map(l=>`
++              <div class="tv3-list-item"><div class="obra">${UI.esc(l.a.nome)}</div><div class="motivo">${l.itensFaltando} item(ns) faltando · ${l.pct}%</div></div>
++            `).join("") : `<div class="tv3-list-item"><div class="motivo" style="text-align:left;opacity:.6;">Nenhum ambiente perto do fechamento agora.</div></div>`}
++          </div>
++          <div class="tv3-bigpct">
++            <div class="value">${oportunidadePct}%</div>
++            <div class="label">Oportunidade de fechamento hoje</div>
++            <div style="margin-top:18px;font-size:13px;color:#c9b8a4;">Fechamento atual: ${agg.fechamento}% · Físico: ${agg.fisico}%</div>
++          </div>
++        </div>
++        ${modosStrip("montagem")}
++        <div class="tv3-disclaimer">Sem dado de cliente, valor ou contato nesta tela · identificação por ambiente</div>
++      </div>`;
++  }
++
++  // ---------- Modo 3: Atenção ----------
++  function telaAtencao(){
++    const itens = C.tvAtencaoItens();
++    return `
++      <div class="tv3-screen">
++        ${head("Atenção")}
++        <div class="tv3-list-title">O que está travando o fechamento agora ${itens.length? `<span style="opacity:.55;">${itens.length}</span>`:""}</div>
++        ${itens.length ? itens.map(it=>`
++          <div class="tv3-list-item">
++            <div class="obra">${UI.esc(it.obraLabel)}</div>
++            <div class="motivo">${UI.esc(it.local||it.descricao)} · resp. ${UI.esc(it.funcao)} · ${UI.esc(it.prazoTxt)}</div>
++          </div>
++        `).join("") : `<div class="tv3-list-item"><div class="motivo" style="text-align:left;opacity:.6;">Nada travando o fechamento agora.</div></div>`}
++        ${modosStrip("atencao")}
++        <div class="tv3-disclaimer">Sem dado de cliente, valor ou contato nesta tela · responsável identificado só pela função</div>
++      </div>`;
++  }
++
++  M.Pages.tv = function(){
++    const idx = (M.UIState.tvModoIndex||0) % MODOS.length;
++    const modo = MODOS[idx];
++    const html = modo==="producao" ? telaProducao() : modo==="montagem" ? telaMontagem() : telaAtencao();
++    return {html, afterRender(){
++      if(window.__tv3Interval) clearInterval(window.__tv3Interval);
++      if(window.__tv3RotInterval) clearInterval(window.__tv3RotInterval);
++      const tick = ()=>{
++        const el=document.getElementById("tvClock"); if(el) el.textContent = new Date().toLocaleTimeString("pt-BR");
++        const dEl=document.getElementById("tvDate"); if(dEl) dEl.textContent = new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"});
++      };
++      tick(); window.__tv3Interval = setInterval(tick, 1000);
++      window.__tv3RotInterval = setInterval(()=>{ M.UIState.tvModoIndex = ((M.UIState.tvModoIndex||0)+1) % MODOS.length; M.render(); }, 30000);
++    }};
++  };
++})();
+diff --git a/js/router.js b/js/router.js
+index a8f9283..8df63da 100644
+--- a/js/router.js
++++ b/js/router.js
+@@ -27,6 +27,7 @@
+     ]},
+     {group:"Chão de fábrica", items:[
+       {key:"chao-de-fabrica", label:"Chão de Fábrica", icon:"tv", route:"#/chao-de-fabrica"},
++      {key:"tv", label:"Painel TV", icon:"tv", route:"#/tv"},
+       {key:"meu-painel", label:"Minha Produção", icon:"user", route:"#/meu-painel"},
+     ]},
+   ];
+@@ -89,6 +90,7 @@
+     "montagem": ()=> M.Pages.montagem(),
+     "assistencias": ()=> M.Pages.assistencias(),
+     "chao-de-fabrica": ()=> M.Pages.chaoDeFabrica(),
++    "tv": ()=> M.Pages.tv(),
+     "equipe": ()=> M.Pages.equipe(),
+     "configuracoes": (p)=> M.Pages.configuracoes(p[0]),
+     "meu-painel": ()=> M.Pages.meuPainel(),
+diff --git a/service-worker.js b/service-worker.js
+index ef54fc5..6b8da85 100644
+--- a/service-worker.js
++++ b/service-worker.js
+@@ -5,7 +5,7 @@
+    evolução futura — aqui o objetivo é permitir abrir o app e ver a
+    última tela mesmo sem internet, e sinalizar quando há versão nova.
+    ============================================================ */
+-const CACHE_NAME = "moodo-producao-v3.5.0";
++const CACHE_NAME = "moodo-producao-v3.6.0";
+ const SHELL_FILES = [
+   "./",
+   "./index.html",
+@@ -33,6 +33,7 @@ const SHELL_FILES = [
+   "./js/pages/lotes.js",
+   "./js/pages/montagem.js",
+   "./js/pages/chaoDeFabrica.js",
++  "./js/pages/tv.js",
+   "./js/pages/equipe.js",
+   "./js/pages/configuracoes.js",
+   "./js/pages/meuPainel.js",
+-- 
+2.43.0
+

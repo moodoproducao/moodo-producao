@@ -112,6 +112,92 @@
     return Object.assign({}, r, {tone: tonePorNivel[r.nivel]||"neutral", label: labelPorNivel[r.nivel]||r.nivel});
   }
 
+  // ---------- situação de ambiente / Montagem (Fase 4 — handoff) ----------
+  // 6 estados, todos DERIVADOS — nenhum é campo manual próprio do ambiente.
+  // "Travado (sempre com motivo)" deriva do mesmo M.bloqueiaFechamento(impacto)
+  // já usado pra bloqueio de móvel (Fase 2) — o motivo É a descrição da
+  // pendência que causou o impacto, não um campo novo. "Finalizado"/"Finalizado
+  // com ressalva" vêm de a.montagemStatus, setado só por Store.finalizarAmbiente
+  // (ação explícita do usuário, com checklist e — se com ressalva — motivo
+  // obrigatório + permissão, ver Store).
+  function situacaoAmbiente(a){
+    if(a.montagemStatus==="FINALIZADA_RESSALVA"){
+      return {key:"FINALIZADO_RESSALVA", label:"Finalizado com ressalva", tone:"warning",
+        motivo: a.montagemRessalva && a.montagemRessalva.motivo};
+    }
+    if(a.montagemStatus==="FINALIZADA"){
+      return {key:"FINALIZADO", label:"Finalizado", tone:"good"};
+    }
+    const bloqueios = M.Store.bloqueiosAmbiente(a.id);
+    if(bloqueios.length){
+      return {key:"TRAVADO", label:"Travado", tone:"blocked", motivo: bloqueios[0].descricao||bloqueios[0].categoria};
+    }
+    const prog = progressoAmbiente(a);
+    if(!prog.total) return {key:"NAO_INICIADO", label:"Não iniciado", tone:"neutral"};
+    if(prog.pct>=100) return {key:"PRONTO", label:"Pronto para finalizar", tone:"info"};
+    const iniciou = a.moveis.some(m=> pos(m.etapa) >= pos("ENTREGA"));
+    if(!iniciou) return {key:"NAO_INICIADO", label:"Não iniciado", tone:"neutral"};
+    return {key:"EM_MONTAGEM", label:"Em montagem", tone:"neutral"};
+  }
+
+  // "Progresso físico" × "taxa de fechamento" — SEMPRE dois números, nunca
+  // somados (handoff: "a diferença entre os dois é o esforço espalhado").
+  // Físico = fração dos MÓVEIS que já chegaram fisicamente na etapa Montagem
+  // ou além (quanto já foi produzido/instalado). Fechamento = fração dos
+  // AMBIENTES formalmente finalizados (Store.finalizarAmbiente) — auditado,
+  // não autodeclarado (handoff: "o montador solicita, o líder confirma").
+  function progressoFisicoMontagem(o){
+    const allM = o.ambientes.flatMap(a=>a.moveis);
+    if(!allM.length) return 0;
+    const posMontagem = pos("MONTAGEM");
+    return Math.round(100*allM.filter(m=> pos(m.etapa) >= posMontagem).length/allM.length);
+  }
+  function taxaFechamento(o){
+    if(!o.ambientes.length) return 0;
+    const finalizados = o.ambientes.filter(a=> a.montagemStatus==="FINALIZADA"||a.montagemStatus==="FINALIZADA_RESSALVA").length;
+    return Math.round(100*finalizados/o.ambientes.length);
+  }
+  // agrega físico × fechamento pra uma CARTEIRA de obras (tela de Montagem,
+  // que não é uma única obra) — soma itens/ambientes em vez de calcular a
+  // média das porcentagens por obra, pra não distorcer obras pequenas.
+  function agregarMontagem(obras){
+    let totalM=0, montados=0, totalA=0, finalizados=0, iniciados=0;
+    const posMontagem = pos("MONTAGEM");
+    obras.forEach(o=> o.ambientes.forEach(a=>{
+      totalA++;
+      if(a.montagemStatus==="FINALIZADA"||a.montagemStatus==="FINALIZADA_RESSALVA") finalizados++;
+      if(situacaoAmbiente(a).key!=="NAO_INICIADO") iniciados++;
+      a.moveis.forEach(m=>{ totalM++; if(pos(m.etapa)>=posMontagem) montados++; });
+    }));
+    return {
+      fisico: totalM? Math.round(100*montados/totalM):0,
+      fechamento: totalA? Math.round(100*finalizados/totalA):0,
+      ambientesIniciados: iniciados, ambientesTotal: totalA, ambientesFinalizados: finalizados,
+    };
+  }
+
+  // "Prioridade para finalizar" (handoff): ambientes ordenados por proximidade
+  // do fechamento — poucos itens faltando primeiro. Ambientes com 3+ itens
+  // faltando "não são candidatos hoje" (citação literal do handoff) e ficam de
+  // fora; um ambiente TRAVADO continua na lista se estiver perto do fim — é
+  // justamente o que precisa de decisão agora.
+  function prioridadeParaFinalizar(obras){
+    const linhas = [];
+    obras.forEach(o=>{
+      const gruposFalta = paraFinalizar(o);
+      o.ambientes.forEach(a=>{
+        const sit = situacaoAmbiente(a);
+        if(sit.key==="NAO_INICIADO" || sit.key==="FINALIZADO" || sit.key==="FINALIZADO_RESSALVA") return;
+        const grupo = gruposFalta.find(g=>g.ambienteNome===a.nome);
+        const itensFaltando = grupo ? grupo.itens.length : 0;
+        if(itensFaltando>=3) return; // não é candidato hoje
+        linhas.push({o, a, sit, itensFaltando, itens: grupo?grupo.itens:[], pct: progressoAmbiente(a).pct});
+      });
+    });
+    linhas.sort((x,y)=> x.itensFaltando - y.itensFaltando || y.pct - x.pct);
+    return linhas;
+  }
+
   function wipPorEtapa(){
     const etapas = M.Store.etapasOrdenadas();
     const rows = etapas.map(e=>({etapa:e.id, label:e.nomeCurto||e.nome, qtd:0, valor:0}));
@@ -305,7 +391,17 @@
     const all = M.Store.state.assistencias;
     const abertas = all.filter(a=>a.status!=="CONCLUIDA");
     const vencidas = abertas.filter(a=> a.prazo && diasAte(a.prazo)<0);
-    return {total:all.length, abertas:abertas.length, vencidas:vencidas.length, concluidas: all.length-abertas.length};
+    // Fase 5 (handoff, wireframe "3c Assistência — painel pós-entrega"):
+    // "14 solicitações abertas / 3 atrasadas / 4 aguardando peça / 5 agendadas
+    // esta semana" e "6 chamados ativos · 2 com retorno necessário".
+    const aguardandoPeca = abertas.filter(a=>a.status==="AGUARDANDO_MATERIAL").length;
+    const agendadas = abertas.filter(a=>a.status==="AGENDADA").length;
+    const comRetorno = abertas.filter(a=>{
+      const v = a.visitas && a.visitas.length? a.visitas[a.visitas.length-1] : null;
+      return v && v.desfecho==="RETORNO_NECESSARIO";
+    }).length;
+    return {total:all.length, abertas:abertas.length, vencidas:vencidas.length, concluidas: all.length-abertas.length,
+      aguardandoPeca, agendadas, comRetorno};
   }
 
   // ---------- auditoria (seção 48-52) ----------
@@ -362,14 +458,75 @@
     return Object.entries(out).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
   }
 
+  // ---------- TV da fábrica — 3 modos (Fase 6 — handoff) ----------
+  // TV1 "Produção": os mesmos 5 números do painel macro de Produção (Fase 3),
+  // recalculados aqui (não importados de pages/producao.js, que é local à
+  // página) + "prioridades do dia" — até 4 obras que mais exigem ação agora.
+  // Identifica obra por número de OS, nunca por nome do cliente — a TV fica
+  // num painel de parede visível a qualquer um no chão de fábrica.
+  function tvResumoProducao(){
+    const obras = M.Store.state.obras;
+    const emProducao = obras.filter(o=> o.status!=="FINALIZADA");
+    const emRisco = obras.filter(o=> situacaoObra(o).nivel!=="BAIXO");
+    const paradas = obras.filter(o=> obraParada(o));
+    const bloqueios = obras.reduce((s,o)=> s + pendenciasBloqueantesDe(o.id).length, 0);
+    const entregas7d = obras.filter(o=> o.status!=="FINALIZADA" && diasAte(o.dataEntregaPrevista)>=0 && diasAte(o.dataEntregaPrevista)<=7);
+    const candidatas = obras.filter(o=> o.status!=="FINALIZADA" && (obraParada(o) || situacaoObra(o).nivel==="ALTO" ||
+      (diasAte(o.dataEntregaPrevista)>=0 && diasAte(o.dataEntregaPrevista)<=7 && pendenciasAbertasDe(o.id).length)));
+    candidatas.sort((x,y)=>{
+      const px = obraParada(x)?diasParada(x):0, py = obraParada(y)?diasParada(y):0;
+      if(px!==py) return py-px;
+      return diasAte(x.dataEntregaPrevista) - diasAte(y.dataEntregaPrevista);
+    });
+    const prioridades = candidatas.slice(0,4).map(o=>{
+      const dEntrega = diasAte(o.dataEntregaPrevista);
+      let motivo;
+      if(obraParada(o)){
+        const bloq = pendenciasBloqueantesDe(o.id)[0];
+        motivo = `Parada há ${diasParada(o)} dia(s)${bloq? " · "+bloq.categoria : ""}`;
+      } else if(dEntrega<0){
+        const travados = o.ambientes.filter(a=> situacaoAmbiente(a).key==="TRAVADO").length;
+        motivo = `Atraso ${-dEntrega} dia(s)${travados? ` · ${travados} ambiente(s) travado(s)`:""}`;
+      } else {
+        const pend = pendenciasAbertasDe(o.id).length;
+        motivo = `Entrega em ${dEntrega} dia(s)${pend? ` · ${pend} pendência(s) aberta(s)`:""}`;
+      }
+      return {obraId:o.id, numeroOS:o.numeroOS, motivo};
+    });
+    return {emProducao:emProducao.length, emRisco:emRisco.length, paradas:paradas.length, bloqueios, entregas7d:entregas7d.length, prioridades};
+  }
+
+  // TV3 "Atenção": até 4 itens que travam fechamento agora. Regra de
+  // privacidade do handoff (citação literal): "Responsável aparece por
+  // função (PCP, Compras, Projeto), não por pessoa — evita exposição no chão
+  // de fábrica" + "Sem dado de cliente, valor ou contato nesta tela".
+  function tvAtencaoItens(){
+    const pend = M.Store.state.pendencias.filter(p=> p.status!=="RESOLVIDA" && M.bloqueiaFechamento(p.impacto));
+    const comPrazo = pend.map(p=> Object.assign({_dias: p.prazo? diasAte(p.prazo) : 999}, p));
+    comPrazo.sort((x,y)=> x._dias - y._dias);
+    return comPrazo.slice(0,4).map(p=>{
+      const obra = M.Store.getObra(p.obraId);
+      const colab = M.colabByNome(p.responsavel);
+      const funcao = colab? M.perfilDef(colab.perfil).label : "—";
+      const prazoTxt = !p.prazo? "sem prazo" : p._dias<0? "Venceu" : p._dias===0? "Hoje" : p._dias===1? "Amanhã" : fmtDate(p.prazo);
+      return {
+        obraLabel: obra? obra.numeroOS : "—",
+        local: [p.ambienteNome, p.movelNome].filter(Boolean).join(" · "),
+        descricao: p.descricao||p.categoria,
+        funcao, prazoTxt,
+      };
+    });
+  }
+
   M.Calc = {
     fmtBRL, fmtBRLk, fmtDate, fmtPct, daysBetween, diasDesde, diasAte,
     movelConcluido, progressoGrupo, progressoObra, progressoAmbiente,
     itemCriticoGrupo, pendenciasAbertasDe, pendenciasBloqueantesDe, riscoObra, obraParada, diasParada, situacaoMovel, situacaoObra, wipPorEtapa, indicadores,
+    situacaoAmbiente, progressoFisicoMontagem, taxaFechamento, agregarMontagem, prioridadeParaFinalizar,
     parseHora, duracaoHoras, valorProcessadoTarefa, desempenhoColaborador,
     paraFinalizar, paraFinalizarTotal, alertasGlobais,
     indiceDesempenho, pendenciasDoColaborador, rankingColaboradores,
     assistenciasResumo, auditoriaResumo, metaMensalProgresso, origemProblemaResumo,
-    producaoHoje,
+    producaoHoje, tvResumoProducao, tvAtencaoItens,
   };
 })();

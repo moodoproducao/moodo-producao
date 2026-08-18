@@ -5,7 +5,7 @@
   "use strict";
   const M = window.M;
   const UI = M.UI;
-  const APP_VERSION = "3.3.0";
+  const APP_VERSION = "3.6.0";
 
   function usuarioAtualColab(){
     return M.colabByNome(M.Store.state.usuarioAtual) || M.COLABORADORES[9];
@@ -35,7 +35,12 @@
   function footerHtml(activeKey, colab){
     const op = isOperador(colab);
     const footer = op ? M.Router.FOOTER_OPERADOR : M.Router.FOOTER;
-    return footer.map(it=> `<a class="nav-link ${it.key===activeKey?'active':''}" href="${it.route}">${UI.icon(it.icon,16)}${it.label}</a>`).join("");
+    const links = footer.map(it=> `<a class="nav-link ${it.key===activeKey?'active':''}" href="${it.route}">${UI.icon(it.icon,16)}${it.label}</a>`).join("");
+    // regrupamento visual (Fase 6 — handoff): rótulo "Administração" sobre os
+    // mesmos links Equipe/Configurações já existentes — não muda visibilidade
+    // nem permissão (OPERADOR/MONTADOR continuam só com FOOTER_OPERADOR, sem
+    // o rótulo, igual hoje), é só o mesmo padrão .nav-label usado no menu.
+    return op ? links : `<div class="nav-label">Administração</div>${links}`;
   }
 
   function perfilSwitcherHtml(colab){
@@ -108,9 +113,9 @@
       console.error(e);
       page = {title:"Erro", html:`<div class="card pad"><b>Ocorreu um erro ao renderizar esta página.</b><pre style="white-space:pre-wrap;font-size:11px;color:#a33">${UI.esc(e.message)}\n${UI.esc(e.stack||"")}</pre></div>`};
     }
-    document.body.classList.toggle("tv-mode", key==="chao-de-fabrica");
+    document.body.classList.toggle("tv-mode", key==="chao-de-fabrica" || key==="tv");
     const app = document.getElementById("app");
-    if(key==="chao-de-fabrica"){
+    if(key==="chao-de-fabrica" || key==="tv"){
       app.innerHTML = page.html;
     }else{
       app.innerHTML = shell(key, page);

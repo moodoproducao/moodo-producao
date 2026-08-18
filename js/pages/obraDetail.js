@@ -21,11 +21,15 @@
     const list = M.Store.state.assistencias.filter(a=>a.obraId===o.id);
     if(!list.length) return `<p class="small muted">Nenhuma assistência registrada nesta obra.</p>`;
     return `<div class="card pad"><table class="tbl">
-      <thead><tr><th>Descrição</th><th>Categoria</th><th>Origem</th><th>Responsável</th><th>Prazo</th><th>Status</th></tr></thead>
+      <thead><tr><th>Descrição</th><th>Categoria</th><th>Origem</th><th>Responsável</th><th>Prazo</th><th>Garantia</th><th>Visitas</th><th>Status</th></tr></thead>
       <tbody>${list.map(a=>`
-        <tr><td><b>${UI.esc(a.descricao)}</b><div class="small muted">${UI.esc(a.ambienteNome||"")} · ${UI.esc(a.movelNome||"")}</div></td>
+        <tr style="cursor:pointer;" onclick="location.hash='#/assistencias'">
+          <td><b>${UI.esc(a.descricao)}</b><div class="small muted">${UI.esc(a.ambienteNome||"")} · ${UI.esc(a.movelNome||"")}</div></td>
           <td>${UI.esc(a.categoria)}</td><td class="small muted">${UI.esc(a.origem||"—")}</td>
-          <td>${UI.person(a.responsavel)}</td><td>${a.prazo?C.fmtDate(a.prazo):"—"}</td><td>${UI.assistenciaStatusChip(a.status)}</td>
+          <td>${UI.person(a.responsavel)}</td><td>${a.prazo?C.fmtDate(a.prazo):"—"}</td>
+          <td>${UI.garantiaChip(a.garantia)}</td>
+          <td class="small muted">${(a.visitas||[]).length}</td>
+          <td>${UI.assistenciaStatusChip(a.status)}</td>
         </tr>`).join("")}</tbody></table></div>`;
   }
 
@@ -175,11 +179,12 @@
           const crit = C.itemCriticoGrupo(amb.moveis);
           const etapaAmb = crit? M.Store.etapaById(crit.etapa).nome : "Finalizada";
           const pend = C.pendenciasAbertasDe(o.id).filter(x=>x.ambienteId===amb.id).length;
+          const sitAmb = C.situacaoAmbiente(amb);
           return `<div class="obra-ambiente-card ${a && amb.id===a.id?'foco':''}" onclick="Act.focarAmbiente('${o.id}','${amb.id}')">
-            <div style="font-weight:700;font-size:13px;">${UI.esc(amb.nome)}</div>
+            <div class="flex-between"><div style="font-weight:700;font-size:13px;">${UI.esc(amb.nome)}</div>${UI.situacaoAmbienteChip(sitAmb)}</div>
             <div class="small muted" style="margin:2px 0 6px;">Etapa: ${UI.esc(etapaAmb)}</div>
             <div style="font-weight:800;font-size:15px;">${p.pct}%</div>
-            ${UI.progressBar(p.pct)}
+            ${UI.progressBar(p.pct, sitAmb.key==="TRAVADO"?"blocked":"")}
             <div class="small muted" style="margin-top:6px;">${pend? pend+" pendência"+(pend>1?"s":"") : "sem pendências"}</div>
           </div>`;
         }).join("")}
@@ -256,9 +261,19 @@
   function tabAmbientes(o){
     return o.ambientes.map(a=>{
       const prog = C.progressoAmbiente(a);
+      const sitAmb = C.situacaoAmbiente(a);
+      const podeFinalizar = sitAmb.key!=='FINALIZADO' && sitAmb.key!=='FINALIZADO_RESSALVA';
       return `<div class="card pad" style="margin-bottom:12px;">
-        <div class="flex-between"><b>${UI.esc(a.nome)}</b><span class="small muted">${UI.valorOuOculto(C.fmtBRL(a.valorLiquido))} · ${prog.pct}%</span></div>
-        ${UI.progressBar(prog.pct)}
+        <div class="flex-between" style="flex-wrap:wrap;gap:6px;">
+          <div class="flex-gap" style="align-items:center;"><b>${UI.esc(a.nome)}</b>${UI.situacaoAmbienteChip(sitAmb)}</div>
+          <span class="small muted">${UI.valorOuOculto(C.fmtBRL(a.valorLiquido))} · ${prog.pct}%</span>
+        </div>
+        ${UI.progressBar(prog.pct, sitAmb.key==="TRAVADO"?"blocked":"")}
+        <div style="display:flex;justify-content:flex-end;margin-top:8px;">
+          ${podeFinalizar
+            ? `<button class="btn sm" onclick="Act.abrirFinalizarAmbiente('${a.id}')">${UI.icon(sitAmb.key==='TRAVADO'?'lock':'check-circle',12)} ${sitAmb.key==='TRAVADO'?'Destravar':'Finalizar'}</button>`
+            : `<button class="btn sm" onclick="Act.reabrirAmbiente('${a.id}')">${UI.icon('refresh',12)} Reabrir</button>`}
+        </div>
         <div style="margin-top:10px;">
           ${a.moveis.map(m=>{
             const bloqueiosM = M.Store.bloqueiosMovel(m.id);

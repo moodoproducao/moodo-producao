@@ -100,6 +100,17 @@
     return `<span class="chip ${def.tone}">${esc(def.label)}</span>`;
   }
   function tipoChip(tipo){ return `<span class="chip neutral">${esc(tipo||"—")}</span>`; }
+  // Garantia da assistência (Fase 5 — handoff): reaproveita os mesmos
+  // marcadores geométricos de status já definidos — cheio/hachurado/contorno
+  // + marrom Moodo só pra cortesia.
+  function garantiaChip(key){
+    const def = M.garantiaDef(key);
+    return `<span class="chip ${def.tone}"><span class="dot ${def.tone}"></span>${esc(def.label)}</span>`;
+  }
+  // status de AMBIENTE (Fase 4 — Montagem), sempre derivado de M.Calc.situacaoAmbiente
+  function situacaoAmbienteChip(sit){
+    return `<span class="chip ${sit.tone}"><span class="dot ${sit.tone}"></span>${esc(sit.label)}</span>`;
+  }
   function prioridadeChip(p){
     const def = (M.PRIORIDADES_PENDENCIA_DEF||[]).find(x=>x.key===p);
     if(def) return `<span class="chip ${def.tone}">${esc(def.label)}</span>`;
@@ -261,7 +272,7 @@
   }
 
   const UI = {
-    esc, initials, avatar, person, riscoChip, statusPendenciaChip, prioridadeChip, impactoChip, tipoChip,
+    esc, initials, avatar, person, riscoChip, statusPendenciaChip, prioridadeChip, impactoChip, tipoChip, situacaoAmbienteChip, garantiaChip,
     tarefaStatusChip, resultadoChip, progressBar, stageDaysChip, icon, ICONS,
     assistenciaStatusChip, perfilChip, valorOuOculto, tarefaAcoesHtml,
     statTile, card, progressRow, attentionItem, pageSearchInput, attachQuickSearch,

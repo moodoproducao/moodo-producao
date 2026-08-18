@@ -27,6 +27,7 @@
     ]},
     {group:"Chão de fábrica", items:[
       {key:"chao-de-fabrica", label:"Chão de Fábrica", icon:"tv", route:"#/chao-de-fabrica"},
+      {key:"tv", label:"Painel TV", icon:"tv", route:"#/tv"},
       {key:"meu-painel", label:"Minha Produção", icon:"user", route:"#/meu-painel"},
     ]},
   ];
@@ -89,6 +90,7 @@
     "montagem": ()=> M.Pages.montagem(),
     "assistencias": ()=> M.Pages.assistencias(),
     "chao-de-fabrica": ()=> M.Pages.chaoDeFabrica(),
+    "tv": ()=> M.Pages.tv(),
     "equipe": ()=> M.Pages.equipe(),
     "configuracoes": (p)=> M.Pages.configuracoes(p[0]),
     "meu-painel": ()=> M.Pages.meuPainel(),

@@ -8,6 +8,23 @@
   const M = window.M, UI = M.UI, C = M.Calc;
   M.Pages = M.Pages || {};
 
+  // FASE 4 (handoff — permissões em Montagem): "'Bloqueia o ambiente' e
+  // 'bloqueia a obra' exigem Líder ou acima". Nosso modelo de perfis não tem
+  // a granularidade exata do handoff (Admin/Gestor/PCP vs. Líder vs.
+  // Produção/Montador/Assistência) — uso a permissão liberarExcecao já
+  // existente (ADMIN/PCP/LIDERANCA=true, OPERADOR/MONTADOR/TV=false) como
+  // proxy de "Líder ou acima", decisão registrada no relatório de entrega.
+  // Opção aparece desabilitada e visível (não escondida), com o motivo —
+  // mesmo padrão do handoff: "esconder a opção faria o usuário achar que a
+  // regra não existe".
+  function impactoOptionsHtml(selecionado){
+    const podeTravar = M.Store.pode("liberarExcecao");
+    return M.IMPACTOS_PENDENCIA_DEF.map(i=>{
+      const restrito = !podeTravar && (i.key==="BLOQUEIA_AMBIENTE" || i.key==="BLOQUEIA_OBRA");
+      return `<option value="${i.key}" ${i.key===selecionado?'selected':''} ${restrito?'disabled':''}>${UI.esc(i.label)}${restrito?' — requer liderança':''}</option>`;
+    }).join("");
+  }
+
   function fluxoStepsHtml(p, compact){
     if(!p.fluxoPassos || !p.fluxoPassos.length) return "";
     const steps = compact ? p.fluxoPassos.slice(Math.max(0,p.passoAtual-1), p.passoAtual+2) : p.fluxoPassos;
@@ -213,7 +230,7 @@
               <select name="tipo" required>${M.TIPOS_PENDENCIA.map(t=>`<option>${t}</option>`).join("")}</select>
             </div>
             <div class="field"><label>Impacto <span class="small muted">(o que isso trava)</span></label>
-              <select name="impacto" required>${M.IMPACTOS_PENDENCIA_DEF.map(i=>`<option value="${i.key}" ${i.key==='IMPEDE_FINALIZAR'?'selected':''}>${i.label}</option>`).join("")}</select>
+              <select name="impacto" required>${impactoOptionsHtml('IMPEDE_FINALIZAR')}</select>
             </div>
           </div>
           <div class="field-row">
