@@ -5,7 +5,7 @@
   "use strict";
   const M = window.M;
   const UI = M.UI;
-  const APP_VERSION = "3.2.0";
+  const APP_VERSION = "3.3.0";
 
   function usuarioAtualColab(){
     return M.colabByNome(M.Store.state.usuarioAtual) || M.COLABORADORES[9];
@@ -19,7 +19,7 @@
       : `<a class="nav-link ${it.key===activeKey?'active':''}" href="${it.route}">${UI.icon(it.icon,16)}${it.label}</a>`;
     if(mobile){
       const flat = op ? M.Router.MOBILE_NAV_OPERADOR : [
-        {key:"dashboard",label:"Início",icon:"home",route:"#/dashboard"},
+        {key:"hoje",label:"Hoje",icon:"home",route:"#/hoje"},
         {key:"producao",label:"Produção",icon:"kanban",route:"#/producao"},
         {key:"pendencias",label:"Pendências",icon:"alert",route:"#/pendencias"},
         {key:"tarefas",label:"Tarefas",icon:"list",route:"#/tarefas"},
@@ -100,7 +100,7 @@
     const navegou = hashAtual !== ultimoHashRenderizado;
     ultimoHashRenderizado = hashAtual;
     const {key, params} = M.Router.parseHash();
-    const fn = M.Router.ROUTES[key] || M.Router.ROUTES["dashboard"];
+    const fn = M.Router.ROUTES[key] || M.Router.ROUTES["hoje"];
     let page;
     try{
       page = fn(params) || {html:"<p>Página não encontrada.</p>"};
@@ -141,7 +141,7 @@
   window.addEventListener("DOMContentLoaded", ()=>{
     if(!location.hash){
       const colab = usuarioAtualColab();
-      location.hash = isOperador(colab) ? "#/meu-painel" : "#/dashboard";
+      location.hash = isOperador(colab) ? "#/meu-painel" : "#/hoje";
     }
     render();
     M.Store.subscribe(render);

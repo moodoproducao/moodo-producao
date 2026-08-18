@@ -17,6 +17,9 @@
     pendFiltro: {categoria:"", status:"", tipo:"", obraId:"", responsavel:"", prioridade:"", bloqueiaFechamento:false, busca:""},
     pendExpandido: null,
     pendView: "lista", // "lista" | "kanban" (handoff — Fase 2)
+    producaoView: "macro", // "macro" | "kanban" (handoff — Fase 3: "painel de obras, macro por padrão")
+    producaoFiltros: new Set(), // chips combináveis: EM_PRODUCAO/EM_RISCO/PARADA/CRITICAS/ENTREGAS_7D
+    producaoExpandidas: new Set(), // obraIds com a linha expandida (ambientes só aparecem sob demanda)
     tarefaFiltro: {responsavel:"", status:"", obraId:""},
     calMonth: M.TODAY.getMonth(), calYear: M.TODAY.getFullYear(),
     calFiltros: new Set(["PRODUCAO","ENTREGAS","MONTAGENS","PENDENCIAS","FORNECEDORES","ASSISTENCIAS"]),
@@ -56,7 +59,7 @@
   const Act = {
     go(route){ location.hash = route; },
     rerender(){ M.render(); },
-    trocarUsuario(nome){ M.Store.setUsuarioAtual(nome); UI.toast("Agora navegando como "+nome+"."); location.hash = "#/dashboard"; },
+    trocarUsuario(nome){ M.Store.setUsuarioAtual(nome); UI.toast("Agora navegando como "+nome+"."); location.hash = "#/hoje"; },
 
     // ---------- equipe (grava direto na tabela colaboradores do Supabase) ----------
     openColaboradorForm(id){
@@ -133,6 +136,27 @@
       let ok=0, total=alvos.length;
       alvos.forEach(m=>{ const r = M.Store.moverEtapa(m.id, novaEtapaId, {}); if(r.ok) ok++; });
       UI.toast(ok===total? `${ok===1?'Móvel avançou':'Móveis avançaram'} para ${M.Store.etapaById(novaEtapaId).nome}.` : `${ok}/${total} avançaram — o resto ficou pra trás, confira o bloqueio.`);
+    },
+
+    // ---------- Produção macro (handoff — Fase 3) ----------
+    setProducaoView(v){ M.UIState.producaoView = v; Act.rerender(); },
+    toggleProducaoFiltro(key){
+      const s = M.UIState.producaoFiltros;
+      if(s.has(key)) s.delete(key); else s.add(key);
+      Act.rerender();
+    },
+    toggleProducaoExpandida(obraId){
+      const s = M.UIState.producaoExpandidas;
+      if(s.has(obraId)) s.delete(obraId); else s.add(obraId);
+      Act.rerender();
+    },
+
+    // ---------- Hoje (handoff — Fase 3): abre uma pendência específica já
+    // expandida na tela de Pendências, em vez de só linkar pra lista inteira ----------
+    abrirPendenciaEm(pendId){
+      M.UIState.pendExpandido = pendId;
+      M.UIState.pendFiltro = {categoria:"", status:"", tipo:"", obraId:"", responsavel:"", prioridade:"", bloqueiaFechamento:false, busca:""};
+      location.hash = "#/pendencias";
     },
 
     // ---------- kanban ----------
@@ -589,7 +613,7 @@
     toggleTvWidget(id){ M.Store.toggleTvWidget(id); },
     restaurarDados(){
       UI.confirm("Isso vai apagar tudo o que foi alterado no protótipo e voltar aos dados de exemplo originais. Continuar?", ()=>{
-        M.Store.reset(); UI.toast("Dados de exemplo restaurados."); location.hash = "#/dashboard";
+        M.Store.reset(); UI.toast("Dados de exemplo restaurados."); location.hash = "#/hoje";
       });
     },
 

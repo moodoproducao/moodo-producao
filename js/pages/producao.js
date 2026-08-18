@@ -53,7 +53,122 @@
     </div>`;
   }
 
+  // ============================================================
+  // "Produção" macro (handoff — Fase 3): "painel de obras, macro por
+  // padrão" — obra é a unidade de linha; ambiente só aparece por expansão,
+  // e só quando há exceção (bloqueio). KPIs no topo são filtros combináveis
+  // (seguindo o texto do handoff: "cada indicador é um filtro · combináveis").
+  // Coexiste com o Kanban existente via toggle — nada do Kanban foi removido.
+  // ============================================================
+  function kpiSetsProducao(obras){
+    return {
+      EM_PRODUCAO: obras.filter(o=> o.status!=="FINALIZADA"),
+      EM_RISCO:    obras.filter(o=> C.situacaoObra(o).nivel!=="BAIXO"),
+      PARADA:      obras.filter(o=> C.obraParada(o)),
+      CRITICAS:    obras.filter(o=> C.pendenciasAbertasDe(o.id).some(p=> p.impacto==="BLOQUEIA_AMBIENTE"||p.impacto==="BLOQUEIA_OBRA")),
+      ENTREGAS_7D: obras.filter(o=> o.status!=="FINALIZADA" && C.diasAte(o.dataEntregaPrevista)>=0 && C.diasAte(o.dataEntregaPrevista)<=7),
+    };
+  }
+  function kpiChipsHtml(sets, obrasTodas){
+    const criticasPend = obrasTodas.reduce((s,o)=> s + C.pendenciasAbertasDe(o.id).filter(p=>p.impacto==="BLOQUEIA_AMBIENTE"||p.impacto==="BLOQUEIA_OBRA").length, 0);
+    const defs = [
+      {key:"EM_PRODUCAO", label:"Em produção", count:sets.EM_PRODUCAO.length, tone:""},
+      {key:"EM_RISCO",    label:"Em risco",     count:sets.EM_RISCO.length,    tone:"warning"},
+      {key:"PARADA",      label:"Paradas",      count:sets.PARADA.length,      tone:"critical"},
+      {key:"CRITICAS",    label:"Pendências críticas", count:criticasPend,     tone:"critical"},
+      {key:"ENTREGAS_7D", label:"Entregas 7 dias", count:sets.ENTREGAS_7D.length, tone:""},
+    ];
+    const ativos = M.UIState.producaoFiltros;
+    return `<div class="stat-row" style="margin-bottom:14px;">${defs.map(d=>`
+      <button class="stat-tile" style="text-align:left;cursor:pointer;border:1px solid ${ativos.has(d.key)?'var(--brand)':'var(--border)'};background:${ativos.has(d.key)?'var(--brand-wash)':'var(--surface)'};" onclick="Act.toggleProducaoFiltro('${d.key}')">
+        <div class="label">${UI.esc(d.label)}</div>
+        <div class="value${d.tone==='critical' && d.count? ' critical':''}">${d.count}</div>
+      </button>`).join("")}</div>`;
+  }
+  function ambientesExcecaoHtml(o){
+    const ambs = o.ambientes.filter(a=> C.itemCriticoGrupo(a.moveis) && M.Store.bloqueiosMovel(C.itemCriticoGrupo(a.moveis).id).length);
+    if(!ambs.length) return `<div class="small muted" style="padding:8px 0;">Nenhum ambiente com exceção aberta agora.</div>`;
+    return ambs.map(a=>{
+      const crit = C.itemCriticoGrupo(a.moveis);
+      const bloqueios = M.Store.bloqueiosMovel(crit.id);
+      const prog = C.progressoAmbiente(a);
+      return `<div class="check-row" style="cursor:pointer;" onclick="Act.irParaObra('${o.id}','${a.id}')">
+        <span class="dot critical"></span>
+        <span class="label"><b>${UI.esc(a.nome)}</b> <span class="chip neutral" style="margin-left:4px;">${prog.pct}%</span>
+          <div class="small muted">${UI.esc(crit.nome)} · ${UI.esc(bloqueios[0].descricao||bloqueios[0].categoria)}</div></span>
+      </div>`;
+    }).join("");
+  }
+  function producaoMacroHtml(obrasVisiveis){
+    const sets = kpiSetsProducao(obrasVisiveis);
+    const setIds = {}; Object.keys(sets).forEach(k=> setIds[k] = new Set(sets[k].map(o=>o.id)));
+    let filtradas = obrasVisiveis;
+    M.UIState.producaoFiltros.forEach(key=>{ if(setIds[key]) filtradas = filtradas.filter(o=> setIds[key].has(o.id)); });
+    filtradas = filtradas.map(o=>({o, sit:C.situacaoObra(o)}))
+      .sort((a,b)=> ({ALTO:0,MEDIO:1,BAIXO:2}[a.sit.nivel]) - ({ALTO:0,MEDIO:1,BAIXO:2}[b.sit.nivel]) || a.sit.diasEntrega - b.sit.diasEntrega);
+
+    const rows = filtradas.map(({o,sit})=>{
+      const allM = o.ambientes.flatMap(a=>a.moveis);
+      const crit = C.itemCriticoGrupo(allM);
+      const etapaLabel = crit ? (M.Store.etapaById(crit.etapa).nomeCurto||M.Store.etapaById(crit.etapa).nome) : "Concluída";
+      const pend = C.pendenciasAbertasDe(o.id);
+      const bloqueantes = C.pendenciasBloqueantesDe(o.id);
+      const expandido = M.UIState.producaoExpandidas.has(o.id);
+      return `<tr style="cursor:pointer;" onclick="Act.toggleProducaoExpandida('${o.id}')">
+          <td><b>${UI.esc(o.cliente)}</b><div class="small muted">${o.numeroOS}</div></td>
+          <td style="min-width:110px;"><b>${sit.progresso}%</b>${UI.progressBar(sit.progresso, sit.tone==='critical'?'':'')}</td>
+          <td><span class="chip brand">${UI.esc(etapaLabel)}</span></td>
+          <td>${pend.length? `<span class="chip ${bloqueantes.length?'critical':'neutral'}">${pend.length}${bloqueantes.length?` (${bloqueantes.length} bloq.)`:''}</span>` : `<span class="chip good">sem pendências</span>`}</td>
+          <td>${UI.riscoChip(sit)}</td>
+          <td>${C.fmtDate(o.dataEntregaPrevista)}<div class="small muted">${sit.diasEntrega<0?`${-sit.diasEntrega}d atrasada`:`em ${sit.diasEntrega}d`}</div></td>
+          <td>${UI.person(o.responsavel)}</td>
+          <td onclick="event.stopPropagation()"><a class="btn sm" href="#/obra/${o.id}">Abrir →</a></td>
+        </tr>
+        ${expandido ? `<tr><td colspan="8" style="background:var(--surface-alt);padding:10px 14px;">${ambientesExcecaoHtml(o)}</td></tr>` : ""}`;
+    }).join("");
+
+    return `
+      ${kpiChipsHtml(sets, obrasVisiveis)}
+      <div class="card pad">
+        ${filtradas.length ? `<div style="overflow-x:auto;"><table class="tbl">
+          <thead><tr><th>Obra</th><th>Progresso</th><th>Etapa atual</th><th>Pendências</th><th>Risco</th><th>Entrega</th><th>Resp.</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>` : `<p class="small muted">Nenhuma obra com os filtros combinados atuais.</p>`}
+      </div>
+      <p class="small muted" style="margin-top:8px;">Clique numa linha para expandir e ver os ambientes com exceção aberta — móvel/peça só aparecem dentro da pendência, na tela de Pendências.</p>
+    `;
+  }
+
   M.Pages.producao = function(){
+    // item 9: sem verTodasObras, só entram no board os itens das obras onde a
+    // pessoa tem tarefa/pendência/assistência atribuída — derivado na hora,
+    // não existe (nem deveria existir) um campo fixo "obra do fulano".
+    const restrito = !M.Store.pode("verTodasObras");
+    const meuObraIds = restrito ? M.Store.obraIdsDoColaborador(M.Store.state.usuarioAtual) : null;
+    const obrasVisiveis = restrito ? M.Store.state.obras.filter(o=>meuObraIds.has(o.id)) : M.Store.state.obras;
+
+    // FASE 3 (handoff): "Produção" agora tem duas visões — Macro (obra como
+    // unidade de linha, "painel de obras, macro por padrão") e o Kanban que
+    // já existia (obra/ambiente/móvel, arrastável). Nada do Kanban mudou;
+    // só ganhou um irmão que abre por padrão, seguindo o handoff.
+    const producaoView = M.UIState.producaoView || "macro";
+    const toggleTopoHtml = `
+      ${restrito? `<div class="help-banner">${UI.icon('user',13)} Mostrando só as obras onde você tem tarefa, pendência ou assistência atribuída.</div>`:""}
+      <div class="board-toolbar flex-between" style="margin-bottom:10px;">
+        <div class="segmented">
+          <button class="${producaoView==='macro'?'active':''}" onclick="Act.setProducaoView('macro')">Macro</button>
+          <button class="${producaoView==='kanban'?'active':''}" onclick="Act.setProducaoView('kanban')">Kanban</button>
+        </div>
+        <div class="small muted">${producaoView==='macro' ? "Obra é a unidade da linha — clique para expandir e ver ambientes com exceção." : "Arraste os cartões entre etapas, ou clique para abrir o detalhe."}</div>
+      </div>
+    `;
+
+    if(producaoView==="macro"){
+      const html = toggleTopoHtml + producaoMacroHtml(obrasVisiveis);
+      return {title:"Produção", crumb:"Painel de obras — macro por padrão", html,
+        actionsHtml:`<a href="#/nova-obra" class="btn primary">${UI.icon('plus',14)} Nova Obra</a>`};
+    }
+
     const view = M.UIState.kanbanView || "ambientes";
     // colunas do Kanban = etapas ATIVAS, na ordem configurada (Configurações → Processos → Etapas)
     const etapasCols = M.Store.etapasAtivas();
@@ -67,13 +182,6 @@
       return prox ? idxById[prox.id] : etapasCols.length-1;
     }
     const cols = etapasCols.map(()=>[]);
-
-    // item 9: sem verTodasObras, só entram no board os itens das obras onde a
-    // pessoa tem tarefa/pendência/assistência atribuída — derivado na hora,
-    // não existe (nem deveria existir) um campo fixo "obra do fulano".
-    const restrito = !M.Store.pode("verTodasObras");
-    const meuObraIds = restrito ? M.Store.obraIdsDoColaborador(M.Store.state.usuarioAtual) : null;
-    const obrasVisiveis = restrito ? M.Store.state.obras.filter(o=>meuObraIds.has(o.id)) : M.Store.state.obras;
 
     if(view==="moveis"){
       M.Store.allMoveis().forEach(({o,a,m})=>{
@@ -109,8 +217,7 @@
       </div>
     `).join("");
 
-    const html = `
-      ${restrito? `<div class="help-banner">${UI.icon('user',13)} Mostrando só as obras onde você tem tarefa, pendência ou assistência atribuída.</div>`:""}
+    const html = toggleTopoHtml + `
       <div class="board-toolbar flex-between" style="margin-bottom:10px;">
         <div class="segmented">
           <button class="${view==='ambientes'?'active':''}" onclick="Act.setKanbanView('ambientes')">Ambientes</button>

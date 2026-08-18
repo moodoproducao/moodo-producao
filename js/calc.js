@@ -56,6 +56,18 @@
     return pendenciasAbertasDe(obraId).filter(p=> M.bloqueiaFechamento(p.impacto));
   }
 
+  // FASE 3 (handoff — Hoje/Produção macro): sinal de obra "parada", distinto
+  // de risco. Risco pode ser só prazo apertado sem nada travado; "parada" é
+  // ter pendência bloqueante aberta há muitos dias sem se mover — mesmo
+  // limiar (5 dias) já usado em alertasGlobais para "móvel parado".
+  function obraParada(o){
+    return pendenciasBloqueantesDe(o.id).some(p=> diasDesde(p.abertura) >= 5);
+  }
+  function diasParada(o){
+    const dias = pendenciasBloqueantesDe(o.id).map(p=> diasDesde(p.abertura));
+    return dias.length ? Math.max(...dias) : 0;
+  }
+
   function riscoObra(o){
     const prog = progressoObra(o);
     const diasEntrega = diasAte(o.dataEntregaPrevista);
@@ -353,7 +365,7 @@
   M.Calc = {
     fmtBRL, fmtBRLk, fmtDate, fmtPct, daysBetween, diasDesde, diasAte,
     movelConcluido, progressoGrupo, progressoObra, progressoAmbiente,
-    itemCriticoGrupo, pendenciasAbertasDe, pendenciasBloqueantesDe, riscoObra, situacaoMovel, situacaoObra, wipPorEtapa, indicadores,
+    itemCriticoGrupo, pendenciasAbertasDe, pendenciasBloqueantesDe, riscoObra, obraParada, diasParada, situacaoMovel, situacaoObra, wipPorEtapa, indicadores,
     parseHora, duracaoHoras, valorProcessadoTarefa, desempenhoColaborador,
     paraFinalizar, paraFinalizarTotal, alertasGlobais,
     indiceDesempenho, pendenciasDoColaborador, rankingColaboradores,

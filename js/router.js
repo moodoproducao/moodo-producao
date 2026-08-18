@@ -7,7 +7,7 @@
 
   const MENU = [
     {group:"", items:[
-      {key:"dashboard", label:"Dashboard", icon:"home", route:"#/dashboard"},
+      {key:"hoje", label:"Hoje", icon:"home", route:"#/hoje"},
     ]},
     {group:"Produção", items:[
       {key:"producao", label:"Produção", icon:"kanban", route:"#/producao"},
@@ -62,13 +62,18 @@
   ];
 
   function parseHash(){
-    const h = (location.hash||"#/dashboard").replace(/^#\//,"");
+    const h = (location.hash||"#/hoje").replace(/^#\//,"");
     const parts = h.split("/").filter(Boolean);
-    return {key: parts[0]||"dashboard", params: parts.slice(1)};
+    return {key: parts[0]||"hoje", params: parts.slice(1)};
   }
 
   const ROUTES = {
-    "dashboard": ()=> M.Pages.dashboard(),
+    "hoje": ()=> M.Pages.hoje(),
+    // FASE 3 (handoff): "Dashboard" saiu do menu, virou "Hoje" (fila de ação,
+    // não mais KPIs). Mantido como alias de rota só pra não quebrar link/
+    // favorito antigo — js/pages/dashboard.js continua no repo, só não é
+    // mais alcançado pelo menu nem pelo fallback padrão.
+    "dashboard": ()=> M.Pages.hoje(),
     "producao": ()=> M.Pages.producao(),
     "obras": ()=> M.Pages.obras(),
     "nova-obra": ()=> M.Pages.novaObra(),
