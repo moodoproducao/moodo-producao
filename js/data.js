@@ -7,7 +7,16 @@ window.M = window.M || {};
   "use strict";
 
   // ---------- datas utilitárias ----------
-  const TODAY = new Date(2026,7,8); // 8 ago 2026
+  // CORREÇÃO (Fase 0 — V2, bug P0): esta constante era uma data fixa
+  // (new Date(2026,7,8)), então "hoje" no sistema inteiro (Hoje, atraso,
+  // risco, agenda, indicadores, auditoria) nunca avançava depois de
+  // 8/ago/2026. Agora TODAY reflete a data real do aparelho, à meia-noite
+  // local (mesmo padrão de construção de antes — só a origem da data mudou),
+  // recalculada a cada carregamento da página. Dados já gravados no
+  // localStorage/Supabase não são reescritos por esta mudança: só passam a
+  // ser comparados contra a data real em vez da data congelada.
+  const _agoraReal = new Date();
+  const TODAY = new Date(_agoraReal.getFullYear(), _agoraReal.getMonth(), _agoraReal.getDate());
   function dOff(days){ const x = new Date(TODAY); x.setDate(x.getDate()+days); return x.toISOString().slice(0,10); }
   function todayISO(){ return TODAY.toISOString().slice(0,10); }
 
