@@ -47,6 +47,49 @@ window.M = window.M || {};
     {key:"LOGISTICA",    label:"Logística / Obra"},
   ];
 
+  // ============================================================
+  // FASE 3 (proposta aprovada — "FASE 3 — DECISÕES APROVADAS COM AJUSTES") —
+  // faseMacro da OBRA: 11 estágios operacionais, distintos da etapa por
+  // MÓVEL acima (ETAPAS_SEED). Mesmo padrão — catálogo configurável, chave
+  // estável ("key"), nunca índice numérico — mas essa é a fase da OBRA como
+  // um todo ("macro"), não do móvel individual ("micro").
+  //
+  // "LIBERACAO" é fase só de obra, SEM etapa de móvel equivalente (decisão
+  // fechada — o pipeline de móvel vai direto de PROJETO_EXECUTIVO pra
+  // PLANO_DE_CORTE; quem move a obra pra LIBERACAO faz isso manualmente,
+  // representando a aprovação/liberação do projeto antes do PCP montar o
+  // plano de corte).
+  //
+  // "LIBERADA_PARA_PRODUCAO" ≠ "PRODUCAO": tecnicamente pronta pra fábrica,
+  // mas pode estar esperando material/ferragem/MDF/componente/fornecedor/
+  // capacidade/programação — são fases distintas de propósito.
+  //
+  // impactaRisco: única propriedade que Calc.riscoObra() lê pra decidir se
+  // avalia risco — NUNCA checar o nome/key da fase por string no código.
+  // AGUARDANDO_INICIO e CONCLUIDA são as únicas com impactaRisco:false (obra
+  // que ainda não começou, ou que já terminou, não deve gerar alerta de
+  // atraso/risco). Todas as intermediárias são impactaRisco:true.
+  //
+  // Sem "quemMove": autorização de quem pode mover a fase não vive aqui
+  // (decisão explícita — a Fase 1 já criou permissões granulares justamente
+  // pra evitar checagem de perfil hardcoded). Quando o movimento de fase for
+  // implementado, usa permissão granular própria (Store.pode(...)), do
+  // mesmo jeito que todo o resto do sistema já funciona.
+  // ============================================================
+  const FASES_MACRO_SEED = [
+    {key:"AGUARDANDO_INICIO",     label:"Aguardando início",       ordem:0,  impactaRisco:false, ativa:true},
+    {key:"MEDICAO",                label:"Medição",                 ordem:1,  impactaRisco:true,  ativa:true},
+    {key:"PROJETO_EXECUTIVO",      label:"Projeto executivo",       ordem:2,  impactaRisco:true,  ativa:true},
+    {key:"LIBERACAO",              label:"Liberação",               ordem:3,  impactaRisco:true,  ativa:true},
+    {key:"PCP_PLANO_DE_CORTE",     label:"PCP / Plano de corte",    ordem:4,  impactaRisco:true,  ativa:true},
+    {key:"LIBERADA_PARA_PRODUCAO", label:"Liberada para produção",  ordem:5,  impactaRisco:true,  ativa:true},
+    {key:"PRODUCAO",                label:"Produção",                ordem:6,  impactaRisco:true,  ativa:true},
+    {key:"AGUARDANDO_MONTAGEM",     label:"Aguardando montagem",     ordem:7,  impactaRisco:true,  ativa:true},
+    {key:"MONTAGEM",                label:"Montagem",                 ordem:8,  impactaRisco:true,  ativa:true},
+    {key:"FINALIZACAO",             label:"Finalização",             ordem:9,  impactaRisco:true,  ativa:true},
+    {key:"CONCLUIDA",               label:"Concluída",               ordem:10, impactaRisco:false, ativa:true},
+  ];
+
   // requisitos padrão por etapa — semente inicial da biblioteca configurável
   // (obrigatorio: "OBRIGATORIO" | "RECOMENDADO" | "OPCIONAL")
   const REQUISITOS_SEED = {
@@ -889,6 +932,7 @@ window.M = window.M || {};
   M.todayISO = todayISO;
   M.ETAPAS_SEED = ETAPAS_SEED;
   M.STAGE_GROUPS = STAGE_GROUPS;
+  M.FASES_MACRO_SEED = FASES_MACRO_SEED;
   M.REQUISITOS_SEED = REQUISITOS_SEED;
   M.CATEGORIAS_PENDENCIA = CATEGORIAS_PENDENCIA;
   M.CATEGORIAS_PENDENCIA_DEF = CATEGORIAS_PENDENCIA_DEF;

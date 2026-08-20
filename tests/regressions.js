@@ -716,4 +716,163 @@ assert.equal(permMigradas.ASSISTENCIA["pendencia.ver"], true);
 appMigracao.M.Store.setUsuarioAtual("Paulo Henrique");
 assert.equal(appMigracao.M.Store.pode("obra.criar"), true);
 
+// ==================================================================
+// FASE 3 — faseMacro + regra de risco formal ("FASE 3 — DECISÕES
+// APROVADAS COM AJUSTES"). Contexto isolado, com FIXTURES próprias — não
+// usa nenhuma das 9 obras reais de produção (essas são dado de
+// desenvolvimento/modelo, serão descartadas antes do go-live real, ver
+// RELATORIO-FASE-3.md — não fazem parte da suite de regressão).
+// ==================================================================
+const appFase3 = contextoBase();
+executar(appFase3, "js/data.js");
+appFase3.M.UI = {};
+appFase3.M.Pages = {};
+executar(appFase3, "js/store.js");
+executar(appFase3, "js/calc.js");
+
+// ---- catálogo FASES_MACRO_SEED: 11 fases, só AGUARDANDO_INICIO/CONCLUIDA
+// sem impacto de risco, nenhuma com "quemMove" (removido por decisão
+// explícita da rodada de ajuste) ----
+{
+  const fases = appFase3.M.FASES_MACRO_SEED;
+  assert.equal(fases.length, 11, "FASES_MACRO_SEED precisa ter exatamente 11 fases");
+  // Array.from(): fases roda no realm isolado do vm (mesma questão já
+  // documentada nos testes de menu por perfil acima) — sem isso,
+  // assert.deepEqual falha por "mesma estrutura, não referência-iguais".
+  const semImpacto = Array.from(fases.filter(f=>!f.impactaRisco).map(f=>f.key)).sort();
+  assert.deepEqual(semImpacto, ["AGUARDANDO_INICIO","CONCLUIDA"].sort(), "só AGUARDANDO_INICIO e CONCLUIDA podem ter impactaRisco:false");
+  Array.from(fases).forEach(f=> assert.equal(f.quemMove, undefined, `fase "${f.key}" não deveria ter quemMove (removido por decisão da FASE 3)`));
+}
+
+// ---- fixture helper: obra mínima, com faseMacro/pendências/prazo controlados ----
+let _fxSeq = 0;
+function obraFixture(over){
+  _fxSeq++;
+  return Object.assign({
+    id: "fx-obra-"+_fxSeq, numeroOS: "OS FIXTURE/"+_fxSeq, cliente: "Cliente Fixture",
+    dataOS: appFase3.M.todayISO(), criadaEm: appFase3.M.todayISO(),
+    dataEntregaPrevista: appFase3.M.dOff(30), dataEntregaReal: null,
+    valorBruto: 1000, valorLiquido: 1000, status: "EM_PRODUCAO", responsavel: "Teste",
+    ambientes: [{id:"fx-amb-"+_fxSeq, nome:"Ambiente Fixture", moveis:[{id:"fx-mov-"+_fxSeq, nome:"Móvel Fixture", etapa:"CORTE", componentesCriticos:[]}]}],
+  }, over);
+}
+function pendenciaFixture(obraId, over){
+  return Object.assign({id:"fx-pnd-"+(Math.random()), obraId, status:"ABERTA", categoria:"Teste", impacto:"IMPEDE_FINALIZAR", abertura: appFase3.M.todayISO()}, over);
+}
+
+// ---- 1) nova obra criada via Store.criarObra nasce em AGUARDANDO_INICIO ----
+{
+  const montada = obraFixture({id:"fx-nova-1", numeroOS:"OS FIXTURE/NOVA", ambientes:[{id:"amb-nova", nome:"Sala", valorBrutoPct:1, moveis:[{nome:"Item novo", valorLiquido:1000}]}]});
+  const criada = appFase3.M.Store.criarObra(montada);
+  assert.equal(criada.faseMacro, "AGUARDANDO_INICIO", "toda obra nova precisa nascer em AGUARDANDO_INICIO");
+}
+
+// ---- 2) fase sem impactaRisco -> sempre N/A, mesmo com entrega vencida + BLOQUEIA_OBRA ----
+{
+  const o = obraFixture({faseMacro:"AGUARDANDO_INICIO", dataEntregaPrevista: appFase3.M.dOff(-30)});
+  appFase3.M.Store.state.obras.push(o);
+  appFase3.M.Store.state.pendencias.push(pendenciaFixture(o.id, {impacto:"BLOQUEIA_OBRA"}));
+  const r = appFase3.M.Calc.riscoObra(o);
+  assert.equal(r.nivel, "N/A", "fase sem impactaRisco precisa blindar o risco, mesmo com sinais graves");
+  assert.ok(r.motivos.length>0, "N/A ainda precisa vir com motivo (por que não foi avaliado)");
+}
+
+// ---- 3) entrega vencida (sem nenhuma pendência) -> sempre ALTO ----
+{
+  const o = obraFixture({faseMacro:"PRODUCAO", dataEntregaPrevista: appFase3.M.dOff(-7)});
+  appFase3.M.Store.state.obras.push(o);
+  const r = appFase3.M.Calc.riscoObra(o);
+  assert.equal(r.nivel, "ALTO", "entrega vencida precisa dar ALTO mesmo sem nenhuma pendência aberta");
+  assert.ok(r.motivos.length>0, "ALTO precisa vir com motivo");
+}
+
+// ---- 4) prazo 0-2 dias SEM bloqueio/travamento aberto -> MEDIO, não ALTO ----
+{
+  const o = obraFixture({faseMacro:"PRODUCAO", dataEntregaPrevista: appFase3.M.dOff(1)});
+  appFase3.M.Store.state.obras.push(o);
+  const r = appFase3.M.Calc.riscoObra(o);
+  assert.equal(r.nivel, "MEDIO", "entrega em 0-2 dias sem BLOQUEIA_AMBIENTE/IMPEDE_FINALIZAR aberto precisa ser MEDIO, não ALTO");
+}
+
+// ---- 5) prazo 0-2 dias COM bloqueio aberto -> escala pra ALTO ----
+{
+  const o = obraFixture({faseMacro:"PRODUCAO", dataEntregaPrevista: appFase3.M.dOff(1)});
+  appFase3.M.Store.state.obras.push(o);
+  appFase3.M.Store.state.pendencias.push(pendenciaFixture(o.id, {impacto:"BLOQUEIA_AMBIENTE", ambienteNome:"Cozinha"}));
+  const r = appFase3.M.Calc.riscoObra(o);
+  assert.equal(r.nivel, "ALTO", "entrega em 0-2 dias combinada com BLOQUEIA_AMBIENTE aberto precisa escalar pra ALTO");
+  assert.ok(r.motivos.some(m=>m.includes("Entrega em")), "motivo do prazo precisa aparecer");
+  assert.ok(r.motivos.some(m=>m.includes("Cozinha")), "motivo do ambiente travado precisa aparecer, sem duplicar o mesmo problema sob dois nomes");
+}
+
+// ---- 6) BLOQUEIA_AMBIENTE sozinho (prazo confortável) -> MEDIO, não ALTO ----
+{
+  const o = obraFixture({faseMacro:"PRODUCAO", dataEntregaPrevista: appFase3.M.dOff(30)});
+  appFase3.M.Store.state.obras.push(o);
+  appFase3.M.Store.state.pendencias.push(pendenciaFixture(o.id, {impacto:"BLOQUEIA_AMBIENTE"}));
+  const r = appFase3.M.Calc.riscoObra(o);
+  assert.equal(r.nivel, "MEDIO", "BLOQUEIA_AMBIENTE sozinho, sem prazo apertado, precisa ser MEDIO (não ALTO)");
+}
+
+// ---- 7) BLOQUEIA_OBRA -> sempre ALTO, mesmo com prazo confortável ----
+{
+  const o = obraFixture({faseMacro:"PRODUCAO", dataEntregaPrevista: appFase3.M.dOff(30)});
+  appFase3.M.Store.state.obras.push(o);
+  appFase3.M.Store.state.pendencias.push(pendenciaFixture(o.id, {impacto:"BLOQUEIA_OBRA"}));
+  const r = appFase3.M.Calc.riscoObra(o);
+  assert.equal(r.nivel, "ALTO", "BLOQUEIA_OBRA precisa dar ALTO mesmo com prazo confortável");
+}
+
+// ---- 8) progresso 100% NAO mascara risco (a correção do bug original) ----
+{
+  const o = obraFixture({
+    faseMacro:"PRODUCAO", dataEntregaPrevista: appFase3.M.dOff(30),
+    ambientes:[{id:"amb-100", nome:"Ambiente", moveis:[{id:"mov-100", nome:"Móvel", etapa:"FINALIZADA", componentesCriticos:[]}]}],
+  });
+  appFase3.M.Store.state.obras.push(o);
+  appFase3.M.Store.state.pendencias.push(pendenciaFixture(o.id, {impacto:"BLOQUEIA_AMBIENTE"}));
+  const prog = appFase3.M.Calc.progressoObra(o);
+  assert.equal(prog.pct, 100, "pré-condição do teste: móvel em FINALIZADA precisa contar como 100% concluído");
+  const r = appFase3.M.Calc.riscoObra(o);
+  assert.equal(r.nivel, "MEDIO", "progresso 100% não pode reduzir o risco de uma pendência BLOQUEIA_AMBIENTE aberta (regressão do bug original)");
+  assert.equal(r.progresso, 100, "o progresso continua disponível como dado informativo, só não interfere no nível");
+}
+
+// ---- 9) obra parada (pendência bloqueante aberta há >=5 dias) -> ALTO mesmo com prazo confortável ----
+{
+  const o = obraFixture({faseMacro:"PRODUCAO", dataEntregaPrevista: appFase3.M.dOff(30)});
+  appFase3.M.Store.state.obras.push(o);
+  appFase3.M.Store.state.pendencias.push(pendenciaFixture(o.id, {impacto:"IMPEDE_FINALIZAR", abertura: appFase3.M.dOff(-6)}));
+  const r = appFase3.M.Calc.riscoObra(o);
+  assert.equal(r.nivel, "ALTO", "obra parada (pendência bloqueante aberta há >=5 dias) precisa dar ALTO mesmo com prazo confortável");
+}
+
+// ---- 10) INFORMATIVO/NAO_IMPEDE sozinhos nunca elevam risco acima de BAIXO ----
+{
+  const o = obraFixture({faseMacro:"PRODUCAO", dataEntregaPrevista: appFase3.M.dOff(30)});
+  appFase3.M.Store.state.obras.push(o);
+  appFase3.M.Store.state.pendencias.push(pendenciaFixture(o.id, {impacto:"INFORMATIVO"}));
+  appFase3.M.Store.state.pendencias.push(pendenciaFixture(o.id, {impacto:"NAO_IMPEDE"}));
+  const r = appFase3.M.Calc.riscoObra(o);
+  assert.equal(r.nivel, "BAIXO", "INFORMATIVO/NAO_IMPEDE sozinhos não deveriam elevar o risco");
+  assert.equal(r.motivos.length, 0, "nenhum motivo deveria aparecer quando nada realmente eleva o risco");
+}
+
+// ---- 11) dado legado sem faseMacro nao quebra o app: cai no fallback
+// visual (N/A, sem gravar nada) ----
+{
+  const o = obraFixture({dataEntregaPrevista: appFase3.M.dOff(-10)});
+  delete o.faseMacro;
+  appFase3.M.Store.state.obras.push(o);
+  assert.doesNotThrow(()=> appFase3.M.Calc.riscoObra(o), "obra sem faseMacro nao pode derrubar riscoObra");
+  const r = appFase3.M.Calc.riscoObra(o);
+  assert.equal(r.nivel, "N/A", "obra legada sem faseMacro cai no fallback visual (N/A), nunca inferindo/gravando uma fase sozinha");
+  const sit = appFase3.M.Calc.situacaoObra(o);
+  assert.equal(sit.tone, "neutral");
+  assert.equal(typeof sit.label, "string");
+  assert.equal(o.faseMacro, undefined, "faseMacroDeObra/riscoObra NUNCA grava faseMacro na obra, mesmo depois de ler o fallback repetidas vezes");
+}
+
+console.log("Fase 3 (faseMacro + risco): OK");
+
 console.log("Regressoes criticas: OK");

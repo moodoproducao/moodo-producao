@@ -32,7 +32,7 @@
     const maxWip = Math.max(...wip.map(r=>r.qtd),1);
 
     const riscoRows = obras.map(o=>({o, risco:C.situacaoObra(o)}))
-      .sort((a,b)=> ({ALTO:0,MEDIO:1,BAIXO:2}[a.risco.nivel]) - ({ALTO:0,MEDIO:1,BAIXO:2}[b.risco.nivel]));
+      .sort((a,b)=> ({ALTO:0,MEDIO:1,BAIXO:2,"N/A":3}[a.risco.nivel]) - ({ALTO:0,MEDIO:1,BAIXO:2,"N/A":3}[b.risco.nivel]));
 
     const html = `
       <div class="stat-row">

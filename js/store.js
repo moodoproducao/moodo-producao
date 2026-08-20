@@ -65,6 +65,10 @@
 
   // ---------- semente de etapas / requisitos / tarefas padrão com ids/ordem ----------
   function seedEtapas(){ return deepClone(M.ETAPAS_SEED); }
+  // FASE 3 — catálogo de fases macro da obra (distinto das etapas de móvel
+  // acima). Mesmo padrão: semente deep-clonada, editável depois via
+  // state.fasesMacro, nunca a constante direta.
+  function seedFasesMacro(){ return deepClone(M.FASES_MACRO_SEED); }
   function seedRequisitos(){
     const out = {};
     Object.keys(M.REQUISITOS_SEED).forEach(etapaId=>{
@@ -98,6 +102,11 @@
       lotes: deepClone(M.LOTES),
       assistencias: deepClone(M.ASSISTENCIAS),
       etapas: seedEtapas(),
+      // FASE 3 — catálogo de fases macro (config, não dado de obra). Obras
+      // existentes NÃO ganham faseMacro automaticamente aqui — isso é só o
+      // catálogo de fases disponíveis, igual "etapas" acima é só o catálogo
+      // de etapas de móvel, não o valor de m.etapa de cada móvel.
+      fasesMacro: seedFasesMacro(),
       requisitosPorEtapa: seedRequisitos(),
       pesosDesempenho: Object.assign({}, M.PESOS_DESEMPENHO_DEFAULT),
       tarefasPadrao: seedTarefasPadrao(),
@@ -165,6 +174,11 @@
             // estado salvo de uma versão anterior (v2.0) ainda não tinha etapas
             // configuráveis nem requisitosPorEtapa — usa a semente nesse caso.
             etapas: (parsed.etapas && parsed.etapas.length) ? parsed.etapas : fresh.etapas,
+            // FASE 3 — estado salvo de antes desta implementação não tem
+            // fasesMacro nenhum: usa a semente atual (só o catálogo — não
+            // mexe em nenhuma obra já salva, que continua sem faseMacro
+            // até alguém mover ela manualmente).
+            fasesMacro: (parsed.fasesMacro && parsed.fasesMacro.length) ? parsed.fasesMacro : fresh.fasesMacro,
             requisitosPorEtapa: parsed.requisitosPorEtapa || fresh.requisitosPorEtapa,
           });
           // saneamento: se algum móvel salvo antigamente ainda tiver etapa numérica
@@ -568,6 +582,42 @@
         return ant? ant.id : null;
       }
       return pos > 0 ? ativas[pos-1].id : null;
+    },
+
+    // ============================================================
+    // FASE 3 — FASES MACRO DA OBRA (faseMacro). Catálogo configurável, mesmo
+    // padrão de ETAPAS acima (chave estável, nunca índice numérico) — mas
+    // representa o estágio operacional da OBRA como um todo ("macro"), não
+    // do móvel individual ("micro"). "Macro por padrão, micro por exceção":
+    // um móvel isolado atrasado não deve puxar a faseMacro da obra pra trás
+    // — isso é decisão manual de quem move a obra, não inferência
+    // automática (nenhuma função aqui infere/decide faseMacro sozinha).
+    // ============================================================
+    fasesMacroOrdenadas(){ return state.fasesMacro.slice().sort((a,b)=>a.ordem-b.ordem); },
+    faseMacroById(key){ return state.fasesMacro.find(f=>f.key===key) || null; },
+    posicaoFaseMacro(key){
+      const ord = Store.fasesMacroOrdenadas();
+      const i = ord.findIndex(f=>f.key===key);
+      return i<0 ? ord.length : i;
+    },
+    // FASE 3 — compatibilidade de DESENVOLVIMENTO, não migração definitiva:
+    // obra criada antes desta implementação (todas as 9 obras reais de hoje,
+    // que são dado de desenvolvimento/modelo, não operacional — ver
+    // RELATORIO-FASE-3.md) não tem o campo faseMacro. Em vez de quebrar a
+    // tela ou tratar "sem fase" como um nível de risco desconhecido, resolve
+    // pra um objeto de fase neutro, SÓ PRA LEITURA/EXIBIÇÃO —
+    // impactaRisco:false (mesmo efeito prático de "Aguardando início"),
+    // marcado com legado:true pra quem quiser distinguir na UI de uma obra
+    // que está de fato em Aguardando Início por decisão de alguém. ESTA
+    // FUNÇÃO NUNCA GRAVA NADA em o.faseMacro — é só leitura derivada, toda
+    // vez que é chamada; se a obra ainda não tiver o campo amanhã, continua
+    // caindo aqui de novo.
+    faseMacroDeObra(o){
+      if(o && o.faseMacro){
+        const f = Store.faseMacroById(o.faseMacro);
+        if(f) return f;
+      }
+      return {key:"_LEGADO_SEM_FASE", label:"Sem fase definida (dado legado)", ordem:-1, impactaRisco:false, legado:true};
     },
     // uma etapa "tem histórico" se alguma tarefa (mesmo concluída há tempos) ou
     // algum móvel (mesmo já tendo avançado) já passou por ela — nesse caso ela
@@ -1138,6 +1188,11 @@
       processed.fatorLiquido = processed.valorLiquido / processed.valorBruto;
       processed.desconto = processed.valorBruto - processed.valorLiquido;
       processed.descontoPct = processed.desconto / processed.valorBruto;
+      // FASE 3 — toda obra nova nasce em AGUARDANDO_INICIO (impactaRisco:
+      // false, não gera alerta de atraso/risco até alguém mover ela pra
+      // frente de propósito). Só obra criada a partir daqui ganha isso —
+      // obras já existentes não são tocadas por esta linha.
+      processed.faseMacro = "AGUARDANDO_INICIO";
       processed.ambientes.forEach(a=>{
         a.valorBruto = Math.round(processed.valorBruto * a.valorBrutoPct);
         a.valorLiquido = Math.round(a.valorBruto * processed.fatorLiquido);

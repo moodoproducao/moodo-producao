@@ -68,16 +68,108 @@
     return dias.length ? Math.max(...dias) : 0;
   }
 
+  // ============================================================
+  // FASE 3 — regra de risco formal ("FASE 3 — DECISÕES APROVADAS COM
+  // AJUSTES"). Corrige o bug antigo: a versão anterior tinha
+  // `prog.pct>=90 → "BAIXO"`, um atalho que silenciava prazo/pendência já
+  // problemáticos assim que a obra ficava fisicamente perto do fim.
+  // Progresso NUNCA entra nesta cascata — só viaja como dado informativo em
+  // `dados.progresso` (e no campo de compatibilidade `progresso`, ver
+  // abaixo). Cada sinal (prazo, pendência por impacto, obra parada) é
+  // independente; o PIOR nível entre eles vence (cumulativo, nunca soma).
+  // Só avalia se a fase macro da obra tiver impactaRisco:true (ver
+  // Store.faseMacroDeObra) — do contrário retorna "N/A" direto, sem olhar
+  // pra mais nada.
+  //
+  // Limiares (2/7 dias "muito próxima"/"próxima", 5 dias "obra parada") não
+  // são novos: já existiam em Calc.alertasGlobais/Calc.obraParada,
+  // reaproveitados aqui pra manter uma única régua de urgência no sistema
+  // inteiro, em vez de inventar uma terceira escala.
+  //
+  // "Ambiente travado" NÃO é uma checagem própria aqui, de propósito: no
+  // modelo atual ela é sempre DERIVADA de uma pendência com impacto
+  // BLOQUEIA_AMBIENTE, IMPEDE_FINALIZAR ou BLOQUEIA_OBRA (mesma fonte que
+  // M.bloqueiaFechamento(impacto) já lê pra decidir Store.bloqueiosAmbiente/
+  // situacaoAmbiente===TRAVADO) — checar por impacto abaixo já cobre isso.
+  // Checar "ambiente travado" separadamente duplicaria o mesmo motivo sob
+  // dois nomes diferentes, o que a "FASE 3 — DECISÕES APROVADAS" pediu
+  // explicitamente pra evitar.
+  // ============================================================
+  const NIVEL_RISCO_ORDEM = {BAIXO:0, MEDIO:1, ALTO:2};
   function riscoObra(o){
+    const fase = M.Store.faseMacroDeObra(o);
     const prog = progressoObra(o);
-    const diasEntrega = diasAte(o.dataEntregaPrevista);
-    const pend = pendenciasAbertasDe(o.id).length;
-    let nivel;
-    if(diasEntrega < 0 || pend >= 4) nivel = "ALTO";
-    else if(prog.pct >= 90) nivel = "BAIXO";
-    else if(pend >= 2 || diasEntrega <= 7) nivel = "MEDIO";
-    else nivel = "BAIXO";
-    return {nivel, diasEntrega, pendencias:pend, progresso:prog.pct};
+    const diasEntregaBase = diasAte(o.dataEntregaPrevista);
+    const pendAbertasBase = pendenciasAbertasDe(o.id);
+
+    if(!fase.impactaRisco){
+      return {
+        nivel:"N/A",
+        motivos:[`Fase "${fase.label}" não é avaliada por risco`],
+        // campos de compatibilidade (mesmo formato que os consumidores já
+        // existentes — Obras/ObraDetail/Hoje/Dashboard/Produção — leem hoje):
+        diasEntrega: diasEntregaBase, pendencias: pendAbertasBase.length, progresso: prog.pct,
+        dados: {diasEntrega:diasEntregaBase, progresso:prog.pct, pendAbertas:pendAbertasBase.length, fase:fase.key, legado: !!fase.legado},
+      };
+    }
+
+    const dias = diasEntregaBase;
+    const bloqueiaObraList     = pendAbertasBase.filter(p=> p.impacto==="BLOQUEIA_OBRA");
+    const bloqueiaAmbienteList = pendAbertasBase.filter(p=> p.impacto==="BLOQUEIA_AMBIENTE");
+    const impedeFinalizarList  = pendAbertasBase.filter(p=> p.impacto==="IMPEDE_FINALIZAR");
+    const parada = obraParada(o);
+
+    const motivos = [];
+    let nivel = "BAIXO";
+    const bump = (n)=>{ if(NIVEL_RISCO_ORDEM[n] > NIVEL_RISCO_ORDEM[nivel]) nivel = n; };
+
+    // --- prazo ---
+    if(dias < 0){
+      motivos.push(`Entrega vencida há ${-dias} dia(s)`);
+      bump("ALTO");
+    } else if(dias <= 2){
+      // 0-2 dias sozinho é MÉDIO; só escala pra ALTO combinado com bloqueio/
+      // travamento aberto (BLOQUEIA_AMBIENTE ou IMPEDE_FINALIZAR) — regra
+      // explícita da "FASE 3 — DECISÕES APROVADAS", item 5.
+      const temBloqueioAberto = bloqueiaAmbienteList.length>0 || impedeFinalizarList.length>0;
+      motivos.push(`Entrega em ${dias===0?"hoje":dias+" dia(s)"}`);
+      bump(temBloqueioAberto ? "ALTO" : "MEDIO");
+    } else if(dias <= 7){
+      motivos.push(`Entrega em ${dias} dia(s)`);
+      bump("MEDIO");
+    }
+
+    // --- pendências, ponderadas pelo impacto real (nunca contagem crua) ---
+    if(bloqueiaObraList.length){
+      motivos.push(`${bloqueiaObraList.length} pendência(s) bloqueiam a obra: ${bloqueiaObraList.map(p=>p.categoria).join(", ")}`);
+      bump("ALTO");
+    }
+    if(bloqueiaAmbienteList.length){
+      motivos.push(`${bloqueiaAmbienteList.length} ambiente(s) travado(s) por pendência: ${bloqueiaAmbienteList.map(p=>(p.ambienteNome?p.ambienteNome+" — ":"")+p.categoria).join(", ")}`);
+      bump("MEDIO"); // sozinho é MÉDIO — a escalada pra ALTO já foi tratada acima, junto do prazo
+    }
+    if(impedeFinalizarList.length){
+      motivos.push(`${impedeFinalizarList.length} pendência(s) impedem finalizar: ${impedeFinalizarList.map(p=>p.categoria).join(", ")}`);
+      bump("MEDIO");
+    }
+
+    // --- obra parada (pendência bloqueante aberta há muitos dias, sem se mover) ---
+    if(parada){
+      motivos.push(`Obra parada há ${diasParada(o)} dia(s) sem movimentação (pendência bloqueante aberta)`);
+      bump("ALTO");
+    }
+
+    return {
+      nivel, motivos,
+      // campos de compatibilidade (mesmo formato que os consumidores já
+      // existentes leem hoje — risco.diasEntrega/pendencias/progresso):
+      diasEntrega: dias, pendencias: pendAbertasBase.length, progresso: prog.pct,
+      dados: {
+        diasEntrega: dias, progresso: prog.pct, pendAbertas: pendAbertasBase.length,
+        pendPorImpacto: {bloqueiaObra:bloqueiaObraList.length, bloqueiaAmbiente:bloqueiaAmbienteList.length, impedeFinalizar:impedeFinalizarList.length},
+        obraParada: parada, fase: fase.key,
+      },
+    };
   }
 
   // ---------- situação centralizada (Fase 1 — Fundação) ----------
@@ -107,8 +199,12 @@
 
   function situacaoObra(o){
     const r = riscoObra(o); // reaproveita o cálculo de risco já existente — não duplica
-    const tonePorNivel = {ALTO:"critical", MEDIO:"warning", BAIXO:"good"};
-    const labelPorNivel = {ALTO:"Risco alto", MEDIO:"Risco médio", BAIXO:"Risco baixo"};
+    // FASE 3: "N/A" (fase sem impactaRisco — Aguardando Início, Concluída,
+    // ou dado legado sem faseMacro) usa o próprio motivo retornado por
+    // riscoObra como label, em vez de um rótulo genérico — já explica o
+    // "porquê" sem precisar de campo novo.
+    const tonePorNivel = {ALTO:"critical", MEDIO:"warning", BAIXO:"good", "N/A":"neutral"};
+    const labelPorNivel = {ALTO:"Risco alto", MEDIO:"Risco médio", BAIXO:"Risco baixo", "N/A": (r.motivos&&r.motivos[0]) || "Sem risco avaliado"};
     return Object.assign({}, r, {tone: tonePorNivel[r.nivel]||"neutral", label: labelPorNivel[r.nivel]||r.nivel});
   }
 
@@ -467,7 +563,10 @@
   function tvResumoProducao(){
     const obras = M.Store.state.obras;
     const emProducao = obras.filter(o=> o.status!=="FINALIZADA");
-    const emRisco = obras.filter(o=> situacaoObra(o).nivel!=="BAIXO");
+    // FASE 3: "N/A" (fase sem impactaRisco) não é risco — checa ALTO/MEDIO
+    // explicitamente, em vez de "!=='BAIXO'" (que passaria a contar N/A como
+    // risco também, o que não é o que "em risco" quer dizer).
+    const emRisco = obras.filter(o=> ["ALTO","MEDIO"].includes(situacaoObra(o).nivel));
     const paradas = obras.filter(o=> obraParada(o));
     const bloqueios = obras.reduce((s,o)=> s + pendenciasBloqueantesDe(o.id).length, 0);
     const entregas7d = obras.filter(o=> o.status!=="FINALIZADA" && diasAte(o.dataEntregaPrevista)>=0 && diasAte(o.dataEntregaPrevista)<=7);

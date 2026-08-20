@@ -63,7 +63,8 @@
   function kpiSetsProducao(obras){
     return {
       EM_PRODUCAO: obras.filter(o=> o.status!=="FINALIZADA"),
-      EM_RISCO:    obras.filter(o=> C.situacaoObra(o).nivel!=="BAIXO"),
+      // FASE 3: "N/A" (fase sem impactaRisco) não conta como "em risco".
+      EM_RISCO:    obras.filter(o=> ["ALTO","MEDIO"].includes(C.situacaoObra(o).nivel)),
       PARADA:      obras.filter(o=> C.obraParada(o)),
       CRITICAS:    obras.filter(o=> C.pendenciasAbertasDe(o.id).some(p=> p.impacto==="BLOQUEIA_AMBIENTE"||p.impacto==="BLOQUEIA_OBRA")),
       ENTREGAS_7D: obras.filter(o=> o.status!=="FINALIZADA" && C.diasAte(o.dataEntregaPrevista)>=0 && C.diasAte(o.dataEntregaPrevista)<=7),
@@ -105,7 +106,7 @@
     let filtradas = obrasVisiveis;
     M.UIState.producaoFiltros.forEach(key=>{ if(setIds[key]) filtradas = filtradas.filter(o=> setIds[key].has(o.id)); });
     filtradas = filtradas.map(o=>({o, sit:C.situacaoObra(o)}))
-      .sort((a,b)=> ({ALTO:0,MEDIO:1,BAIXO:2}[a.sit.nivel]) - ({ALTO:0,MEDIO:1,BAIXO:2}[b.sit.nivel]) || a.sit.diasEntrega - b.sit.diasEntrega);
+      .sort((a,b)=> ({ALTO:0,MEDIO:1,BAIXO:2,"N/A":3}[a.sit.nivel]) - ({ALTO:0,MEDIO:1,BAIXO:2,"N/A":3}[b.sit.nivel]) || a.sit.diasEntrega - b.sit.diasEntrega);
 
     const rows = filtradas.map(({o,sit})=>{
       const allM = o.ambientes.flatMap(a=>a.moveis);

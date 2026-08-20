@@ -71,10 +71,12 @@
       || C.diasAte(a.prazo||"2099-01-01") - C.diasAte(b.prazo||"2099-01-01"));
     const atencaoTop = emAtencao.slice(0,6);
 
-    // ---------- obras em risco (não-baixo, ordenadas por prazo) ----------
+    // ---------- obras em risco (ALTO/MEDIO, ordenadas por prazo) ----------
+    // FASE 3: "N/A" (fase sem impactaRisco) não é risco — filtra por
+    // ALTO/MEDIO explicitamente, não por "!=='BAIXO'".
     const riscoRows = obras.map(o=>({o, sit:C.situacaoObra(o), parada:C.obraParada(o)}))
-      .filter(r=> r.sit.nivel!=="BAIXO")
-      .sort((a,b)=> ({ALTO:0,MEDIO:1,BAIXO:2}[a.sit.nivel]) - ({ALTO:0,MEDIO:1,BAIXO:2}[b.sit.nivel]) || a.sit.diasEntrega - b.sit.diasEntrega)
+      .filter(r=> r.sit.nivel==="ALTO" || r.sit.nivel==="MEDIO")
+      .sort((a,b)=> ({ALTO:0,MEDIO:1,BAIXO:2,"N/A":3}[a.sit.nivel]) - ({ALTO:0,MEDIO:1,BAIXO:2,"N/A":3}[b.sit.nivel]) || a.sit.diasEntrega - b.sit.diasEntrega)
       .slice(0,6);
 
     // ---------- minhas pendências ----------
