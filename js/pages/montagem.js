@@ -30,6 +30,7 @@
       <div style="margin-top:8px;display:flex;gap:8px;">
         <button class="btn sm primary" onclick="Act.abrirFinalizarAmbiente('${a.id}')">${UI.icon(sit.key==="TRAVADO"?'lock':'check-circle',12)} ${sit.key==="TRAVADO"?'Destravar':'Finalizar'}</button>
         <a class="btn sm ghost" href="#/obra/${o.id}">Abrir obra</a>
+        ${M.Store.pode("pendencia.criar")? `<button class="btn sm ghost" onclick="Act.openPendenciaForm('${o.id}','${a.id}')">${UI.icon('alert',12)} + Pendência</button>` : ""}
       </div>
     </div>`;
   }
@@ -84,6 +85,7 @@
                 <button class="btn sm" onclick="Act.openMovel('${m.id}')">Abrir</button>
                 ${m.etapa==="MONTAGEM"? `<button class="btn sm primary" onclick="Act.abrirEncerramentoMontagem('${m.id}')">${UI.icon('check-circle',12)} Encerrar</button>`
                   : M.Store.posicaoEtapa(m.etapa)<posMontagem? `<button class="btn sm primary" onclick="Act.moveStageBtn('${m.id}',1)">Avançar</button>`:""}
+                ${M.Store.pode("pendencia.criar")? `<button class="btn sm ghost" onclick="Act.openPendenciaForm('${o.id}','${a.id}','${m.id}')">${UI.icon('alert',12)} + Pendência</button>` : ""}
               </td>
             </tr>`;
           }).join("")}</tbody>

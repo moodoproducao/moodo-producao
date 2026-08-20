@@ -14,9 +14,15 @@
     obraFoco: {}, // {obraId: ambienteId} — ambiente em destaque na página operacional da obra (plano "obra no centro")
     novaObra: {osFileObj:null, osFileName:null, orcFileObj:null, orcFileName:null,
       lendo:false, lido:false, erro:null, dados:null, enderecoManual:"", ambientesAjuste:{}},
-    pendFiltro: {categoria:"", status:"", tipo:"", obraId:"", responsavel:"", prioridade:"", bloqueiaFechamento:false, busca:""},
+    // FASE 4 (§7 handoff): filtros exatos — status/impacto/obraId/responsavel
+    // + busca livre. categoria/tipo/prioridade/bloqueiaFechamento saíram da
+    // barra (ver comentário em pages/pendencias.js filtrosHtml).
+    pendFiltro: {status:"", impacto:"", obraId:"", responsavel:"", busca:""},
     pendExpandido: null,
     pendView: "lista", // "lista" | "kanban" (handoff — Fase 2)
+    // FASE 4 (§7 handoff): null = usa o padrão do perfil (Produção/Montador
+    // abrem em "Minhas"); true/false = escolha explícita da pessoa nesta sessão.
+    pendSomenteMinhas: null,
     producaoView: "macro", // "macro" | "kanban" (handoff — Fase 3: "painel de obras, macro por padrão")
     producaoFiltros: new Set(), // chips combináveis: EM_PRODUCAO/EM_RISCO/PARADA/CRITICAS/ENTREGAS_7D
     producaoExpandidas: new Set(), // obraIds com a linha expandida (ambientes só aparecem sob demanda)
@@ -56,7 +62,7 @@
       if(error){ UI.toast("Erro ao enviar "+file.name+": "+error.message); continue; }
       const { data: urlData } = M.Supa.client.storage.from("arquivos-obra").getPublicUrl(path);
       arquivos.push({nome:file.name, url:urlData.publicUrl, tipo:file.type, tamanho:file.size,
-        enviadoPor:M.Store.state.usuarioAtual, data:M.todayISO(), principal:arquivos.length===0});
+        enviadoPor:M.Store.state.usuarioAtual, data:new Date().toISOString(), principal:arquivos.length===0});
     }
     return arquivos;
   }
@@ -312,14 +318,18 @@
         e.preventDefault();
         const fd = new FormData(form);
         const mv = fd.get("movelId");
+        const ambId = fd.get("ambienteId")||null;
         const f = mv ? M.Store.findMovel(mv) : null;
+        // ambiente sem móvel escolhido (pendência avulsa dentro de um
+        // ambiente com contexto herdado) ainda deve trazer o nome do ambiente.
+        const fAmb = (!f && ambId) ? M.Store.findAmbiente(ambId) : null;
         const submitBtn = form.querySelector('button[type=submit]');
         if(submitBtn) submitBtn.disabled = true;
         const fotos = await uploadArquivos(fd.getAll("fotos").filter(x=>x && x.size), (fd.get("obraId")||"avulsas")+"/pendencias");
         const r = M.Store.criarPendencia({
-          obraId: fd.get("obraId"), ambienteId: fd.get("ambienteId")||null, movelId: mv||null,
+          obraId: fd.get("obraId"), ambienteId: ambId, movelId: mv||null,
           obraNome: f? f.o.cliente : (M.Store.getObra(fd.get("obraId"))||{}).cliente,
-          ambienteNome: f? f.a.nome : "", movelNome: f? f.m.nome : (fd.get("descricaoLivre")||"Item avulso"),
+          ambienteNome: f? f.a.nome : (fAmb? fAmb.a.nome : ""), movelNome: f? f.m.nome : (fd.get("descricaoLivre")||"Item avulso"),
           categoria: fd.get("categoria"), tipo: fd.get("tipo")||null, impacto: fd.get("impacto")||null,
           descricao: fd.get("descricao"), responsavel: fd.get("responsavel"),
           fornecedor: fd.get("fornecedor"), prazo: fd.get("prazo")||null, prioridade: fd.get("prioridade"),
@@ -348,9 +358,43 @@
       UI.toast("Pendência reaberta.");
     },
     setPendFiltro(campo, val){ M.UIState.pendFiltro[campo]=val; Act.rerender(); },
-    limparPendFiltros(){ M.UIState.pendFiltro = {categoria:"", status:"", tipo:"", obraId:"", responsavel:"", prioridade:"", bloqueiaFechamento:false, busca:""}; Act.rerender(); },
+    limparPendFiltros(){ M.UIState.pendFiltro = {status:"", impacto:"", obraId:"", responsavel:"", busca:""}; Act.rerender(); },
     setPendView(v){ M.UIState.pendView = v; Act.rerender(); },
+    // FASE 4 (§7 handoff): toggle real Minhas/Todas — antes era fixo por perfil.
+    // FASE 4 (AJUSTE): Produção não pode "Todas" nem manipulando estado —
+    // o guard de verdade é M.Store.pendenciasVisiveis() (a tela ignora esse
+    // valor pra esse perfil de qualquer forma), mas nem deixa a intenção
+    // ficar guardada aqui, pra não sugerir uma opção que não existe de fato.
+    setPendSomenteMinhas(v){
+      const colab = M.colabByNome(M.Store.state.usuarioAtual);
+      if(colab && colab.perfil==="OPERADOR" && !v) return;
+      M.UIState.pendSomenteMinhas = !!v; Act.rerender();
+    },
     togglePendExpandido(id){ M.UIState.pendExpandido = (M.UIState.pendExpandido===id)?null:id; Act.rerender(); },
+    // FASE 4 (§6/§10 handoff): "pendencia.atribuir" já existia na matriz, sem
+    // função nenhuma usando — reassignar responsável direto na tela.
+    atribuirPendencia(id, novoResponsavel){
+      const r = M.Store.atribuirPendencia(id, novoResponsavel);
+      if(!r.ok){ UI.toast("Seu perfil não tem permissão para atribuir esta pendência."); Act.rerender(); return; }
+      UI.toast("Responsável atualizado.");
+    },
+    // FASE 4 (§2 handoff): "possibilidade de adicionar [fotos] depois" — sem
+    // precisar reabrir/editar status.
+    async adicionarFotosPendencia(id, destino){
+      const p = M.Store.state.pendencias.find(x=>x.id===id); if(!p) return;
+      const input = document.createElement("input");
+      input.type = "file"; input.accept = "image/*"; input.multiple = true; input.capture = "environment";
+      input.onchange = async ()=>{
+        if(!input.files || !input.files.length) return;
+        UI.toast("Enviando foto(s)...");
+        const fotos = await uploadArquivos(input.files, (p.obraId||"avulsas")+"/pendencias"+(destino==="resolucao"?"-resolucao":""));
+        if(!fotos.length) return;
+        const r = M.Store.adicionarFotosPendencia(id, fotos, destino);
+        if(!r.ok){ UI.toast("Seu perfil não tem permissão para editar esta pendência."); return; }
+        UI.toast("Foto(s) adicionada(s).");
+      };
+      input.click();
+    },
 
     // "Serão exigidas [fotos] ao marcar como resolvida" (handoff) — passo
     // dedicado, com fotos de resolução separadas das fotos de abertura.

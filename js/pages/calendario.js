@@ -13,13 +13,17 @@
 
   // Lista "crua" de todos os eventos visíveis (respeitando os filtros ativos),
   // cada um já com a informação de para onde deve levar quando clicado.
-  function todosEventosRaw(){
+  // FASE 4 (§9/§10 handoff): recebe um Set de filtros opcional — desacopla a
+  // função do estado de UI da própria tela Calendário (M.UIState.calFiltros),
+  // pra Hoje poder reusar sem depender do que a pessoa deixou filtrado lá.
+  // Sem argumento, mantém o comportamento antigo (usa o filtro da tela).
+  function todosEventosRaw(filtrosSet){
     const raw = [];
     function add(iso, label, cls, obraId, extra){
       if(!iso || !obraId) return;
       raw.push(Object.assign({iso, label, cls, obraId}, extra||{}));
     }
-    const ativos = M.UIState.calFiltros;
+    const ativos = filtrosSet || M.UIState.calFiltros;
     M.Store.state.obras.forEach(o=>{
       if(ativos.has("ENTREGAS")) add(o.dataEntregaPrevista, "Entrega — "+o.cliente, "critical", o.id, {tipo:"obra"});
     });
@@ -59,7 +63,18 @@
 
   // API pública usada pelo modal de "dia" (aberto a partir de Act.abrirDiaCalendario)
   M.Calendario = {
-    eventosDoDia(iso){ return todosEventosRaw().filter(e=>e.iso===iso); }
+    eventosDoDia(iso){ return todosEventosRaw().filter(e=>e.iso===iso); },
+    // FASE 4 (§9/§10 handoff): "próximos compromissos" pra Hoje — mesma fonte
+    // de sempre (M.Calendario), sem duplicar lógica de agregação de eventos.
+    // filtrosChaves: array de chaves de FILTROS (ex.: ["ENTREGAS","MONTAGENS"]);
+    // sem informar, usa todos os tipos.
+    proximosEventos(diasAFrente, filtrosChaves){
+      const set = filtrosChaves ? new Set(filtrosChaves) : new Set(FILTROS.map(f=>f.key));
+      const limite = diasAFrente==null ? Infinity : diasAFrente;
+      return todosEventosRaw(set)
+        .filter(e=> C.diasAte(e.iso)>=0 && C.diasAte(e.iso)<=limite)
+        .sort((a,b)=> a.iso.localeCompare(b.iso));
+    },
   };
 
   M.Pages.calendarioDiaModalHtml = function(iso){

@@ -878,6 +878,363 @@ console.log("Fase 3 (faseMacro + risco): OK");
 console.log("Regressoes criticas: OK");
 
 // ==================================================================
+// FASE 4 — Pendências + Hoje. Contexto isolado com fixtures próprias (mesmo
+// padrão da Fase 3 acima) — não mexe nas 9 obras/pendências reais de dev.
+// Cobre: Store.log(extra)/historicoDaPendencia, Store.atribuirPendencia,
+// Store.adicionarFotosPendencia (todos com guard real, não só visual),
+// M.Calc.compararPrioridadePendencia (os 5 critérios exatos do handoff) e
+// M.Calendario.proximosEventos (reuso decotado da tela Calendário).
+// Não testa aqui o HTML de pendencias.js/hoje.js (essas páginas dependem de
+// M.UI inteiro — ícones, chips, modais — fora do escopo deste harness, que
+// desde a Fase 1 testa Store/Calc direto, não renderização); essas telas
+// foram validadas visualmente via Playwright local (screenshots em anexo
+// no relatório de entrega), não em produção.
+// ==================================================================
+const appFase4 = contextoBase();
+executar(appFase4, "js/data.js");
+appFase4.M.UI = {};
+appFase4.M.Pages = {};
+appFase4.M.UIState = {calFiltros: new Set(["PRODUCAO","ENTREGAS","MONTAGENS","PENDENCIAS","FORNECEDORES","ASSISTENCIAS"])};
+executar(appFase4, "js/store.js");
+executar(appFase4, "js/calc.js");
+executar(appFase4, "js/pages/calendario.js"); // só define M.Calendario/funções — não precisa de UI real pra isso
+
+function comoUsuarioFase4(nome, fn){
+  const original = appFase4.M.Store.state.usuarioAtual;
+  appFase4.M.Store.setUsuarioAtual(nome);
+  try{ return fn(); } finally { appFase4.M.Store.setUsuarioAtual(original); }
+}
+// mesmo truque já usado no resto do arquivo pra testar GESTOR/ASSISTENCIA
+// (sem colaborador dedicado no seed): reatribui "Ana Ferreira" por um instante.
+function comoPerfilFase4(perfilKey, fn){
+  const alvo = appFase4.M.COLABORADORES.find(c=>c.nome==="Ana Ferreira");
+  const original = alvo.perfil;
+  alvo.perfil = perfilKey;
+  try{ return comoUsuarioFase4("Ana Ferreira", fn); } finally { alvo.perfil = original; }
+}
+let _fx4Seq = 0;
+function obraFixture4(over){
+  _fx4Seq++;
+  return Object.assign({
+    id:"fx4-obra-"+_fx4Seq, numeroOS:"OS FIXTURE4/"+_fx4Seq, cliente:"Cliente Fixture 4",
+    dataOS:appFase4.M.todayISO(), criadaEm:appFase4.M.todayISO(),
+    dataEntregaPrevista:appFase4.M.dOff(30), dataEntregaReal:null,
+    valorBruto:1000, valorLiquido:1000, status:"EM_PRODUCAO", responsavel:"Teste",
+    ambientes:[{id:"fx4-amb-"+_fx4Seq, nome:"Ambiente Fixture", moveis:[{id:"fx4-mov-"+_fx4Seq, nome:"Móvel Fixture", etapa:"CORTE", componentesCriticos:[]}]}],
+  }, over);
+}
+function pendenciaFixture4(obraId, over){
+  return Object.assign({id:"fx4-pnd-"+(Math.random()), obraId, status:"ABERTA", categoria:"Teste",
+    impacto:"IMPEDE_FINALIZAR", abertura:appFase4.M.todayISO()}, over);
+}
+
+// ---- 1) Store.log(extra) — retrocompatível (chamada de 3 args continua
+// funcionando, sem pendenciaId) + threading do pendenciaId nos 3 pontos de
+// chamada de pendência (criar/avançar/resolver/reabrir) ----
+{
+  assert.doesNotThrow(()=> appFase4.M.Store.log(null, "TESTE", "sem extra"), "Store.log de 3 args (assinatura antiga) precisa continuar funcionando");
+  const semExtra = appFase4.M.Store.state.historico[0];
+  assert.equal(semExtra.pendenciaId, undefined, "log sem extra não deveria ganhar pendenciaId nenhum");
+
+  const o = obraFixture4();
+  appFase4.M.Store.state.obras.push(o);
+  const p = comoUsuarioFase4("Paulo Henrique", ()=> appFase4.M.Store.criarPendencia({
+    obraId:o.id, categoria:"Outro", tipo:"Material", impacto:"BLOQUEIA_AMBIENTE",
+    descricao:"pendência de teste Fase 4", responsavel:"Willian Souza", prioridade:"MEDIA",
+  }));
+  assert.equal(p.ok, true);
+  const hist1 = appFase4.M.Store.historicoDaPendencia(p.pendencia.id);
+  assert.equal(hist1.length, 1, "criarPendencia precisa gerar 1 evento de histórico linkado por pendenciaId");
+  assert.equal(hist1[0].tipo, "PENDENCIA_ABERTA");
+  assert.equal(hist1[0].pendenciaId, p.pendencia.id);
+
+  comoUsuarioFase4("Paulo Henrique", ()=> appFase4.M.Store.avancarFluxoPendencia(p.pendencia.id));
+  const hist2 = appFase4.M.Store.historicoDaPendencia(p.pendencia.id);
+  assert.ok(hist2.length >= 1, "avançar fluxo precisa aparecer no histórico da MESMA pendência");
+  assert.ok(hist2.every(h=>h.pendenciaId===p.pendencia.id), "historicoDaPendencia nunca pode misturar eventos de outra pendência");
+}
+
+// ---- 2) Store.atribuirPendencia — guard real (pendencia.atribuir), não só
+// visual; loga PENDENCIA_ATRIBUIDA linkado; ASSISTENCIA (atribuir:false na
+// matriz da Fase 1) precisa continuar negado ----
+{
+  const o = obraFixture4();
+  appFase4.M.Store.state.obras.push(o);
+  const p = comoUsuarioFase4("Paulo Henrique", ()=> appFase4.M.Store.criarPendencia({
+    obraId:o.id, categoria:"Outro", descricao:"pendência p/ atribuir", responsavel:"Willian Souza", prioridade:"MEDIA",
+  })).pendencia;
+
+  const negado = comoPerfilFase4("ASSISTENCIA", ()=> appFase4.M.Store.atribuirPendencia(p.id, "Beatriz Nogueira"));
+  assert.equal(negado.ok, false, "ASSISTENCIA tem pendencia.atribuir=false na matriz da Fase 1 — não pode ter sido relaxado aqui");
+  assert.equal(negado.motivo, "SEM_PERMISSAO");
+  assert.equal(p.responsavel, "Willian Souza", "tentativa negada não pode ter mudado o responsável");
+
+  const ok = comoUsuarioFase4("Paulo Henrique", ()=> appFase4.M.Store.atribuirPendencia(p.id, "Beatriz Nogueira"));
+  assert.equal(ok.ok, true, "ADMIN tem pendencia.atribuir=true, precisa conseguir reatribuir");
+  assert.equal(p.responsavel, "Beatriz Nogueira");
+  const hist = appFase4.M.Store.historicoDaPendencia(p.id);
+  assert.ok(hist.some(h=>h.tipo==="PENDENCIA_ATRIBUIDA"), "reatribuição precisa deixar rastro no histórico da pendência");
+
+  const naoEncontrada = comoUsuarioFase4("Paulo Henrique", ()=> appFase4.M.Store.atribuirPendencia("id-inexistente", "X"));
+  assert.equal(naoEncontrada.ok, false);
+  assert.equal(naoEncontrada.motivo, "NAO_ENCONTRADA");
+}
+
+// ---- 3) Store.adicionarFotosPendencia — guard real (pendencia.editar);
+// string vira objeto com defaults; objeto (já formatado pelo upload) passa
+// direto, sem perder enviadoPor/data/tamanho; loga no histórico da pendência ----
+{
+  const o = obraFixture4();
+  appFase4.M.Store.state.obras.push(o);
+  const p = comoUsuarioFase4("Paulo Henrique", ()=> appFase4.M.Store.criarPendencia({
+    obraId:o.id, categoria:"Outro", descricao:"pendência p/ fotos", responsavel:"Willian Souza", prioridade:"MEDIA",
+  })).pendencia;
+
+  // OPERADOR (Willian Souza): pendencia.editar=false na matriz da Fase 1
+  const negado = comoUsuarioFase4("Willian Souza", ()=> appFase4.M.Store.adicionarFotosPendencia(p.id, ["http://x/foto.jpg"], "abertura"));
+  assert.equal(negado.ok, false, "Produção tem pendencia.editar=false — não pode adicionar foto depois direto no Store");
+  assert.equal(negado.motivo, "SEM_PERMISSAO");
+  assert.equal((p.fotosAbertura||[]).length, 0, "tentativa negada não pode ter alterado fotosAbertura");
+
+  const okString = comoUsuarioFase4("Paulo Henrique", ()=> appFase4.M.Store.adicionarFotosPendencia(p.id, ["http://x/foto1.jpg"], "abertura"));
+  assert.equal(okString.ok, true);
+  assert.equal(p.fotosAbertura.length, 1);
+  assert.equal(p.fotosAbertura[0].url, "http://x/foto1.jpg");
+  assert.equal(p.fotosAbertura[0].principal, false, "foto adicionada depois nunca vira principal automaticamente");
+
+  const fotoObjPronta = {nome:"foto2.jpg", url:"http://x/foto2.jpg", tipo:"image/jpeg", tamanho:1234, enviadoPor:"Paulo Henrique", data:new Date().toISOString(), principal:false};
+  const okObjeto = comoUsuarioFase4("Paulo Henrique", ()=> appFase4.M.Store.adicionarFotosPendencia(p.id, [fotoObjPronta], "resolucao"));
+  assert.equal(okObjeto.ok, true);
+  assert.equal(p.fotosResolucao.length, 1);
+  assert.equal(p.fotosResolucao[0].tamanho, 1234, "objeto já formatado pelo upload precisa passar direto, sem perder campos");
+  assert.equal(p.fotosResolucao[0].enviadoPor, "Paulo Henrique");
+
+  const hist = appFase4.M.Store.historicoDaPendencia(p.id);
+  assert.ok(hist.some(h=>h.tipo==="PENDENCIA_FOTOS_ADICIONADAS"), "adicionar foto depois precisa deixar rastro no histórico");
+}
+
+// ---- 4) M.Calc.compararPrioridadePendencia — os 5 critérios EXATOS do
+// handoff, nessa ordem: 1.BLOQUEIA_OBRA 2.BLOQUEIA_AMBIENTE 3.IMPEDE_FINALIZAR
+// 4.antiguidade 5.prazo da obra. Nada de score obscuro — cada critério só
+// desempata o anterior. ----
+{
+  const obraPertoDoPrazo = obraFixture4({dataEntregaPrevista: appFase4.M.dOff(2)});
+  const obraLongePrazo = obraFixture4({dataEntregaPrevista: appFase4.M.dOff(10)});
+  appFase4.M.Store.state.obras.push(obraPertoDoPrazo, obraLongePrazo);
+
+  const pBloqueiaObra = pendenciaFixture4(obraLongePrazo.id, {impacto:"BLOQUEIA_OBRA", abertura: appFase4.M.dOff(-1)});
+  const pBloqueiaAmbPertoAntiga = pendenciaFixture4(obraPertoDoPrazo.id, {impacto:"BLOQUEIA_AMBIENTE", abertura: appFase4.M.dOff(-3)});
+  const pBloqueiaAmbLongeAntiga = pendenciaFixture4(obraLongePrazo.id, {impacto:"BLOQUEIA_AMBIENTE", abertura: appFase4.M.dOff(-3)});
+  const pImpedeFinalizar = pendenciaFixture4(obraPertoDoPrazo.id, {impacto:"IMPEDE_FINALIZAR", abertura: appFase4.M.dOff(-3)});
+  const pNaoImpede = pendenciaFixture4(obraPertoDoPrazo.id, {impacto:"NAO_IMPEDE"});
+  const pInformativo = pendenciaFixture4(obraLongePrazo.id, {impacto:"INFORMATIVO"});
+
+  const embaralhado = [pInformativo, pNaoImpede, pBloqueiaAmbLongeAntiga, pImpedeFinalizar, pBloqueiaAmbPertoAntiga, pBloqueiaObra];
+  const ordenado = embaralhado.slice().sort(appFase4.M.Calc.compararPrioridadePendencia);
+  const ids = Array.from(ordenado.map(p=>p.id));
+  assert.deepEqual(ids, [pBloqueiaObra.id, pBloqueiaAmbPertoAntiga.id, pBloqueiaAmbLongeAntiga.id, pImpedeFinalizar.id, pNaoImpede.id, pInformativo.id],
+    "ordem precisa ser exatamente: BLOQUEIA_OBRA > BLOQUEIA_AMBIENTE (antiga primeiro, empatando por prazo da obra) > IMPEDE_FINALIZAR > NAO_IMPEDE > INFORMATIVO");
+
+  // critério 4 isolado: mesma severidade, antiguidade diferente, mesma obra —
+  // a mais antiga (mais dias em aberto) precisa vir primeiro.
+  const pRecente = pendenciaFixture4(obraPertoDoPrazo.id, {impacto:"BLOQUEIA_AMBIENTE", abertura: appFase4.M.dOff(-1)});
+  const pAntiga = pendenciaFixture4(obraPertoDoPrazo.id, {impacto:"BLOQUEIA_AMBIENTE", abertura: appFase4.M.dOff(-8)});
+  const doisOrdenados = [pRecente, pAntiga].sort(appFase4.M.Calc.compararPrioridadePendencia);
+  assert.equal(doisOrdenados[0].id, pAntiga.id, "critério 4 (antiguidade) isolado: mais dias em aberto vem primeiro");
+}
+
+// ---- 5) M.Calendario.proximosEventos — reusa a mesma agregação da tela
+// Calendário (sem duplicar lógica), desacoplada do filtro de UI da própria
+// tela via o parâmetro filtrosSet ----
+{
+  const o = obraFixture4({dataEntregaPrevista: appFase4.M.dOff(3)});
+  appFase4.M.Store.state.obras.push(o);
+  const dentro = appFase4.M.Calendario.proximosEventos(7);
+  assert.ok(dentro.some(e=>e.obraId===o.id), "entrega em 3 dias precisa aparecer numa janela de 7 dias");
+  const fora = appFase4.M.Calendario.proximosEventos(1);
+  assert.ok(!fora.some(e=>e.obraId===o.id), "entrega em 3 dias NÃO pode aparecer numa janela de 1 dia");
+
+  const soMontagens = appFase4.M.Calendario.proximosEventos(7, ["MONTAGENS"]);
+  assert.ok(!soMontagens.some(e=>e.obraId===o.id && e.tipo==="obra"), "filtrosChaves precisa restringir o tipo de evento — ENTREGAS não pode vazar quando só MONTAGENS foi pedido");
+}
+
+// ==================================================================
+// FASE 4 — AJUSTE (pós-revisão): escopo real de "Minhas/Todas" em
+// Pendências (não só esconder o botão) + PCP usando faseMacro em vez de
+// progresso físico como proxy pra "obras entrando em produção".
+// ==================================================================
+
+// ---- 6) Store.pendenciasVisiveis() — escopo por perfil, aplicado no
+// Store (camada de dados), não só na tela. Produção só enxerga a própria
+// pendência mesmo dentro das próprias obras; Montador/Assistência só
+// enxergam pendência das obras onde têm vínculo; Admin/PCP/Líder/Gestor
+// continuam com visão ampla (verTodasObras). ----
+{
+  const obraA = obraFixture4(); // vai ficar no contexto do Montador/Produção de teste
+  const obraB = obraFixture4(); // fora do contexto de ambos
+  appFase4.M.Store.state.obras.push(obraA, obraB);
+
+  // pendência do próprio Willian Souza (Produção/OPERADOR) na obra A
+  const pMinhaProducao = comoUsuarioFase4("Paulo Henrique", ()=> appFase4.M.Store.criarPendencia({
+    obraId:obraA.id, categoria:"Outro", descricao:"minha (produção)", responsavel:"Willian Souza", prioridade:"MEDIA",
+  })).pendencia;
+  // pendência de OUTRA pessoa (Beatriz Nogueira), na MESMA obra A — Willian
+  // tem vínculo com obraA (é responsável por pMinhaProducao ali), mas essa
+  // pendência específica não é dele.
+  const pOutraNaMinhaObra = comoUsuarioFase4("Paulo Henrique", ()=> appFase4.M.Store.criarPendencia({
+    obraId:obraA.id, categoria:"Outro", descricao:"de outra pessoa, mesma obra", responsavel:"Beatriz Nogueira", prioridade:"MEDIA",
+  })).pendencia;
+  // pendência numa obra totalmente fora do contexto de Willian/Roberto
+  const pDeOutraObra = comoUsuarioFase4("Paulo Henrique", ()=> appFase4.M.Store.criarPendencia({
+    obraId:obraB.id, categoria:"Outro", descricao:"obra fora do contexto", responsavel:"Marcos Lima", prioridade:"MEDIA",
+  })).pendencia;
+
+  // ---- Produção (Willian Souza, OPERADOR): só a própria, mesmo "forçando
+  // Todas" — não existe "Todas" pra esse perfil; a fonte (Store) já corta. ----
+  const visivelProducao = comoUsuarioFase4("Willian Souza", ()=> appFase4.M.Store.pendenciasVisiveis());
+  const idsProducao = Array.from(visivelProducao.map(p=>p.id));
+  assert.ok(idsProducao.includes(pMinhaProducao.id), "Produção precisa ver a própria pendência");
+  assert.ok(!idsProducao.includes(pOutraNaMinhaObra.id), "Produção NÃO pode ver pendência de outra pessoa, mesmo na mesma obra onde ela tem vínculo");
+  assert.ok(!idsProducao.includes(pDeOutraObra.id), "Produção NÃO pode ver pendência de obra fora do seu contexto");
+  // "forçar Todas" por manipulação de estado/UI não muda nada — pendenciasVisiveis()
+  // não lê NENHUM estado de UI (M.UIState/toggle), só o perfil de quem está
+  // logado; não existe um "modo Todas" pra alternar por fora pra esse perfil.
+  const aindaSoMinhaProducao = comoUsuarioFase4("Willian Souza", ()=> appFase4.M.Store.pendenciasVisiveis());
+  assert.equal(Array.from(aindaSoMinhaProducao.map(p=>p.id)).includes(pOutraNaMinhaObra.id), false,
+    "mesmo chamando pendenciasVisiveis() de novo (equivalente a 'forçar Todas'), Produção continua sem ver pendência de outra pessoa");
+
+  // ---- Montador (Roberto Diniz): sem pendência própria nessas obras, e sem
+  // tarefa/assistência atribuída nelas → obraIdsDoColaborador vazio pra ele
+  // aqui → não vê NENHUMA das três (nem a de obraA, que não é dele). ----
+  const visivelMontador = comoUsuarioFase4("Roberto Diniz", ()=> appFase4.M.Store.pendenciasVisiveis());
+  const idsMontador = Array.from(visivelMontador.map(p=>p.id));
+  assert.ok(!idsMontador.includes(pMinhaProducao.id) && !idsMontador.includes(pOutraNaMinhaObra.id) && !idsMontador.includes(pDeOutraObra.id),
+    "Montador sem nenhum vínculo com obraA/obraB não pode ver pendência nenhuma delas");
+  // agora dá a ele um vínculo real com obraA (uma tarefa) — só aí obraA entra
+  // no contexto dele, e ele passa a ver AS DUAS pendências de obraA (não é
+  // 'somente minha', é 'somente do meu contexto de obra'), mas continua sem
+  // ver a de obraB.
+  appFase4.M.Store.state.tarefas.push({id:"fx4-tarefa-montador", obraId:obraA.id, responsavelPlanejado:"Roberto Diniz", titulo:"Instalar", status:"PENDENTE"});
+  const visivelMontador2 = comoUsuarioFase4("Roberto Diniz", ()=> appFase4.M.Store.pendenciasVisiveis());
+  const idsMontador2 = Array.from(visivelMontador2.map(p=>p.id));
+  assert.ok(idsMontador2.includes(pMinhaProducao.id) && idsMontador2.includes(pOutraNaMinhaObra.id), "Montador com vínculo em obraA precisa ver as pendências DA OBRA (não só as próprias)");
+  assert.ok(!idsMontador2.includes(pDeOutraObra.id), "Montador continua sem ver pendência de obraB, fora do seu contexto");
+
+  // ---- Assistência: colaborador SINTÉTICO (zero vínculo prévio nos dados
+  // de dev — "Ana Ferreira" é real e pode já ter tarefa/pendência da seed,
+  // o que poluiria a asserção de "zero"), mesmo comportamento de contexto-
+  // por-obra que o Montador, via assistência vinculada em vez de tarefa. ----
+  const nomeAssistTeste = "Fixture ASSISTENCIA teste";
+  appFase4.M.COLABORADORES.push({id:"fx4-colab-assist-teste", nome:nomeAssistTeste, cargo:"Teste", iniciais:"FX", perfil:"ASSISTENCIA", telefone:""});
+  const visivelAssistAntes = comoUsuarioFase4(nomeAssistTeste, ()=> appFase4.M.Store.pendenciasVisiveis());
+  assert.equal(visivelAssistAntes.length, 0, "Assistência sem nenhum atendimento vinculado não deveria ver nenhuma pendência dessas obras");
+  appFase4.M.Store.state.assistencias.push({id:"fx4-assist-1", obraId:obraB.id, responsavel:nomeAssistTeste, categoria:"Ferragem", descricao:"teste", status:"ABERTA", data:appFase4.M.todayISO(), garantia:"EM_ANALISE", visitas:[]});
+  const visivelAssistDepois = comoUsuarioFase4(nomeAssistTeste, ()=> appFase4.M.Store.pendenciasVisiveis());
+  const idsAssist = Array.from(visivelAssistDepois.map(p=>p.id));
+  assert.ok(idsAssist.includes(pDeOutraObra.id), "Assistência com atendimento vinculado a obraB precisa ver a pendência dessa obra");
+  assert.ok(!idsAssist.includes(pMinhaProducao.id) && !idsAssist.includes(pOutraNaMinhaObra.id), "Assistência continua sem ver pendência de obraA, fora do seu contexto de atendimento");
+
+  // ---- Admin/PCP/Líder/Gestor: visão ampla mantida (verTodasObras) — o
+  // ajuste não pode ter restringido quem já era autorizado a ver tudo. ----
+  const todasAsTres = [pMinhaProducao.id, pOutraNaMinhaObra.id, pDeOutraObra.id];
+  const visivelAdmin = Array.from(comoUsuarioFase4("Paulo Henrique", ()=> appFase4.M.Store.pendenciasVisiveis()).map(p=>p.id));
+  assert.ok(todasAsTres.every(id=>visivelAdmin.includes(id)), "Admin precisa continuar vendo tudo");
+  const visivelPCP = Array.from(comoUsuarioFase4("Beatriz Nogueira", ()=> appFase4.M.Store.pendenciasVisiveis()).map(p=>p.id));
+  assert.ok(todasAsTres.every(id=>visivelPCP.includes(id)), "PCP precisa continuar vendo tudo");
+  const visivelLider = Array.from(comoUsuarioFase4("Juliana Prado", ()=> appFase4.M.Store.pendenciasVisiveis()).map(p=>p.id));
+  assert.ok(todasAsTres.every(id=>visivelLider.includes(id)), "Líder precisa continuar vendo tudo");
+  const visivelGestor = comoPerfilFase4("GESTOR", ()=> Array.from(appFase4.M.Store.pendenciasVisiveis().map(p=>p.id)));
+  assert.ok(todasAsTres.every(id=>visivelGestor.includes(id)), "Gestor precisa continuar vendo tudo (escopo operacional permitido = verTodasObras, igual já era)");
+}
+
+// ---- 7) PCP — "obras entrando em produção" usa faseMacro, não progresso.
+// Teste de integração real: executa M.Pages.hoje() de verdade (perfil PCP),
+// com um mock mínimo de M.UI (só pra não travar em UI.icon/UI.card — não é
+// teste de layout, é teste de QUAIS obras entram em qual bloco). ----
+{
+  const appHoje = contextoBase();
+  executar(appHoje, "js/data.js");
+  appHoje.M.UI = {
+    esc:(s)=> String(s==null?"":s), icon:()=>"", card:(o)=> `[[${o.titulo||""}]]`+(o.body||""),
+    riscoChip:()=>"", tipoChip:()=>"", assistenciaStatusChip:()=>"",
+    pageSearchInput:()=>"", botaoNovaObraHtml:()=>"", attachQuickSearch:()=>{},
+  };
+  appHoje.M.Pages = {};
+  appHoje.M.UIState = {calFiltros: new Set(["PRODUCAO","ENTREGAS","MONTAGENS","PENDENCIAS","FORNECEDORES","ASSISTENCIAS"])};
+  executar(appHoje, "js/store.js");
+  executar(appHoje, "js/calc.js");
+  executar(appHoje, "js/pages/calendario.js");
+  executar(appHoje, "js/pages/hoje.js");
+
+  // fixtures próprias, isoladas (sem compartilhar ambientes/moveis com as
+  // obras reais de seed) — cada uma com estrutura mínima válida.
+  function obraFixtureHoje(over){
+    return Object.assign({
+      numeroOS:"OS HOJE/X", cliente:"Cliente Hoje Fixture", dataOS:appHoje.M.todayISO(), criadaEm:appHoje.M.todayISO(),
+      dataEntregaPrevista:appHoje.M.dOff(30), dataEntregaReal:null, valorBruto:1000, valorLiquido:1000,
+      status:"AGUARDANDO_INICIO", responsavel:"Teste",
+      ambientes:[{id:"amb-"+over.id, nome:"Ambiente", moveis:[{id:"mov-"+over.id, nome:"Móvel", etapa:"CORTE", componentesCriticos:[]}]}],
+    }, over);
+  }
+  const oLiberada = obraFixtureHoje({id:"fx4-hoje-liberada", numeroOS:"OS HOJE/LIBERADA", faseMacro:"LIBERADA_PARA_PRODUCAO"});
+  const oPlanoDeCorte = obraFixtureHoje({id:"fx4-hoje-plano", numeroOS:"OS HOJE/PLANO", faseMacro:"PCP_PLANO_DE_CORTE"});
+  const oMedicaoProgressoBaixo = obraFixtureHoje({id:"fx4-hoje-medicao", numeroOS:"OS HOJE/MEDICAO", faseMacro:"MEDICAO"});
+  const oLegadoSemFase = obraFixtureHoje({id:"fx4-hoje-legado", numeroOS:"OS HOJE/LEGADO"});
+  appHoje.M.Store.state.obras.push(oLiberada, oPlanoDeCorte, oMedicaoProgressoBaixo, oLegadoSemFase);
+
+  appHoje.M.Store.setUsuarioAtual("Beatriz Nogueira"); // PCP
+  const resultado = appHoje.M.Pages.hoje();
+  assert.ok(resultado.html.includes("OS HOJE/LIBERADA"), "obra com faseMacro LIBERADA_PARA_PRODUCAO precisa aparecer no bloco de obras liberadas");
+  assert.ok(resultado.html.includes("OS HOJE/PLANO"), "obra com faseMacro PCP_PLANO_DE_CORTE precisa aparecer no bloco 'em preparação', separado do de liberadas");
+  assert.ok(!resultado.html.includes("OS HOJE/MEDICAO"), "obra em MEDICAO (progresso baixo, mas fase errada) NÃO pode aparecer em nenhum dos dois blocos — progresso físico não substitui faseMacro");
+  assert.ok(!resultado.html.includes("OS HOJE/LEGADO"), "obra legada sem faseMacro não pode ser inferida/aparecer no bloco — faseMacroDeObra já devolve _LEGADO_SEM_FASE, sem chute");
+
+  // ---- 8) ÚLTIMO AJUSTE — Produção/Hoje: "itens que precisam de ação
+  // agora" não pode mais trazer pendência de OUTRA pessoa só por estar na
+  // mesma obra. Só entra: responsavel===usuário (bloco "Minhas") OU
+  // pendência sem responsável explícito mas vinculada (via movelId) a uma
+  // tarefa deste usuário — nenhum vínculo novo, reusa state.tarefas. Novo
+  // colaborador sintético (sem nenhum vínculo prévio de seed) pra não
+  // repetir a poluição de dado real já vista com "Ana Ferreira" no bloco 6.
+  const nomeProducaoTeste = "Fixture PRODUÇÃO teste";
+  appHoje.M.COLABORADORES.push({id:"fx4-colab-producao", nome:nomeProducaoTeste, cargo:"Produção Fixture", iniciais:"PT", perfil:"OPERADOR", telefone:""});
+  const oProducaoFx = obraFixtureHoje({id:"fx4-hoje-producao", numeroOS:"OS HOJE/PRODFX",
+    ambientes:[{id:"amb-fx4-hoje-producao", nome:"Ambiente", moveis:[
+      {id:"mov-fx4-hoje-producao-a", nome:"Móvel A", etapa:"CORTE", componentesCriticos:[]},
+      {id:"mov-fx4-hoje-producao-b", nome:"Móvel B", etapa:"CORTE", componentesCriticos:[]},
+    ]}]});
+  appHoje.M.Store.state.obras.push(oProducaoFx);
+  const pMinha = appHoje.M.Store.criarPendencia({obraId:oProducaoFx.id, movelId:"mov-fx4-hoje-producao-a",
+    obraNome:oProducaoFx.cliente, categoria:"Outro", descricao:"PENDFX minha responsabilidade direta",
+    responsavel:nomeProducaoTeste}).pendencia;
+  const pOutraPessoaMesmaObra = appHoje.M.Store.criarPendencia({obraId:oProducaoFx.id, movelId:"mov-fx4-hoje-producao-a",
+    obraNome:oProducaoFx.cliente, categoria:"Outro", descricao:"PENDFX de outra pessoa mesma obra",
+    responsavel:"Outra Pessoa Qualquer"}).pendencia;
+  const pSemResponsavelComVinculo = appHoje.M.Store.criarPendencia({obraId:oProducaoFx.id, movelId:"mov-fx4-hoje-producao-b",
+    obraNome:oProducaoFx.cliente, categoria:"Outro", descricao:"PENDFX sem responsável mas com tarefa própria",
+    responsavel:null}).pendencia;
+  const pSemResponsavelSemVinculo = appHoje.M.Store.criarPendencia({obraId:oProducaoFx.id, movelId:"mov-fx4-hoje-producao-a",
+    obraNome:oProducaoFx.cliente, categoria:"Outro", descricao:"PENDFX sem responsável e sem tarefa própria",
+    responsavel:null}).pendencia;
+  // tarefa que liga o usuário ao Móvel B (mesmo vínculo que
+  // obraIdsDoColaborador já lê de state.tarefas) — Móvel A não recebe
+  // tarefa nenhuma dela, então pSemResponsavelSemVinculo fica de fato
+  // sem vínculo comprovável.
+  appHoje.M.Store.state.tarefas.push({id:"fx4-tarefa-producao", obraId:oProducaoFx.id, movelId:"mov-fx4-hoje-producao-b",
+    titulo:"Tarefa fixture", etapa:"CORTE", status:"PENDENTE", tipo:"PRODUCAO", obrigatorio:"OBRIGATORIO",
+    responsavelPlanejado:nomeProducaoTeste, executadoPor:null});
+
+  appHoje.M.Store.setUsuarioAtual(nomeProducaoTeste);
+  const resultadoProducao = appHoje.M.Pages.hoje();
+  assert.ok(resultadoProducao.html.includes("PENDFX minha responsabilidade direta"), "Produção precisa ver, no bloco 'Minhas pendências', a própria pendência (responsavel===usuário)");
+  assert.ok(!resultadoProducao.html.includes("PENDFX de outra pessoa mesma obra"), "Produção NÃO pode ver, em nenhum bloco, pendência atribuída a outra pessoa — nem por estar na mesma obra");
+  assert.ok(resultadoProducao.html.includes("PENDFX sem responsável mas com tarefa própria"), "pendência sem responsável explícito, mas vinculada (via movelId) a uma tarefa própria do usuário, precisa aparecer em 'itens que precisam de ação agora'");
+  assert.ok(!resultadoProducao.html.includes("PENDFX sem responsável e sem tarefa própria"), "pendência sem responsável E sem nenhum vínculo operacional comprovável não pode aparecer — não é 'ação agora' de ninguém em especial ainda");
+}
+
+console.log("Fase 4 (Pendências + Hoje): OK");
+
+// ==================================================================
 // HOTFIX 3.1 — persistSupabase() não pode chamar Supa.salvarEstado() com
 // cliente nulo; precisa esperar M.Supa.ready; precisa coalescer gravações
 // concorrentes (fila de tamanho 1 — só a mais recente sobrevive, nunca uma

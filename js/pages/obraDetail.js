@@ -185,7 +185,10 @@
             <div class="small muted" style="margin:2px 0 6px;">Etapa: ${UI.esc(etapaAmb)}</div>
             <div style="font-weight:800;font-size:15px;">${p.pct}%</div>
             ${UI.progressBar(p.pct, sitAmb.key==="TRAVADO"?"blocked":"")}
-            <div class="small muted" style="margin-top:6px;">${pend? pend+" pendência"+(pend>1?"s":"") : "sem pendências"}</div>
+            <div class="flex-between" style="margin-top:6px;">
+              <div class="small muted">${pend? pend+" pendência"+(pend>1?"s":"") : "sem pendências"}</div>
+              ${M.Store.pode("pendencia.criar")? `<button class="btn sm ghost" style="padding:2px 6px;" onclick="event.stopPropagation();Act.openPendenciaForm('${o.id}','${amb.id}')">${UI.icon('alert',11)} + Pendência</button>` : ""}
+            </div>
           </div>`;
         }).join("")}
       </div>

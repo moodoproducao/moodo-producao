@@ -5,26 +5,41 @@
    exceção em Produção, Pendências e Montagem." / "Hoje tinha virado
    dashboard... removi. Hoje abre direto nos itens que exigem ação."
    (ui-telas-piloto.txt). Por isso esta tela NÃO tem faixa de KPI — quem
-   quiser números de produção/meta do mês encontra em Indicadores, que já
-   cobria isso. Aqui é fila de ação: Decidir/Aprovar/Cobrar/Resolver/Revisar,
-   Obras em risco, Minhas pendências, Próximas entregas, Montagens da semana.
+   quiser números de produção/meta do mês encontra em Indicadores.
+
+   FASE 4 (handoff — §9/§10/§11): "Hoje V2 contextual por perfil". A tela
+   deixa de ser uma versão única com só um filtro de "restrito" e passa a
+   ter um conjunto de blocos DIFERENTE por grupo de perfil (7 grupos, exatos
+   do handoff: Admin, PCP, Líder, Produção, Montador, Assistência, Gestor).
+   Regras que valem pra TODOS os grupos:
+     - "Poucos blocos" — cada grupo mostra só o que o handoff pediu pra ele,
+       nada de reaproveitar tudo em todo lugar.
+     - Nunca duplica número decorativo/KPI/ranking (§11) — todo bloco aqui
+       é lista de itens acionáveis, nunca um número sozinho sem ação atrás.
+     - Nada de módulo novo: todo bloco é filtro/reagrupamento de dados que já
+       existem em Pendências/Produção/Montagem/Assistências/Calendário — ver
+       M.Calc, M.Store, M.Calendario reusados abaixo, nada recalculado do zero.
+     - Risco: só ALTO/MEDIO entram como "obra em risco" — "N/A não é risco"
+       (regra da Fase 3, não mexida aqui).
    ============================================================ */
 (function(){
   "use strict";
   const M = window.M, UI = M.UI, C = M.Calc;
   M.Pages = M.Pages || {};
 
+  function esc(s){ return UI.esc(s); }
+
   function saudacao(){
     const h = new Date().getHours();
     return h<12 ? "Bom dia" : h<18 ? "Boa tarde" : "Boa noite";
   }
 
-  // classifica uma pendência aberta num verbo de ação — a lógica é derivada
-  // dos campos do handoff (tipo/origem/status/impacto), já que o handoff não
-  // documentou uma regra mecânica de classificação (as telas-piloto mostram
-  // o resultado, não a fórmula). Cada pendência cai em UM verbo só (primeira
-  // regra que bater), pra não duplicar contagem entre seções. Decisão
-  // registrada no relatório de entrega da Fase 3.
+  // classifica uma pendência aberta num verbo de ação — mantido da Fase 3
+  // (mesma regra, mesmo comentário original preservado abaixo).
+  // A lógica é derivada dos campos do handoff (tipo/origem/status/impacto),
+  // já que o handoff não documentou uma regra mecânica de classificação.
+  // Cada pendência cai em UM verbo só (primeira regra que bater), pra não
+  // duplicar contagem entre seções.
   function classificarAcao(p){
     if(p.tipo==="Decisão") return "DECIDIR";
     if(p.tipo==="Projeto") return "APROVAR";
@@ -50,120 +65,329 @@
       <div class="ai-sub">${esc(p.descricao||p.categoria)} · ${esc(prazoTxt)}</div>
     </div>`;
   }
-  function esc(s){ return UI.esc(s); }
+
+  // item de pendência em estilo "alert-item" (usado nos blocos "minhas
+  // pendências" / "pendências operacionais" / etc. — mais compacto que o
+  // attention-item, que carrega o verbo de ação).
+  function alertItemPendenciaHtml(p){
+    return `<div class="alert-item" style="cursor:pointer;" onclick="Act.abrirPendenciaEm('${p.id}')">
+      ${UI.tipoChip(p.tipo)}
+      <div><div>${esc(p.descricao||p.categoria)}</div><div class="alert-sub">${esc(p.obraNome)}${p.movelNome? " · "+esc(p.movelNome):""} · ${p.prazo? (C.diasAte(p.prazo)<=0?"vencida":"prazo "+C.fmtDate(p.prazo)) : "sem prazo"}</div></div>
+    </div>`;
+  }
+
+  function riscoCardHtml({o,sit,parada}){
+    return `<div class="risk-card" style="margin-bottom:10px;">
+      <div class="flex-between">
+        <div><b>${esc(o.cliente)}</b><div class="small muted">${o.numeroOS}</div></div>
+        ${UI.riscoChip(sit)}
+      </div>
+      <div class="risk-bar"><div style="width:${sit.progresso}%;height:100%;background:var(--${sit.tone});border-radius:var(--radius-sm);"></div></div>
+      <div class="flex-between small muted">
+        <span>${sit.progresso}% concluído${parada? ` · <span style="color:var(--critical);font-weight:700;">parada há ${C.diasParada(o)}d</span>`:""}</span>
+        <span>${sit.pendencias} pendência(s) · ${sit.diasEntrega<0? `${-sit.diasEntrega}d atrasada`: `entrega em ${sit.diasEntrega}d`}</span>
+      </div>
+      <a href="#/obra/${o.id}" class="btn ghost sm" style="margin-top:8px;">Abrir obra →</a>
+    </div>`;
+  }
+
+  // ambiente travado (FASE 4 — reusa M.Calc.situacaoAmbiente, a mesma
+  // definição de "travado" já usada em Montagem/Obra, não uma nova).
+  function ambienteTravadoHtml({o,a}){
+    const bloqueios = M.Store.bloqueiosAmbiente(a.id);
+    return `<div class="alert-item" style="cursor:pointer;" onclick="Act.irParaObra('${o.id}','${a.id}')">
+      ${UI.icon('lock',13)}
+      <div><div><b>${esc(o.cliente)}</b> · ${esc(a.nome)}</div>
+      <div class="alert-sub">${bloqueios.length? esc(bloqueios[0].descricao||bloqueios[0].categoria) : "travado"}</div></div>
+    </div>`;
+  }
+
+  // compromisso do M.Calendario (mesma fonte da tela Calendário — nunca
+  // reimplementa a agregação de eventos aqui).
+  function compromissoHtml(e){
+    const acao = e.tipo==="movel" ? `Act.openMovel('${e.movelId}')`
+      : e.tab ? `Act.setObraTab('${e.obraId}','${e.tab}'); Act.go('#/obra/${e.obraId}')`
+      : `Act.go('#/obra/${e.obraId}')`;
+    const dias = C.diasAte(e.iso);
+    const quando = dias===0?"hoje":dias===1?"amanhã":C.fmtDate(e.iso);
+    return `<div class="alert-item" style="cursor:pointer;" onclick="${acao}">
+      <div><div>${esc(e.label)}</div><div class="alert-sub">${esc(quando)}</div></div>
+    </div>`;
+  }
+
+  function blocoLista(o){
+    // wrapper genérico — título + contador + lista de itens já em HTML,
+    // ou uma mensagem "vazio" quando não há nada (nunca esconde o bloco
+    // inteiro: mostrar "nada aqui" também é informação).
+    return UI.card({
+      title: o.titulo,
+      icon: o.icon,
+      right: o.total? `<span class="chip ${o.tone||'critical'}">${o.total}</span>` : "",
+      body: o.itens.length ? o.itens.join("") : `<p class="small muted">${esc(o.vazio||"Nada aqui agora.")}</p>`,
+    });
+  }
+
+  // ============================================================
+  // Blocos por GRUPO de perfil (§10 handoff — 7 grupos exatos)
+  // Cada grupo recebe o "ctx" comum (calculado uma vez em M.Pages.hoje) e
+  // devolve só o HTML do corpo — nada de recalcular obras/pendências aqui.
+  // ============================================================
+
+  // ---- ADMIN e GESTOR: "visão parecida com Admin operacional, mas sem
+  // áreas administrativas indevidas" (§10). Mesmo conjunto de blocos pros
+  // dois — nenhum dos blocos abaixo é uma "área administrativa" (não é
+  // Configurações/Equipe/Auditoria), então não há nada pra tirar do Gestor;
+  // a diferença entre os dois perfis já é decidida em outro lugar (menu/
+  // rotas — Fase 2), não aqui dentro do Hoje.
+  function grupoAdminGestor(ctx){
+    const excecoes = ctx.pendAbertas
+      .filter(p=> p.impacto==="BLOQUEIA_OBRA" || p.impacto==="BLOQUEIA_AMBIENTE")
+      .sort(C.compararPrioridadePendencia).slice(0,6);
+    const assistCriticas = M.Store.state.assistencias.filter(a=> a.status!=="CONCLUIDA" &&
+      ((a.prazo && C.diasAte(a.prazo)<0) || (a.visitas&&a.visitas.length && a.visitas[a.visitas.length-1].desfecho==="RETORNO_NECESSARIO")));
+
+    return `
+      <div class="grid-2">
+        ${blocoLista({titulo:"Exceções críticas", icon:"alert", total:excecoes.length,
+          itens:excecoes.map(itemAtencaoHtml), vazio:"Nenhuma pendência bloqueando obra/ambiente agora."})}
+        <div class="card pad">
+          <div class="card-title"><span style="flex:1;">Obras em risco</span><a href="#/producao" class="btn ghost sm">ver produção</a></div>
+          ${ctx.riscoRows.length ? ctx.riscoRows.map(riscoCardHtml).join("") : `<p class="small muted">Nenhuma obra em risco agora.</p>`}
+        </div>
+      </div>
+      <div class="hr"></div>
+      <div class="grid-2">
+        ${blocoLista({titulo:"Montagem travada", icon:"lock", total:ctx.ambientesTravados.length,
+          itens:ctx.ambientesTravados.map(ambienteTravadoHtml), vazio:"Nenhum ambiente travado agora."})}
+        ${blocoLista({titulo:"Assistência crítica", icon:"alert", total:assistCriticas.length, tone:"warning",
+          itens:assistCriticas.slice(0,6).map(a=>`<div class="alert-item" style="cursor:pointer;" onclick="Act.go('#/assistencias')">
+            <div><div>${esc(a.categoria)} — ${esc(a.obraNome||a.cliente||"")}</div>
+            <div class="alert-sub">${a.prazo&&C.diasAte(a.prazo)<0? "prazo vencido":"retorno necessário"}</div></div></div>`),
+          vazio:"Nenhuma assistência crítica agora."})}
+      </div>
+      <div class="hr"></div>
+      ${blocoLista({titulo:"Próximos compromissos", icon:"calendar", tone:"neutral",
+        itens:ctx.compromissos.map(compromissoHtml), vazio:"Nada nos próximos 7 dias."})}
+    `;
+  }
+
+  // ---- PCP: pré-produção, liberações, obras entrando em produção, prazos.
+  // "Liberações" e "bloqueios de projeto/material" são a mesma pendência
+  // vista de dois jeitos (uma pendência de Material/Projeto bloqueada É a
+  // liberação pendente) — um bloco só, ordenado por prioridade, evita
+  // mostrar a mesma pendência duas vezes em duas seções diferentes.
+  function grupoPCP(ctx){
+    const preProducao = ctx.pendAbertas.filter(p=> p.tipo==="Material" || p.tipo==="Projeto")
+      .sort(C.compararPrioridadePendencia).slice(0,8);
+    // AJUSTE (pós-revisão): "obras entrando em produção" usa faseMacro (Fase
+    // 3), não mais progresso físico como proxy — faseMacro responde ONDE a
+    // obra está; progresso físico não substitui fase operacional. Leitura
+    // via M.Store.faseMacroDeObra(o) (nunca o campo cru) — é a mesma função
+    // que riscoObra/situacaoObra já usam, e ela devolve "_LEGADO_SEM_FASE"
+    // pra obra sem faseMacro, SEM inferir nada — então obra legada
+    // simplesmente não entra em nenhum dos dois blocos abaixo, de propósito.
+    const liberadas = ctx.obras.filter(o=> M.Store.faseMacroDeObra(o).key==="LIBERADA_PARA_PRODUCAO")
+      .sort((a,b)=> C.diasAte(a.dataEntregaPrevista)-C.diasAte(b.dataEntregaPrevista)).slice(0,6);
+    // "PCP_PLANO_DE_CORTE" mostrado separado, nunca junto de LIBERADA_PARA_PRODUCAO
+    // — são situações diferentes (uma já pode ir pra fábrica, a outra ainda
+    // está sendo preparada), não misturar as duas sob um único corte.
+    const emPreparacao = ctx.obras.filter(o=> M.Store.faseMacroDeObra(o).key==="PCP_PLANO_DE_CORTE")
+      .sort((a,b)=> C.diasAte(a.dataEntregaPrevista)-C.diasAte(b.dataEntregaPrevista)).slice(0,6);
+    function obraFaseItemHtml(o){
+      return `<div class="alert-item" style="cursor:pointer;" onclick="Act.go('#/obra/${o.id}')">
+        <div><div><b>${esc(o.cliente)}</b></div><div class="alert-sub">${o.numeroOS} · entrega ${C.fmtDate(o.dataEntregaPrevista)}</div></div>
+      </div>`;
+    }
+
+    return `
+      ${blocoLista({titulo:"Pendências de pré-produção", icon:"alert", total:preProducao.length,
+        itens:preProducao.map(itemAtencaoHtml), vazio:"Nenhuma pendência de Material/Projeto em aberto."})}
+      <div class="hr"></div>
+      <div class="grid-2">
+        ${blocoLista({titulo:"Obras liberadas para produção", icon:"check-circle", tone:"neutral",
+          itens:liberadas.map(obraFaseItemHtml), vazio:"Nenhuma obra liberada para produção agora."})}
+        ${blocoLista({titulo:"Em preparação para liberação", icon:"clock", tone:"neutral",
+          itens:emPreparacao.map(obraFaseItemHtml), vazio:"Nenhuma obra em plano de corte agora."})}
+      </div>
+      <div class="hr"></div>
+      ${blocoLista({titulo:"Prazos próximos", icon:"calendar", tone:"neutral",
+        itens:ctx.compromissos.filter(e=>["obra","movel"].includes(e.tipo)||e.tab==="pendencias").slice(0,6).map(compromissoHtml),
+        vazio:"Nada nos próximos 7 dias."})}
+    `;
+  }
+
+  // ---- LÍDER: "pendências operacionais" e "o que precisa destravar hoje"
+  // são o mesmo tipo de item (pendência aberta pedindo ação) — um bloco só,
+  // priorizado (§8), evita duplicar a mesma lista sob dois títulos.
+  function grupoLider(ctx){
+    const destravar = ctx.pendAbertas.slice().sort(C.compararPrioridadePendencia).slice(0,8);
+    return `
+      ${blocoLista({titulo:"Precisa destravar hoje", icon:"alert", total:destravar.length,
+        itens:destravar.map(itemAtencaoHtml), vazio:"Nada pedindo ação agora."})}
+      <div class="hr"></div>
+      <div class="grid-2">
+        ${blocoLista({titulo:"Ambientes travados", icon:"lock", total:ctx.ambientesTravados.length,
+          itens:ctx.ambientesTravados.map(ambienteTravadoHtml), vazio:"Nenhum ambiente travado agora."})}
+        <div class="card pad">
+          <div class="card-title"><span style="flex:1;">Obras próximas do fechamento</span><a href="#/montagem" class="btn ghost sm">ver montagem</a></div>
+          ${ctx.prioridadeFechamento.length ? ctx.prioridadeFechamento.map(l=>`
+            <div class="alert-item" style="cursor:pointer;" onclick="Act.irParaObra('${l.o.id}','${l.a.id}')">
+              <div><div><b>${esc(l.a.nome)}</b> — ${l.pct}%</div>
+              <div class="alert-sub">${esc(l.o.cliente)} · ${l.itensFaltando? `falta ${l.itensFaltando} item(ns)` : "pronta para finalizar"}</div></div>
+            </div>`).join("") : `<p class="small muted">Nenhum ambiente perto do fechamento agora.</p>`}
+        </div>
+      </div>
+    `;
+  }
+
+  // ---- PRODUÇÃO (OPERADOR): "menu já é Hoje+Pendências" — tela simples.
+  // Contexto/foto/ação rápida acontecem no destino (Act.abrirPendenciaEm já
+  // abre a pendência expandida em Pendências, com obra/ambiente/móvel,
+  // fotos e "+fotos" — não duplica isso aqui dentro de Hoje.
+  function grupoProducao(ctx){
+    const minhas = ctx.pendAbertas.filter(p=>p.responsavel===ctx.nome).sort(C.compararPrioridadePendencia);
+    // AJUSTE (último ajuste antes da publicação): "itens que precisam de
+    // ação agora" mostrava qualquer pendência da(s) obra(s) com
+    // responsavel !== usuário — ou seja, também pendência de OUTRA pessoa,
+    // só por estar na mesma obra. Hoje responde "o que EU preciso fazer
+    // agora", não "o que está acontecendo na obra inteira" — então esse
+    // bloco não pode incluir pendência atribuída a outro colaborador.
+    // A única exceção aceita: pendência SEM responsável explícito, mas
+    // comprovadamente ligada (via movelId) a uma tarefa deste usuário
+    // (responsavelPlanejado/executadoPor) — o MESMO vínculo que
+    // obraIdsDoColaborador já usa pra "obra", só que aqui restrito ao
+    // móvel específico da pendência, não a obra inteira. Nenhuma
+    // permissão nova, nenhum campo novo — reuso de state.tarefas.
+    const acionaveisSemResponsavel = ctx.pendAbertas.filter(p=>
+      !p.responsavel && p.movelId &&
+      M.Store.state.tarefas.some(t=> t.movelId===p.movelId &&
+        (t.responsavelPlanejado===ctx.nome || t.executadoPor===ctx.nome))
+    ).sort(C.compararPrioridadePendencia).slice(0,6);
+    return `
+      ${blocoLista({titulo:"Minhas pendências", icon:"alert", total:minhas.length,
+        itens:minhas.map(alertItemPendenciaHtml), vazio:"Nenhuma pendência sob sua responsabilidade."})}
+      <div class="hr"></div>
+      ${blocoLista({titulo:"Itens que precisam de ação agora", icon:"clock", tone:"warning",
+        itens:acionaveisSemResponsavel.map(alertItemPendenciaHtml), vazio:"Nada mais pedindo ação nas suas obras agora."})}
+    `;
+  }
+
+  // ---- MONTADOR: obra(s) do dia, endereço, equipe, pendências, ambientes
+  // travados. "Ações rápidas futuras (Localização/Projetos/Pendência/Foto/
+  // Finalizar)" — não implementado ainda (Montagem V2 completa é fase
+  // futura); aqui só o essencial pra saber onde ir e o que está travando.
+  function grupoMontador(ctx){
+    const obrasDoDia = ctx.obras.filter(o=> M.Store.allMoveis().some(({o:oo,m})=> oo.id===o.id && m.etapa==="MONTAGEM"));
+    return `
+      <div class="card pad">
+        <div class="card-title"><span style="flex:1;">Obra(s) do dia</span></div>
+        ${obrasDoDia.length ? obrasDoDia.map(o=>{
+          const moveisMontagem = M.Store.allMoveis().filter(({o:oo,m})=> oo.id===o.id && m.etapa==="MONTAGEM");
+          const equipe = Array.from(new Set(moveisMontagem.map(({m})=>m.responsavel).filter(Boolean)));
+          const pend = C.pendenciasAbertasDe(o.id).length;
+          return `<div class="card pad" style="background:var(--surface-alt);margin-bottom:8px;">
+            <div class="flex-between"><b>${esc(o.cliente)}</b><span class="small muted">${o.numeroOS}</span></div>
+            ${o.endereco? `<div class="small muted" style="margin-top:2px;">${UI.icon('map-pin',11)} ${esc(o.endereco)}</div>`:""}
+            <div class="small muted" style="margin-top:2px;">${equipe.length? "Equipe: "+equipe.map(esc).join(", ") : ""}</div>
+            <div class="small muted" style="margin-top:2px;">${pend? `${pend} pendência(s) na obra` : "sem pendências"}</div>
+            <div style="margin-top:8px;display:flex;gap:8px;">
+              <a class="btn sm ghost" href="#/montagem">Ver montagem</a>
+              <a class="btn sm ghost" href="#/obra/${o.id}">Abrir obra</a>
+            </div>
+          </div>`;
+        }).join("") : `<p class="small muted">Nenhuma obra em montagem atribuída a você hoje.</p>`}
+      </div>
+      <div class="hr"></div>
+      ${blocoLista({titulo:"Ambientes travados", icon:"lock", total:ctx.ambientesTravados.length,
+        itens:ctx.ambientesTravados.map(ambienteTravadoHtml), vazio:"Nenhum ambiente travado nas suas obras."})}
+    `;
+  }
+
+  // ---- ASSISTÊNCIA: atendimentos do dia, pendências dos atendimentos,
+  // retornos, próximos compromissos. Assistência V2 completa não é desta
+  // fase — aqui é só a fila do dia.
+  function grupoAssistencia(ctx){
+    const meusAtendimentos = M.Store.state.assistencias.filter(a=> a.responsavel===ctx.nome && a.status!=="CONCLUIDA")
+      .sort((a,b)=> C.diasAte(a.prazo||"2099-01-01") - C.diasAte(b.prazo||"2099-01-01"));
+    const pendAtendimentos = ctx.pendAbertas.filter(p=>p.tipo==="Assistência").sort(C.compararPrioridadePendencia);
+    const retornos = M.Store.state.assistencias.filter(a=> a.status!=="CONCLUIDA" && a.visitas && a.visitas.length
+      && a.visitas[a.visitas.length-1].desfecho==="RETORNO_NECESSARIO" && (!ctx.restrito || a.responsavel===ctx.nome));
+
+    return `
+      <div class="card pad">
+        <div class="card-title"><span style="flex:1;">Atendimentos do dia</span><a href="#/assistencias" class="btn ghost sm">ver todos</a></div>
+        ${meusAtendimentos.length ? meusAtendimentos.slice(0,6).map(a=>`
+          <div class="alert-item" style="cursor:pointer;" onclick="Act.go('#/assistencias')">
+            ${UI.assistenciaStatusChip(a.status)}
+            <div><div>${esc(a.categoria)} — ${esc(a.obraNome||a.cliente||"")}</div>
+            <div class="alert-sub">${a.prazo? (C.diasAte(a.prazo)<=0?"vencida":"prazo "+C.fmtDate(a.prazo)) : "sem prazo"}</div></div>
+          </div>`).join("") : `<p class="small muted">Nenhum atendimento seu em aberto.</p>`}
+      </div>
+      <div class="hr"></div>
+      <div class="grid-2">
+        ${blocoLista({titulo:"Pendências dos atendimentos", icon:"alert", total:pendAtendimentos.length,
+          itens:pendAtendimentos.map(alertItemPendenciaHtml), vazio:"Nenhuma pendência de assistência em aberto."})}
+        ${blocoLista({titulo:"Retornos necessários", icon:"clock", tone:"warning", total:retornos.length,
+          itens:retornos.slice(0,6).map(a=>`<div class="alert-item" style="cursor:pointer;" onclick="Act.go('#/assistencias')">
+            <div><div>${esc(a.categoria)} — ${esc(a.obraNome||a.cliente||"")}</div>
+            <div class="alert-sub">retorno necessário</div></div></div>`),
+          vazio:"Nenhum retorno pendente."})}
+      </div>
+      <div class="hr"></div>
+      ${blocoLista({titulo:"Próximos compromissos", icon:"calendar", tone:"neutral",
+        itens:ctx.compromissosAssistencia.map(compromissoHtml), vazio:"Nada nos próximos 7 dias."})}
+    `;
+  }
 
   M.Pages.hoje = function(){
     const nome = M.Store.state.usuarioAtual;
     const primeiroNome = (nome||"").split(" ")[0];
     const colab = M.colabByNome(nome);
     const cargo = colab ? colab.cargo : "";
+    const perfil = colab ? colab.perfil : null;
 
     const restrito = !M.Store.pode("verTodasObras");
     const meuObraIds = restrito ? M.Store.obraIdsDoColaborador(nome) : null;
     const obras = restrito ? M.Store.state.obras.filter(o=>meuObraIds.has(o.id)) : M.Store.state.obras;
-
-    // ---------- "Precisa da sua atenção" ----------
     const pendAbertas = M.Store.state.pendencias.filter(p=> p.status!=="RESOLVIDA" && (!restrito || meuObraIds.has(p.obraId)));
-    const emAtencao = pendAbertas.filter(p=> M.bloqueiaFechamento(p.impacto) || (p.prazo && C.diasAte(p.prazo)<=0));
-    // ordena por severidade de impacto e depois por prazo — mesmo critério de
-    // ordenação já usado em Pendências (Fase 2), pra não inventar um segundo.
-    emAtencao.sort((a,b)=> (M.IMPACTO_SEVERIDADE[a.impacto]??9) - (M.IMPACTO_SEVERIDADE[b.impacto]??9)
-      || C.diasAte(a.prazo||"2099-01-01") - C.diasAte(b.prazo||"2099-01-01"));
-    const atencaoTop = emAtencao.slice(0,6);
 
-    // ---------- obras em risco (ALTO/MEDIO, ordenadas por prazo) ----------
-    // FASE 3: "N/A" (fase sem impactaRisco) não é risco — filtra por
-    // ALTO/MEDIO explicitamente, não por "!=='BAIXO'".
+    // ---------- dados comuns entre grupos (calculados uma vez) ----------
     const riscoRows = obras.map(o=>({o, sit:C.situacaoObra(o), parada:C.obraParada(o)}))
       .filter(r=> r.sit.nivel==="ALTO" || r.sit.nivel==="MEDIO")
       .sort((a,b)=> ({ALTO:0,MEDIO:1,BAIXO:2,"N/A":3}[a.sit.nivel]) - ({ALTO:0,MEDIO:1,BAIXO:2,"N/A":3}[b.sit.nivel]) || a.sit.diasEntrega - b.sit.diasEntrega)
       .slice(0,6);
+    // ambientes travados — mesma definição de M.Calc.situacaoAmbiente usada
+    // em Montagem/Obra (§13/reuso), não uma nova regra de "travado".
+    const ambientesTravados = obras.flatMap(o=> o.ambientes.map(a=>({o,a,sit:C.situacaoAmbiente(a)})))
+      .filter(x=> x.sit.key==="TRAVADO").slice(0,6);
+    const prioridadeFechamento = C.prioridadeParaFinalizar(obras).slice(0,6);
+    // próximos compromissos (7 dias) — vem do M.Calendario, respeitando a
+    // mesma restrição de "minhas obras" que o resto da tela já aplica.
+    const compromissos = M.Calendario.proximosEventos(7).slice(0,6);
+    const compromissosAssistencia = M.Calendario.proximosEventos(7, ["ASSISTENCIAS"]).slice(0,6);
 
-    // ---------- minhas pendências ----------
-    const minhasPend = M.Store.state.pendencias.filter(p=>p.responsavel===nome && p.status!=="RESOLVIDA")
-      .sort((a,b)=> C.diasAte(a.prazo||"2099-01-01") - C.diasAte(b.prazo||"2099-01-01")).slice(0,6);
+    const ctx = {nome, restrito, meuObraIds, obras, pendAbertas, riscoRows, ambientesTravados, prioridadeFechamento, compromissos, compromissosAssistencia};
 
-    // ---------- próximas entregas (7 dias) ----------
-    const proximasEntregas = obras.filter(o=> o.status!=="FINALIZADA" && C.diasAte(o.dataEntregaPrevista)>=0 && C.diasAte(o.dataEntregaPrevista)<=7)
-      .sort((a,b)=> C.diasAte(a.dataEntregaPrevista) - C.diasAte(b.dataEntregaPrevista));
+    let corpo;
+    switch(perfil){
+      case "ADMIN": case "GESTOR": corpo = grupoAdminGestor(ctx); break;
+      case "PCP": corpo = grupoPCP(ctx); break;
+      case "LIDERANCA": corpo = grupoLider(ctx); break;
+      case "OPERADOR": corpo = grupoProducao(ctx); break;
+      case "MONTADOR": corpo = grupoMontador(ctx); break;
+      case "ASSISTENCIA": corpo = grupoAssistencia(ctx); break;
+      // sem colaborador mapeado pro usuário atual (ex.: sessão de teste) —
+      // cai no conjunto mais abrangente, nunca quebra a tela.
+      default: corpo = grupoAdminGestor(ctx);
+    }
 
-    // ---------- montagens da semana ----------
-    const montagens = M.Store.allMoveis().filter(({m})=> m.etapa==="MONTAGEM")
-      .filter(({o})=> !restrito || meuObraIds.has(o.id));
-
-    const totalEntregam = proximasEntregas.length;
+    const totalAtencao = ctx.pendAbertas.filter(p=> M.bloqueiaFechamento(p.impacto) || (p.prazo && C.diasAte(p.prazo)<=0)).length;
     const html = `
       <p class="small muted" style="margin-bottom:4px;">${esc(saudacao())}, ${esc(primeiroNome)}${cargo? " · "+esc(cargo):""}.</p>
       <p class="small" style="margin-bottom:18px;font-weight:700;">
-        ${atencaoTop.length? `${atencaoTop.length} ${atencaoTop.length===1?'item trava':'itens travam'} fechamento e esperam por você.` : "Nada travando fechamento no momento."}
-        ${totalEntregam? ` ${totalEntregam} obra${totalEntregam>1?'s':''} entrega${totalEntregam>1?'m':''} esta semana.` : ""}
+        ${totalAtencao? `${totalAtencao} ${totalAtencao===1?'item trava':'itens travam'} fechamento e esperam por você.` : "Nada travando fechamento no momento."}
       </p>
-
-      <div class="grid-2">
-        ${UI.card({
-          title:`Precisa da sua atenção`,
-          right: atencaoTop.length? `<span class="chip critical">${emAtencao.length}</span>` : "",
-          body: atencaoTop.length
-            ? atencaoTop.map(itemAtencaoHtml).join("")
-            : `<p class="small muted">Nenhuma pendência crítica no momento.</p>`
-        })}
-        <div class="card pad">
-          <div class="card-title"><span style="flex:1;">Obras em risco</span><a href="#/producao" class="btn ghost sm">ver produção</a></div>
-          ${riscoRows.length ? riscoRows.map(({o,sit,parada})=>`
-            <div class="risk-card" style="margin-bottom:10px;">
-              <div class="flex-between">
-                <div><b>${esc(o.cliente)}</b><div class="small muted">${o.numeroOS}</div></div>
-                ${UI.riscoChip(sit)}
-              </div>
-              <div class="risk-bar"><div style="width:${sit.progresso}%;height:100%;background:var(--${sit.tone});border-radius:var(--radius-sm);"></div></div>
-              <div class="flex-between small muted">
-                <span>${sit.progresso}% concluído${parada? ` · <span style="color:var(--critical);font-weight:700;">parada há ${C.diasParada(o)}d</span>`:""}</span>
-                <span>${sit.pendencias} pendência(s) · ${sit.diasEntrega<0? `${-sit.diasEntrega}d atrasada`: `entrega em ${sit.diasEntrega}d`}</span>
-              </div>
-              <a href="#/obra/${o.id}" class="btn ghost sm" style="margin-top:8px;">Abrir obra →</a>
-            </div>
-          `).join("") : `<p class="small muted">Nenhuma obra em risco agora.</p>`}
-        </div>
-      </div>
-
-      <div class="hr"></div>
-
-      <div class="grid-2">
-        <div class="card pad">
-          <div class="card-title"><span style="flex:1;">Minhas pendências</span>${minhasPend.length? `<span class="chip critical">${minhasPend.length}</span>`:""}</div>
-          ${minhasPend.length ? minhasPend.map(p=>`
-            <div class="alert-item" style="cursor:pointer;" onclick="Act.abrirPendenciaEm('${p.id}')">
-              ${UI.tipoChip(p.tipo)}
-              <div><div>${esc(p.descricao||p.categoria)}</div><div class="alert-sub">${esc(p.obraNome)}${p.movelNome? " · "+esc(p.movelNome):""} · ${p.prazo? (C.diasAte(p.prazo)<=0?"vencida":"prazo "+C.fmtDate(p.prazo)) : "sem prazo"}</div></div>
-            </div>`).join("") : `<p class="small muted">Nenhuma pendência sob sua responsabilidade.</p>`}
-        </div>
-        <div class="card pad">
-          <div class="card-title"><span style="flex:1;">Próximas entregas</span><a href="#/calendario" class="btn ghost sm">calendário</a></div>
-          ${proximasEntregas.length ? proximasEntregas.map(o=>{
-            const bloqueantes = C.pendenciasBloqueantesDe(o.id).length;
-            const dias = C.diasAte(o.dataEntregaPrevista);
-            const statusTxt = bloqueantes ? `${bloqueantes} pendência(s) abertas` : (dias<=1 ? "sem impedimento — entrega iminente" : "sem impedimento");
-            return `<div class="alert-item" style="cursor:pointer;" onclick="Act.go('#/obra/${o.id}')">
-              <div><div><b>${esc(o.cliente)}</b> — ${C.fmtDate(o.dataEntregaPrevista)}${dias===0?" (hoje)":dias===1?" (amanhã)":""}</div>
-              <div class="alert-sub">${o.numeroOS} · <span style="color:${bloqueantes?"var(--critical)":"var(--good)"};font-weight:700;">${esc(statusTxt)}</span></div></div>
-            </div>`;
-          }).join("") : `<p class="small muted">Nenhuma entrega prevista nos próximos 7 dias.</p>`}
-        </div>
-      </div>
-
-      <div class="hr"></div>
-
-      <div class="card pad">
-        <div class="card-title"><span style="flex:1;">Montagens da semana</span><a href="#/montagem" class="btn ghost sm">ver montagem</a></div>
-        ${montagens.length ? montagens.map(({o,a,m})=>{
-          const bloqueiosM = M.Store.bloqueiosMovel(m.id);
-          return `<div class="alert-item" style="cursor:pointer;" onclick="Act.irParaObra('${o.id}','${a.id}')">
-            ${UI.person(m.responsavel)}
-            <div><div>${esc(o.cliente)} · ${esc(a.nome)}</div>
-            <div class="alert-sub">${esc(m.nome)}${bloqueiosM.length? ` · <span style="color:var(--critical);">${UI.icon('lock',11)} ${esc(bloqueiosM[0].descricao||bloqueiosM[0].categoria)}</span>`:""}</div></div>
-          </div>`;
-        }).join("") : `<p class="small muted">Nenhum móvel em montagem no momento.</p>`}
-      </div>
+      ${corpo}
     `;
     return {title:"Hoje", crumb:"O que exige você, hoje", html,
       actionsHtml:`${UI.pageSearchInput({id:'hojeSearch', placeholder:'Buscar obra, cliente, OS...'})} ${UI.botaoNovaObraHtml()} <button class="btn" onclick="Act.openPendenciaForm(null,null,null)">${UI.icon('alert',14)} Registrar pendência</button>`,

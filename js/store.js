@@ -493,8 +493,17 @@
     },
 
     // ---------- histórico ----------
-    log(obraId, tipo, descricao){
-      state.historico.unshift({id:M.uid("hist"), obraId, tipo, descricao, data:new Date().toISOString(), usuario:state.usuarioAtual});
+    // `extra` é opcional e mesclado por cima do registro base — usado por ex.
+    // pra anotar {pendenciaId} sem duplicar o histórico central em outra
+    // estrutura. 100% compatível com as chamadas antigas de 3 argumentos.
+    log(obraId, tipo, descricao, extra){
+      state.historico.unshift(Object.assign({id:M.uid("hist"), obraId, tipo, descricao, data:new Date().toISOString(), usuario:state.usuarioAtual}, extra||{}));
+    },
+
+    // histórico central filtrado por pendência — não duplica armazenamento,
+    // só lê do mesmo state.historico já existente.
+    historicoDaPendencia(pendId){
+      return state.historico.filter(h=>h.pendenciaId===pendId);
     },
 
     // ---------- auditoria (seção 48-52) — registra exceções e alterações críticas ----------
@@ -546,6 +555,35 @@
       state.pendencias.forEach(p=>{ if(p.responsavel===nome) ids.add(p.obraId); });
       state.assistencias.forEach(a=>{ if(a.responsavel===nome) ids.add(a.obraId); });
       return ids;
+    },
+
+    // FASE 4 (AJUSTE — "Minhas/Todas não pode ampliar o acesso dos perfis
+    // operacionais"): escopo REAL de quais pendências o usuário ATUAL pode
+    // ver, aplicado aqui no Store — não só escondendo o toggle "Todas" na
+    // tela. Quem chama a tela (Pendências, Hoje) sempre parte desta lista,
+    // nunca de state.pendencias cru, então nenhuma manipulação de UI/estado
+    // consegue devolver pendência fora do escopo:
+    //   - sem "verTodasObras" (Produção/Montador/Assistência/TV): só
+    //     pendências de obras onde a pessoa tem algo atribuído — reusa
+    //     obraIdsDoColaborador, o MESMO vínculo já usado em Hoje/Montagem/
+    //     Produção/Obras/Calendário, nenhum vínculo novo inventado.
+    //   - Produção (perfil OPERADOR) especificamente: "somente Minhas" não é
+    //     preferência de tela, é regra — mesmo dentro das próprias obras,
+    //     só enxerga pendência vinculada a ela mesma (responsavel===nome).
+    //     Isso NÃO é uma permissão nova: é a mesma leitura de "somente
+    //     Minhas" que a Fase 3 já cravava fixo pro perfil, só que agora
+    //     também reforçada aqui embaixo, não só na tela.
+    pendenciasVisiveis(){
+      const nome = state.usuarioAtual;
+      let out = state.pendencias;
+      if(!Store.pode("verTodasObras")){
+        const meuObraIds = Store.obraIdsDoColaborador(nome);
+        out = out.filter(p=> meuObraIds.has(p.obraId));
+      }
+      if(Store.perfilAtual().key==="OPERADOR"){
+        out = out.filter(p=> p.responsavel===nome);
+      }
+      return out;
     },
 
     // AJUSTE (rodada 3, item 1) — guard contextual REAL da rota de detalhe
@@ -916,7 +954,7 @@
       if(!Store.pode("pendencia.criar")) return {ok:false, motivo:"SEM_PERMISSAO"};
       const item = novaPendenciaObj(p);
       state.pendencias.push(item);
-      Store.log(p.obraId, "PENDENCIA_ABERTA", `${p.categoria}: ${p.descricao}`);
+      Store.log(p.obraId, "PENDENCIA_ABERTA", `${p.categoria}: ${p.descricao}`, {pendenciaId:item.id});
       emit();
       return {ok:true, pendencia:item};
     },
@@ -927,7 +965,7 @@
         p.passoAtual++;
         p.status = "EM_TRATAMENTO";
         p.atualizadoPor = state.usuarioAtual||null; p.atualizadoEm = M.todayISO();
-        Store.log(p.obraId, "PENDENCIA_AVANCOU", `${p.categoria}: passo "${p.fluxoPassos[p.passoAtual]}"`);
+        Store.log(p.obraId, "PENDENCIA_AVANCOU", `${p.categoria}: passo "${p.fluxoPassos[p.passoAtual]}"`, {pendenciaId:p.id});
       } else {
         // último passo do fluxo = resolve de vez — delega pra
         // atualizarStatusPendencia, que já checa "pendencia.resolver" (mais
@@ -949,7 +987,7 @@
       if(status==="RESOLVIDA"){
         p.passoAtual = p.fluxoPassos ? p.fluxoPassos.length-1 : 0;
         p.resolvidoPor = state.usuarioAtual||null; p.resolvidoEm = M.todayISO();
-        Store.log(p.obraId, "PENDENCIA_RESOLVIDA", `${p.categoria}: ${p.descricao}`);
+        Store.log(p.obraId, "PENDENCIA_RESOLVIDA", `${p.categoria}: ${p.descricao}`, {pendenciaId:p.id});
         // pendência vinculada a um componente crítico: resolver a pendência aqui
         // (tela de Pendências) também resolve o componente — senão os dois saem
         // de sincronia, o mesmo tipo de bug corrigido na fase 4 (bloqueio duplicado).
@@ -957,7 +995,7 @@
       }
       if(status==="ABERTA" && eraResolvida){
         p.resolvidoPor = null; p.resolvidoEm = null;
-        Store.log(p.obraId, "PENDENCIA_REABERTA", `${p.categoria}: ${p.descricao}`);
+        Store.log(p.obraId, "PENDENCIA_REABERTA", `${p.categoria}: ${p.descricao}`, {pendenciaId:p.id});
         Store.audit({categoria:"QUALIDADE", tipo:"PENDENCIA_REABERTA", obraId:p.obraId, movelId:p.movelId,
           descricao:`Pendência "${p.categoria}" reaberta — ${p.descricao}`});
         if(p.componenteCriticoId) Store._sincronizarComponenteDaPendencia(p, "AGUARDANDO");
@@ -971,7 +1009,7 @@
     resolverPendencia(pendId, {fotosResolucao, observacao} = {}){
       if(!Store.pode("pendencia.resolver")) return {ok:false, motivo:"SEM_PERMISSAO"};
       const p = state.pendencias.find(x=>x.id===pendId); if(!p) return {ok:false, motivo:"NAO_ENCONTRADA"};
-      const agora = M.todayISO();
+      const agora = new Date().toISOString();
       const autor = state.usuarioAtual||null;
       p.fotosResolucao = (p.fotosResolucao||[]).concat((fotosResolucao||[]).map(url=>
         (typeof url === "string" ? {url, autor, data:agora, principal:false} : url)));
@@ -979,6 +1017,38 @@
       return Store.atualizarStatusPendencia(pendId, "RESOLVIDA");
     },
     reabrirPendencia(pendId){ return Store.atualizarStatusPendencia(pendId, "ABERTA"); },
+    // FASE 4 (§10 handoff): "pendencia.atribuir" já existia na matriz de
+    // permissões desde a Fase 1 (todos os 8 perfis), mas nenhuma função usava
+    // essa ação — reassignar responsável exigia editar o campo por fora, sem
+    // guard e sem log. Aqui, mesmo padrão de atualizarStatusPendencia.
+    atribuirPendencia(pendId, novoResponsavel){
+      if(!Store.pode("pendencia.atribuir")) return {ok:false, motivo:"SEM_PERMISSAO"};
+      const p = state.pendencias.find(x=>x.id===pendId); if(!p) return {ok:false, motivo:"NAO_ENCONTRADA"};
+      const responsavelAnterior = p.responsavel;
+      p.responsavel = novoResponsavel||null;
+      p.atualizadoPor = state.usuarioAtual||null; p.atualizadoEm = M.todayISO();
+      Store.log(p.obraId, "PENDENCIA_ATRIBUIDA", `${p.categoria}: ${responsavelAnterior||"—"} → ${p.responsavel||"—"}`, {pendenciaId:p.id});
+      emit();
+      return {ok:true};
+    },
+    // FASE 4 (§2 handoff): "possibilidade de adicionar [fotos] depois" — sem
+    // precisar reabrir/editar status. destino: "abertura" ou "resolucao".
+    adicionarFotosPendencia(pendId, fotos, destino){
+      if(!Store.pode("pendencia.editar")) return {ok:false, motivo:"SEM_PERMISSAO"};
+      const p = state.pendencias.find(x=>x.id===pendId); if(!p) return {ok:false, motivo:"NAO_ENCONTRADA"};
+      const campo = destino==="resolucao" ? "fotosResolucao" : "fotosAbertura";
+      const agora = new Date().toISOString();
+      const autor = state.usuarioAtual||null;
+      // mesmo padrão de resolverPendencia: string vira objeto com defaults;
+      // objeto (já vindo pronto do upload, com enviadoPor/data/tamanho/etc.)
+      // passa direto, sem reescrever campos que ele já preencheu certo.
+      p[campo] = (p[campo]||[]).concat((fotos||[]).map(f=>
+        (typeof f === "string" ? {url:f, autor, data:agora, principal:false} : f)));
+      p.atualizadoPor = autor; p.atualizadoEm = M.todayISO();
+      Store.log(p.obraId, "PENDENCIA_FOTOS_ADICIONADAS", `${p.categoria}: +${(fotos||[]).length} foto(s) (${campo})`, {pendenciaId:p.id});
+      emit();
+      return {ok:true};
+    },
     // grava o novo status diretamente no componente vinculado, sem passar de
     // novo por Store.mudarStatusComponente (evitaria ida-e-volta infinita entre
     // pendência↔componente — aqui é só espelhar o campo, não gerar/fechar pendência).

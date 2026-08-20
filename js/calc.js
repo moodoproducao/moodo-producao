@@ -621,8 +621,29 @@
     });
   }
 
+  // FASE 4 (§8 handoff): ordem EXATA de prioridade — "a UI deve conseguir
+  // explicar por que algo está no topo", nada de score obscuro. 5 critérios,
+  // cada um só desempata o anterior:
+  //   1. BLOQUEIA_OBRA  2. BLOQUEIA_AMBIENTE  3. IMPEDE_FINALIZAR
+  //   4. antiguidade (mais dias em aberto primeiro)
+  //   5. proximidade do prazo de entrega da OBRA (não da pendência)
+  // NAO_IMPEDE/INFORMATIVO caem nos mesmos 3 primeiros critérios via
+  // IMPACTO_SEVERIDADE (já ordenados depois de IMPEDE_FINALIZAR).
+  // "Resolvidas por último" continua sendo aplicado por fora, como já era
+  // (não é um dos 5 critérios do handoff, é convenção de exibição da lista).
+  function compararPrioridadePendencia(a, b){
+    const sa = M.IMPACTO_SEVERIDADE[a.impacto] ?? 9, sb = M.IMPACTO_SEVERIDADE[b.impacto] ?? 9;
+    if(sa!==sb) return sa-sb;
+    const da = diasDesde(a.abertura), db = diasDesde(b.abertura);
+    if(da!==db) return db-da; // mais antiga primeiro
+    const oa = M.Store.getObra(a.obraId), ob = M.Store.getObra(b.obraId);
+    const pa = oa ? diasAte(oa.dataEntregaPrevista) : 9999, pb = ob ? diasAte(ob.dataEntregaPrevista) : 9999;
+    return pa-pb; // prazo da obra mais próximo primeiro
+  }
+
   M.Calc = {
     fmtBRL, fmtBRLk, fmtDate, fmtPct, daysBetween, diasDesde, diasAte,
+    compararPrioridadePendencia,
     movelConcluido, progressoGrupo, progressoObra, progressoAmbiente,
     itemCriticoGrupo, pendenciasAbertasDe, pendenciasBloqueantesDe, riscoObra, obraParada, diasParada, situacaoMovel, situacaoObra, wipPorEtapa, indicadores,
     situacaoAmbiente, progressoFisicoMontagem, taxaFechamento, agregarMontagem, prioridadeParaFinalizar,

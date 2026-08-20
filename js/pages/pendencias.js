@@ -36,29 +36,30 @@
     }).join("")}</div>`;
   }
 
-  // ordena por impacto (mais severo primeiro) e depois por prazo — resolvidas
-  // sempre por último (handoff: "ordenado por impacto e depois por prazo ·
-  // resolvidas aparecem no fim").
+  // FASE 4 (§8 handoff): prioridade agora vem de M.Calc.compararPrioridadePendencia
+  // (5 critérios exatos do handoff — ver calc.js). Resolvidas continuam por
+  // último — isso é convenção de exibição, não um dos 5 critérios de prioridade.
   function ordenarPendencias(lista){
     return lista.slice().sort((a,b)=>{
       const ra = a.status==="RESOLVIDA"?1:0, rb = b.status==="RESOLVIDA"?1:0;
       if(ra!==rb) return ra-rb;
-      const sa = M.IMPACTO_SEVERIDADE[a.impacto]??9, sb = M.IMPACTO_SEVERIDADE[b.impacto]??9;
-      if(sa!==sb) return sa-sb;
-      return C.diasAte(a.prazo||"2099-01-01") - C.diasAte(b.prazo||"2099-01-01");
+      return C.compararPrioridadePendencia(a,b);
     });
   }
 
+  // FASE 4 (§7 handoff): "Filtros prioritários EXATAMENTE: Minhas, Todas,
+  // Status, Impacto, Obra, Responsável. Não criar dezenas de filtros."
+  // Tipo, Prioridade e o chip "Bloqueia fechamento" saíram da barra — Impacto
+  // já é a fonte única sobre bloqueio (§5), então o chip virou redundante; e
+  // Tipo/Prioridade não estão na lista exata do handoff. A busca livre
+  // continua (não é um dos "filtros" enumerados, é o campo de busca).
   function aplicarFiltros(lista, f, somenteMinhas, nome){
     let out = lista;
     if(somenteMinhas) out = out.filter(p=>p.responsavel===nome);
-    if(f.tipo) out = out.filter(p=>p.tipo===f.tipo);
-    if(f.categoria) out = out.filter(p=>p.categoria===f.categoria);
     if(f.status) out = out.filter(p=>p.status===f.status);
+    if(f.impacto) out = out.filter(p=>p.impacto===f.impacto);
     if(f.obraId) out = out.filter(p=>p.obraId===f.obraId);
     if(f.responsavel) out = out.filter(p=>p.responsavel===f.responsavel);
-    if(f.prioridade) out = out.filter(p=>p.prioridade===f.prioridade);
-    if(f.bloqueiaFechamento) out = out.filter(p=>M.bloqueiaFechamento(p.impacto));
     if(f.busca && f.busca.trim()){
       const q = f.busca.trim().toLowerCase();
       out = out.filter(p=> (p.descricao||"").toLowerCase().includes(q) || (p.obraNome||"").toLowerCase().includes(q)
@@ -67,17 +68,31 @@
     return out;
   }
 
-  function filtrosHtml(f){
-    const obras = M.Store.state.obras;
+  function filtrosHtml(f, somenteMinhas, podeAlternarTodas){
+    // FASE 4 (AJUSTE): o seletor de Obra também não pode oferecer obra fora
+    // do escopo de quem está vendo a tela — mesmo não sendo em si um
+    // vazamento de dado (a lista de pendências já vem filtrada pelo Store),
+    // oferecer uma obra que a pessoa não tem acesso é ruído/confuso.
+    const obras = M.Store.pode("verTodasObras") ? M.Store.state.obras
+      : M.Store.state.obras.filter(o=> M.Store.obraIdsDoColaborador(M.Store.state.usuarioAtual).has(o.id));
     return `
       <div class="card pad" style="margin-bottom:14px;">
         <div class="flex-gap" style="flex-wrap:wrap;margin-bottom:8px;">
           <input type="text" value="${UI.esc(f.busca||"")}" placeholder="Buscar obra, móvel, descrição… (Enter para buscar)" style="flex:1;min-width:200px;padding:8px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-strong);background:var(--surface);color:var(--ink);font-size:13px;" onchange="Act.setPendFiltro('busca', this.value)">
         </div>
-        <div class="flex-gap" style="flex-wrap:wrap;">
-          <select onchange="Act.setPendFiltro('tipo',this.value)">
-            <option value="">Todos os tipos</option>
-            ${M.TIPOS_PENDENCIA.map(t=>`<option ${f.tipo===t?'selected':''}>${t}</option>`).join("")}
+        <div class="flex-gap" style="flex-wrap:wrap;align-items:center;">
+          ${podeAlternarTodas ? `
+          <div class="segmented">
+            <button class="${somenteMinhas?'active':''}" onclick="Act.setPendSomenteMinhas(true)">Minhas</button>
+            <button class="${!somenteMinhas?'active':''}" onclick="Act.setPendSomenteMinhas(false)">Todas</button>
+          </div>` : `<span class="chip neutral">${UI.icon('lock',11)} Minhas pendências</span>`}
+          <select onchange="Act.setPendFiltro('status',this.value)">
+            <option value="">Todos os status</option>
+            ${M.STATUS_PENDENCIA_DEF.map(s=>`<option value="${s.key}" ${f.status===s.key?'selected':''}>${s.label}</option>`).join("")}
+          </select>
+          <select onchange="Act.setPendFiltro('impacto',this.value)">
+            <option value="">Todo impacto</option>
+            ${M.IMPACTOS_PENDENCIA_DEF.map(i=>`<option value="${i.key}" ${f.impacto===i.key?'selected':''}>${UI.esc(i.label)}</option>`).join("")}
           </select>
           <select onchange="Act.setPendFiltro('obraId',this.value)">
             <option value="">Todas as obras</option>
@@ -87,21 +102,21 @@
             <option value="">Todos os responsáveis</option>
             ${M.COLABORADORES.map(c=>`<option ${f.responsavel===c.nome?'selected':''}>${UI.esc(c.nome)}</option>`).join("")}
           </select>
-          <select onchange="Act.setPendFiltro('prioridade',this.value)">
-            <option value="">Toda prioridade</option>
-            ${M.PRIORIDADES_PENDENCIA_DEF.map(p=>`<option value="${p.key}" ${f.prioridade===p.key?'selected':''}>${p.label}</option>`).join("")}
-          </select>
-          <select onchange="Act.setPendFiltro('status',this.value)">
-            <option value="">Todos os status</option>
-            ${M.STATUS_PENDENCIA_DEF.map(s=>`<option value="${s.key}" ${f.status===s.key?'selected':''}>${s.label}</option>`).join("")}
-          </select>
-          <label class="chip ${f.bloqueiaFechamento?'critical':'neutral'}" style="cursor:pointer;" onclick="Act.setPendFiltro('bloqueiaFechamento', ${!f.bloqueiaFechamento})">
-            ${UI.icon('lock',11)} Bloqueia fechamento
-          </label>
-          ${(f.tipo||f.obraId||f.responsavel||f.prioridade||f.status||f.bloqueiaFechamento||f.busca)? `<button class="btn ghost sm" onclick="Act.limparPendFiltros()">Limpar filtros</button>`:""}
+          ${(f.obraId||f.responsavel||f.status||f.impacto||f.busca)? `<button class="btn ghost sm" onclick="Act.limparPendFiltros()">Limpar filtros</button>`:""}
         </div>
       </div>
     `;
+  }
+
+  // FASE 4 (§1 handoff): "histórico/auditoria" — lê do histórico central já
+  // existente (Store.log), filtrado por pendenciaId (Store.historicoDaPendencia).
+  // Não duplica armazenamento — mesma fonte que a aba Histórico da Obra usa.
+  function historicoPendenciaHtml(pendId){
+    const h = M.Store.historicoDaPendencia(pendId);
+    if(!h.length) return `<p class="small muted">Sem eventos registrados.</p>`;
+    return `<ul style="margin:4px 0 0 18px;font-size:12px;line-height:1.9;color:var(--ink-soft);">
+      ${h.slice(0,8).map(e=>`<li>${C.fmtDate(e.data.slice(0,10))} — <b>${UI.esc(e.usuario||"—")}</b>: ${UI.esc(e.descricao)}</li>`).join("")}
+    </ul>`;
   }
 
   // ---------- linha da Lista ----------
@@ -135,10 +150,25 @@
           ${proximaAcao? `<div class="next-action"><div class="lbl">Próxima ação</div><div class="txt">${UI.esc(proximaAcao)} — ${UI.person(p.responsavel)} ${p.prazo?" · prazo "+C.fmtDate(p.prazo):""}</div></div>`:""}
           ${expandido ? `
             ${fluxoStepsHtml(p,false)}
-            <div class="small" style="font-weight:700;color:var(--ink-soft);margin-top:10px;">Fotos de abertura</div>
+            ${M.Store.pode("pendencia.atribuir") ? `
+            <div class="field-row" style="margin-top:10px;align-items:flex-end;" onclick="event.stopPropagation()">
+              <div class="field" style="flex:1;"><label>Responsável</label>
+                <select id="pendResp_${p.id}">${M.COLABORADORES.map(c=>`<option ${c.nome===p.responsavel?'selected':''}>${UI.esc(c.nome)}</option>`).join("")}</select>
+              </div>
+              <button class="btn sm" onclick="Act.atribuirPendencia('${p.id}', document.getElementById('pendResp_${p.id}').value)">Atribuir</button>
+            </div>` : ""}
+            <div class="flex-between" style="margin-top:10px;" onclick="event.stopPropagation()">
+              <div class="small" style="font-weight:700;color:var(--ink-soft);">Fotos de abertura</div>
+              ${M.Store.pode("pendencia.editar")? `<button class="btn sm ghost" onclick="Act.adicionarFotosPendencia('${p.id}','abertura')">${UI.icon('camera',11)} + fotos</button>`:""}
+            </div>
             ${UI.fotosGaleriaHtml(p.fotosAbertura&&p.fotosAbertura.length?p.fotosAbertura:p.fotos) || `<p class="small muted">Nenhuma foto de abertura.</p>`}
-            <div class="small" style="font-weight:700;color:var(--ink-soft);margin-top:10px;">Fotos de resolução</div>
+            <div class="flex-between" style="margin-top:10px;" onclick="event.stopPropagation()">
+              <div class="small" style="font-weight:700;color:var(--ink-soft);">Fotos de resolução</div>
+              ${M.Store.pode("pendencia.editar")? `<button class="btn sm ghost" onclick="Act.adicionarFotosPendencia('${p.id}','resolucao')">${UI.icon('camera',11)} + fotos</button>`:""}
+            </div>
             ${UI.fotosGaleriaHtml(p.fotosResolucao) || `<p class="small muted">Nenhuma foto de resolução${p.status!=='RESOLVIDA'?' — serão exigidas ao marcar como resolvida':''}.</p>`}
+            <div class="small" style="font-weight:700;color:var(--ink-soft);margin-top:10px;">Histórico</div>
+            ${historicoPendenciaHtml(p.id)}
             <div class="flex-gap" style="margin-top:12px;flex-wrap:wrap;" onclick="event.stopPropagation()">
               ${p.status!=="RESOLVIDA"? `<button class="btn sm primary" onclick="Act.avancarFluxo('${p.id}')">${UI.icon('chevron-right',12)} Continuar fluxo</button>`:""}
               ${p.status!=="RESOLVIDA"? `<button class="btn sm" onclick="Act.setPendenciaStatus('${p.id}','RESOLVIDA')">Marcar resolvida</button>`:""}
@@ -185,8 +215,22 @@
     const view = M.UIState.pendView || "lista";
     const nome = M.Store.state.usuarioAtual;
     const colab = M.colabByNome(nome);
-    const somenteMinhas = colab && (colab.perfil==="OPERADOR"||colab.perfil==="MONTADOR");
-    const filtradas = ordenarPendencias(aplicarFiltros(M.Store.state.pendencias, f, somenteMinhas, nome));
+    const perfilKey = colab ? colab.perfil : null;
+    // FASE 4 (AJUSTE — escopo real de "Minhas/Todas"): a base já vem
+    // pré-filtrada pelo Store (M.Store.pendenciasVisiveis()), não mais de
+    // state.pendencias cru — quem não tem verTodasObras só recebe pendência
+    // das próprias obras (obraIdsDoColaborador), e Produção (OPERADOR) só
+    // recebe a própria (responsavel===nome), sempre, não importa o que a
+    // tela mande. O toggle abaixo é só sobre ESSA base já seguraf; nunca
+    // amplia o que o Store decidiu devolver (a base já vem segura).
+    const base = M.Store.pendenciasVisiveis();
+    // Produção: "somente Minhas" é regra, não preferência — nem exibe o
+    // botão "Todas" (nem adiantaria: a base já veio só com as dela).
+    const podeAlternarTodas = perfilKey !== "OPERADOR";
+    const padraoMinhas = perfilKey==="OPERADOR" || perfilKey==="MONTADOR";
+    const somenteMinhas = !podeAlternarTodas ? true
+      : (M.UIState.pendSomenteMinhas===null ? !!padraoMinhas : M.UIState.pendSomenteMinhas);
+    const filtradas = ordenarPendencias(aplicarFiltros(base, f, somenteMinhas, nome));
     const bloqueiam = filtradas.filter(p=>p.status!=="RESOLVIDA" && M.bloqueiaFechamento(p.impacto)).length;
     const abertas = filtradas.filter(p=>p.status!=="RESOLVIDA").length;
 
@@ -199,31 +243,64 @@
           <button class="${view==='kanban'?'active':''}" onclick="Act.setPendView('kanban')">Kanban</button>
         </div>
       </div>
-      ${filtrosHtml(f)}
+      ${filtrosHtml(f, somenteMinhas, podeAlternarTodas)}
       ${view==='kanban' ? kanbanHtml(filtradas) : (filtradas.length? filtradas.map(linhaLista).join("") : `<p class="small muted">Nenhuma pendência encontrada com esse filtro.</p>`)}
     `;
-    return {title: somenteMinhas?"Minhas Pendências":"Pendências", crumb:"Tipo + impacto — bloqueia fechamento é sempre derivado, nunca campo manual", html,
+    return {title: somenteMinhas?"Minhas Pendências":"Pendências", crumb:"Prioridade explicável (impacto · antiguidade · prazo da obra) — bloqueia fechamento é sempre derivado, nunca campo manual", html,
       actionsHtml:`<button class="btn primary" onclick="Act.openPendenciaForm(null,null,null)">${UI.icon('plus',14)} Nova pendência</button>`};
   };
 
+  // FASE 4 (§3 handoff): "abrir Pendência de dentro de Obra/Ambiente/Móvel/
+  // Montagem/Assistência deve herdar contexto automaticamente, evitando
+  // repetir obra/ambiente/móvel." Quando o contexto já é conhecido (obraId/
+  // ambienteId/movelId vindos de quem chamou), essa informação vira um
+  // cabeçalho fixo em vez de select — nada pra re-escolher. Sem contexto
+  // (ex.: "Nova pendência" solta em Hoje/Pendências), o form continua
+  // pedindo Obra + Móvel do jeito que já funcionava.
   M.Pages.pendenciaFormHtml = function(obraId, ambienteId, movelId){
     const obras = M.Store.state.obras;
+    // móvel é o contexto mais específico — se veio, ele já resolve obra+ambiente.
+    let fMovel = movelId ? M.Store.findMovel(movelId) : null;
+    if(fMovel){ obraId = fMovel.o.id; ambienteId = fMovel.a.id; }
+    let fAmbiente = (!fMovel && ambienteId) ? M.Store.findAmbiente(ambienteId) : null;
+    if(fAmbiente){ obraId = fAmbiente.o.id; }
+    const obraCtx = obraId ? M.Store.getObra(obraId) : null;
+
+    const contextoHtml = obraCtx ? `
+      <div class="help-banner" style="margin-bottom:12px;">
+        ${UI.icon('building',13)} <b>${UI.esc(obraCtx.numeroOS)} — ${UI.esc(obraCtx.cliente)}</b>${fAmbiente? ` · ${UI.esc(fAmbiente.a.nome)}` : ""}${fMovel? ` · ${UI.esc(fMovel.a.nome)} — ${UI.esc(fMovel.m.nome)}` : ""}
+      </div>` : "";
+
+    // móvel: escondido quando já veio fixado pelo contexto; filtrado ao
+    // ambiente quando o ambiente é conhecido; senão, filtrado só pela obra
+    // (ou vazio, à espera da obra ser escolhida).
+    const moveisDisponiveis = obraId
+      ? M.Store.allMoveis().filter(x=>x.o.id===obraId && (!fAmbiente || x.a.id===ambienteId))
+      : [];
+    // com ambiente já fixado pelo contexto, trocar de móvel nunca deve mudar
+    // o ambienteId (continua sendo o mesmo ambiente) — só sincroniza quando
+    // o ambiente ainda não é conhecido de antemão.
+    const movelSelectHtml = fMovel ? `<input type="hidden" name="movelId" value="${fMovel.m.id}">` : `
+      <div class="field"><label>Móvel afetado (opcional)</label>
+        <select name="movelId" id="pendMovel" ${fAmbiente? "" : `onchange="M.Pages.__syncPendAmbiente()"`}>
+          ${moveisDisponiveis.map(({a,m})=>`<option value="${m.id}" data-amb="${a.id}" ${m.id===movelId?'selected':''}>${UI.esc(a.nome)} — ${UI.esc(m.nome)}${m.ressalvaAberta?' — ⚠️ com ressalva':''}</option>`).join("")}
+          <option value="" selected>— pendência avulsa (sem móvel específico) —</option>
+        </select>
+      </div>`;
+
     return `
       <div class="modal-head"><h2>Nova pendência</h2><button class="modal-close" data-close>✕</button></div>
       <form id="formPendencia">
         <div class="modal-body">
+          ${contextoHtml}
+          ${obraCtx ? `<input type="hidden" name="obraId" value="${obraCtx.id}">` : `
           <div class="field"><label>Obra</label>
             <select name="obraId" id="pendObra" required onchange="M.Pages.__refreshPendMoveis(this.value)">
               <option value="">Selecione...</option>
-              ${obras.map(o=>`<option value="${o.id}" ${o.id===obraId?'selected':''}>${o.numeroOS} — ${o.cliente}</option>`).join("")}
+              ${obras.map(o=>`<option value="${o.id}">${o.numeroOS} — ${o.cliente}</option>`).join("")}
             </select>
-          </div>
-          <div class="field"><label>Móvel afetado (opcional)</label>
-            <select name="movelId" id="pendMovel">
-              ${M.Store.allMoveis().filter(x=>x.o.id===obraId).map(({a,m})=>`<option value="${m.id}" data-amb="${a.id}" ${m.id===movelId?'selected':''}>${a.nome} — ${m.nome}${m.ressalvaAberta?' — ⚠️ com ressalva':''}</option>`).join("")}
-              <option value="" ${!movelId?'selected':''}>— pendência avulsa (sem móvel específico) —</option>
-            </select>
-          </div>
+          </div>`}
+          ${movelSelectHtml}
           <input type="hidden" name="ambienteId" id="pendAmbienteId" value="${ambienteId||''}">
           <div class="field-row">
             <div class="field"><label>Tipo</label>
@@ -259,8 +336,23 @@
   };
   M.Pages.__refreshPendMoveis = function(obraId){
     const sel = document.getElementById("pendMovel");
+    if(!sel) return;
     sel.innerHTML = M.Store.allMoveis().filter(x=>x.o.id===obraId).map(({a,m})=>`<option value="${m.id}" data-amb="${a.id}">${a.nome} — ${m.nome}${m.ressalvaAberta?' — ⚠️ com ressalva':''}</option>`).join("")
       + `<option value="" selected>— pendência avulsa (sem móvel específico) —</option>`;
+    M.Pages.__syncPendAmbiente();
+  };
+  // CORREÇÃO (Fase 4, §3): o campo oculto ambienteId nunca era sincronizado
+  // quando o móvel escolhido mudava — uma pendência criada apontando pra um
+  // móvel de um ambiente podia ficar sem o ambienteId correspondente (e
+  // portanto não contar em bloqueiosAmbiente). Mantém herança de contexto
+  // consistente mesmo quando o usuário troca o móvel manualmente no form.
+  M.Pages.__syncPendAmbiente = function(){
+    const sel = document.getElementById("pendMovel");
+    const hid = document.getElementById("pendAmbienteId");
+    if(!sel || !hid) return;
+    const opt = sel.options[sel.selectedIndex];
+    hid.value = (opt && opt.value) ? (opt.getAttribute("data-amb")||"") : hid.value;
+    if(opt && !opt.value) hid.value = ""; // "avulsa" selecionada explicitamente
   };
 
   // ---------- resolver pendência (fotos de resolução — handoff) ----------
