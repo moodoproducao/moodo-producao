@@ -199,12 +199,16 @@
 
   function situacaoObra(o){
     const r = riscoObra(o); // reaproveita o cálculo de risco já existente — não duplica
-    // FASE 3: "N/A" (fase sem impactaRisco — Aguardando Início, Concluída,
-    // ou dado legado sem faseMacro) usa o próprio motivo retornado por
-    // riscoObra como label, em vez de um rótulo genérico — já explica o
-    // "porquê" sem precisar de campo novo.
+    // FASE 3 (ajuste pós-publicação): "N/A" (fase sem impactaRisco —
+    // Aguardando Início, Concluída, ou dado legado sem faseMacro) usa um
+    // rótulo curto e genérico — NÃO o motivo detalhado de riscoObra. Isso é
+    // pedido explícito: motivos[] fica disponível em `dados`/`motivos` pra
+    // quem quiser consumir, mas a UI de hoje (chip de risco) não deve expor
+    // texto de motivo nenhuma — nem pra N/A, nem pra ALTO/MEDIO/BAIXO. Isso
+    // fica pra quando a UI de Obras V2 tratar isso de propósito.
     const tonePorNivel = {ALTO:"critical", MEDIO:"warning", BAIXO:"good", "N/A":"neutral"};
-    const labelPorNivel = {ALTO:"Risco alto", MEDIO:"Risco médio", BAIXO:"Risco baixo", "N/A": (r.motivos&&r.motivos[0]) || "Sem risco avaliado"};
+    const labelNA = (r.dados && r.dados.legado) ? "Sem fase definida (dado legado)" : "Sem avaliação de risco";
+    const labelPorNivel = {ALTO:"Risco alto", MEDIO:"Risco médio", BAIXO:"Risco baixo", "N/A": labelNA};
     return Object.assign({}, r, {tone: tonePorNivel[r.nivel]||"neutral", label: labelPorNivel[r.nivel]||r.nivel});
   }
 
