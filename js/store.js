@@ -337,12 +337,42 @@
     else if(res && res.conflito) avisarConflito();
     else avisarFalhaNuvem();
   }
+  // HOTFIX 3.1 (correção de ordem de inicialização): antes, persistSupabase()
+  // só checava M.Supa.habilitado (true desde o boot, só indica "configurado")
+  // e chamava M.Supa.salvarEstado() direto depois de 400ms — se o cliente
+  // Supabase (M.Supa.client) ainda não tivesse terminado de inicializar
+  // (M.Supa.ready ainda pendente — depende de baixar o SDK via CDN, tempo
+  // variável), a gravação explodia com "Cannot read properties of null
+  // (reading 'from')". Agora espera M.Supa.ready antes de gravar de verdade.
+  //
+  // Coalescimento (fila de tamanho 1, sem lista ilimitada): supaSaveGeracao é
+  // um contador que sobe a cada novo pedido de gravação. Cada chamada guarda
+  // "de qual geração" ela é; quando o cliente finalmente fica pronto, só
+  // grava se ainda for a geração MAIS RECENTE — se um emit() mais novo já
+  // aconteceu enquanto esta esperava, esta desiste em silêncio (o estado dela
+  // já está superado) e é a mais nova quem grava o estado atual de verdade.
+  // Isso garante que nunca um snapshot antigo sobrescreva um mais novo,
+  // mesmo com vários emit() em sequência durante a espera do Supabase ficar
+  // pronto — sem acumular fila nenhuma, só "qual foi o último pedido".
+  let supaSaveGeracao = 0;
   function persistSupabase(){
     if(!(M.Supa && M.Supa.habilitado)) return;
     // debounce curto: ações em sequência rápida (ex.: digitando) viram 1 gravação só
     clearTimeout(supaSaveTimer);
+    const minhaGeracao = ++supaSaveGeracao;
     supaSaveTimer = setTimeout(()=>{
-      M.Supa.salvarEstado(state, ultimoAtualizadoEmConhecido).then(processarResultadoSalvar);
+      M.Supa.ready.then(pronto=>{
+        if(!pronto) return; // Supabase indisponível/config inválida: localStorage já é a cópia local segura, não tenta gravar sem cliente
+        if(minhaGeracao !== supaSaveGeracao) return; // já existe um pedido de gravação mais novo — este ficou obsoleto, quem vai gravar é o mais recente
+        M.Supa.salvarEstado(state, ultimoAtualizadoEmConhecido).then(processarResultadoSalvar);
+      }, erro=>{
+        // M.Supa.ready, hoje, já resolve false em vez de rejeitar (ver
+        // supabase-client.js) — mas se algum dia rejeitar mesmo assim, isto
+        // evita um unhandled rejection e uma tentativa de gravar com cliente
+        // inexistente; não é a falha real de rede pós-cliente-pronto (essa
+        // continua tratada normalmente por avisarFalhaNuvem/avisarConflito).
+        console.error("[Moodo] Supa.ready rejeitou inesperadamente:", erro);
+      });
     }, 400);
   }
   function emit(){ persist(); persistSupabase(); listeners.forEach(fn=>fn()); }
@@ -357,6 +387,17 @@
     // estado vindo da nuvem pode ter sido salvo por uma versão anterior do
     // app (antes da Fase 2) — mesma migração leve do boot local.
     migrarPendenciasParaModeloHandoff();
+    // HOTFIX 3.1: se o estado que acabou de chegar da nuvem ainda tiver
+    // checklist legado (por exemplo: a gravação da migração de outro
+    // carregamento falhou por causa da causa raiz nº 1, então o que está na
+    // nuvem ainda é a versão antiga), reaplica a mesma migração do boot
+    // aqui. migrarChecklistLegado() já é idempotente (só mexe em quem ainda
+    // não migrou) e só chama emit() se realmente mudou algo — se o remoto já
+    // vier migrado, isto não faz nada e não grava nada de novo. É isto que
+    // fecha o loop: com a causa raiz nº 1 corrigida acima, quando ela migrar
+    // e emitir aqui, a gravação de volta pro Supabase agora tem chance real
+    // de vingar, em vez de o checklist antigo "renascer" a cada sincronização.
+    migrarChecklistLegado();
     persist();
     listeners.forEach(fn=>fn());
   }

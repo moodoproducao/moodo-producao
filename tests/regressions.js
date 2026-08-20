@@ -876,3 +876,255 @@ function pendenciaFixture(obraId, over){
 console.log("Fase 3 (faseMacro + risco): OK");
 
 console.log("Regressoes criticas: OK");
+
+// ==================================================================
+// HOTFIX 3.1 — persistSupabase() não pode chamar Supa.salvarEstado() com
+// cliente nulo; precisa esperar M.Supa.ready; precisa coalescer gravações
+// concorrentes (fila de tamanho 1 — só a mais recente sobrevive, nunca uma
+// antiga sobrescrevendo uma nova); aplicarEstadoRemoto() precisa reaplicar
+// migrarChecklistLegado() pra fechar o loop descrito em
+// HOTFIX-3.1-CAUSA-E-ABORDAGEM.md (sem isso, checklist legado "renascia" a
+// cada sincronização e nunca convergia). Estes testes envolvem o debounce
+// real de 400ms de persistSupabase() — por isso rodam numa IIFE assíncrona,
+// depois de toda a suíte síncrona acima (que não muda em nada).
+// ==================================================================
+function esperar(ms){ return new Promise(resolve=> setTimeout(resolve, ms)); }
+
+// contexto "ajudante", só pra extrair um state de exemplo com o formato
+// completo e válido (obras/ambientes/moveis/permissoes/etapas/fasesMacro/
+// fluxosPadrao/etc.) direto da semente real — sem M.Supa nenhum, então
+// sincronizarComSupabase() nem roda (guard `M.Supa && M.Supa.habilitado`
+// já existente, intocado). Usado só pra montar o "remoto" do teste de
+// aplicarEstadoRemoto() abaixo.
+function estadoDeExemplo(){
+  const appAjudante = contextoBase();
+  executar(appAjudante, "js/data.js");
+  appAjudante.M.UI = {}; appAjudante.M.Pages = {};
+  executar(appAjudante, "js/store.js");
+  return JSON.parse(JSON.stringify(appAjudante.M.Store.state));
+}
+
+// contexto de teste com M.Supa mockado e controlável: `ready` começa como
+// uma promise pendente (deferida manualmente por resolverPronto/
+// rejeitarPronto) — assim cada teste decide exatamente quando "o Supabase
+// termina de inicializar", em vez de depender de timing real de rede.
+// `semSincronizacaoNoBoot` (padrão true): boot roda com habilitado:false, só
+// pra sincronizarComSupabase() (código já existente, intocado — inclusive o
+// caminho "tabela vazia" que chama salvarEstado() direto pra semear a
+// nuvem, e o próprio ".then(ok=>...)" sem tratamento de rejeição, que hoje
+// nunca dispara na prática porque M.Supa.ready em produção sempre resolve,
+// nunca rejeita) NÃO anexe nada em M.Supa.ready — assim cada teste consegue
+// isolar só o comportamento de persistSupabase() (o que este hotfix mudou),
+// sem competir com esse outro fluxo, que é assunto separado. Só depois do
+// boot terminar, o habilitado de verdade é ligado. O teste que precisa da
+// sincronização de verdade (aplicarEstadoRemoto/migração) passa
+// `semSincronizacaoNoBoot:false` explicitamente.
+function criarContextoHotfix(overrides){
+  overrides = overrides || {};
+  const semSincronizacaoNoBoot = overrides.semSincronizacaoNoBoot !== false;
+  const app = contextoBase();
+  executar(app, "js/data.js");
+  app.M.UI = {}; app.M.Pages = {};
+
+  const chamadasSalvar = [];
+  const chamadasClienteNulo = [];
+  let mudancaCb = null;
+  let resolverInterno, rejeitarInterno;
+  const prontoDeferido = new Promise((res, rej)=>{ resolverInterno = res; rejeitarInterno = rej; });
+
+  const desejado = Object.assign({
+    habilitado: true,
+    client: null,
+    ready: prontoDeferido,
+    // "tabela vazia" (primeiro acesso) por padrão — comportamento já
+    // existente, sem relação com o hotfix; o teste de aplicarEstadoRemoto
+    // usa assinarMudancas (ver obterMudancaCb) pra simular sincronização
+    // de verdade de forma controlada.
+    carregarEstado: async ()=> null,
+    salvarEstado: async (estado, atualizadoEmConhecido)=>{
+      if(!app.M.Supa.client){
+        // isto É o TypeError original ("Cannot read properties of null
+        // (reading 'from')") — aqui só registramos em vez de lançar, pra o
+        // teste poder AFIRMAR que isto nunca acontece, sem derrubar o
+        // próprio test runner com uma unhandled rejection por baixo.
+        chamadasClienteNulo.push({dados: JSON.parse(JSON.stringify(estado))});
+        return {ok:false};
+      }
+      chamadasSalvar.push({dados: JSON.parse(JSON.stringify(estado)), atualizadoEmConhecido});
+      return {ok:true, atualizadoEm:"2026-01-01T00:00:00.000Z"};
+    },
+    assinarMudancas: (cb)=>{ mudancaCb = cb; return ()=>{ mudancaCb = null; }; },
+    listarColaboradores: async ()=> [],
+    assinarMudancasColaboradores: ()=> ()=>{},
+  }, overrides);
+  delete desejado.semSincronizacaoNoBoot;
+
+  app.M.Supa = semSincronizacaoNoBoot ? Object.assign({}, desejado, {habilitado:false}) : desejado;
+  executar(app, "js/store.js");
+  if(semSincronizacaoNoBoot) app.M.Supa.habilitado = desejado.habilitado;
+
+  return {
+    app, chamadasSalvar, chamadasClienteNulo,
+    // comCliente=false simula Supabase indisponível (ready resolve false,
+    // sem cliente); por padrão resolve true e cria um cliente fake.
+    resolverPronto(comCliente){
+      if(comCliente!==false) app.M.Supa.client = app.M.Supa.client || {};
+      resolverInterno(comCliente!==false);
+    },
+    rejeitarPronto(erro){ rejeitarInterno(erro); },
+    obterMudancaCb(){ return mudancaCb; },
+  };
+}
+
+async function rodarTestesHotfix(){
+  // ---- 1, 2, 3, 4: boot com Supabase ainda não pronto não lança; emit()
+  // antes de pronto não lança; a mudança local não se perde (state em
+  // memória + localStorage); assim que Supa.ready resolve, a gravação
+  // pendente é feita (com o estado certo) ----
+  {
+    const ctx = criarContextoHotfix();
+    // o próprio boot (migrarChecklistLegado + sincronizarComSupabase) já
+    // rodou dentro de criarContextoHotfix, com M.Supa.ready ainda pendente
+    // — isto sozinho já é o teste 1: carregar não lançou nada nem chamou
+    // salvarEstado com cliente nulo.
+    assert.equal(ctx.chamadasClienteNulo.length, 0, "boot com Supabase ainda não pronto não pode ter chamado salvarEstado com cliente nulo");
+
+    assert.doesNotThrow(()=>{
+      ctx.app.M.Store.setPermissao("OPERADOR", "obra.criar", true);
+    }, "emit() disparado antes do Supabase ficar pronto não pode lançar");
+
+    // teste 3: a mudança local não pode se perder — continua no state em
+    // memória e já foi gravada no localStorage (persist() é síncrono, roda
+    // sempre, independente do Supabase).
+    assert.equal(ctx.app.M.Store.state.permissoes.OPERADOR["obra.criar"], true, "mudança local não pode se perder enquanto espera o Supabase ficar pronto");
+    const localSalvo = JSON.parse(ctx.app.localStorage.getItem("moodo_producao_state_v1"));
+    assert.equal(localSalvo.permissoes.OPERADOR["obra.criar"], true, "localStorage precisa ter a mudança mesmo com o Supabase ainda não pronto");
+
+    // enquanto ready não resolve, mesmo passado o debounce de 400ms, NENHUMA
+    // gravação na nuvem pode ter acontecido ainda (a gravação real fica
+    // esperando M.Supa.ready, não faz um snapshot fantasma antes disso).
+    await esperar(450);
+    assert.equal(ctx.chamadasSalvar.length, 0, "não pode gravar na nuvem enquanto M.Supa.ready ainda não resolveu");
+    assert.equal(ctx.chamadasClienteNulo.length, 0);
+
+    // teste 4: assim que Supa.ready resolve, a gravação pendente acontece,
+    // com o estado mais recente.
+    ctx.resolverPronto(true);
+    await esperar(50);
+    assert.equal(ctx.chamadasSalvar.length, 1, "a gravação pendente precisa acontecer assim que o Supabase fica pronto");
+    assert.equal(ctx.chamadasSalvar[0].dados.permissoes.OPERADOR["obra.criar"], true);
+    assert.equal(ctx.chamadasClienteNulo.length, 0, "salvarEstado nunca pode ser chamado com cliente nulo");
+  }
+
+  // ---- 5: dois (ou mais) emit() enquanto Supa.ready está pendente — quando
+  // ready resolve, só o estado MAIS RECENTE é persistido; nenhuma gravação
+  // antiga sobrescreve uma mais nova (coalescimento por geração, fila de
+  // tamanho 1) ----
+  {
+    const ctx = criarContextoHotfix();
+    ctx.app.M.Store.setPermissao("OPERADOR", "obra.criar", true); // 1a intenção de gravação (geração 1)
+    await esperar(450); // deixa o timer da geração 1 disparar e ficar esperando M.Supa.ready (ainda pendente)
+    ctx.app.M.Store.setPermissao("OPERADOR", "obra.criar", false); // 2a intenção, mais nova, chega ANTES do Supabase ficar pronto (geração 2)
+    await esperar(450); // deixa o timer da geração 2 também disparar e ficar esperando M.Supa.ready
+    assert.equal(ctx.chamadasSalvar.length, 0, "pré-condição: nenhuma gravação deveria ter acontecido ainda, Supabase continua não-pronto");
+
+    ctx.resolverPronto(true); // agora sim, os dois ".then" pendentes disparam
+    await esperar(50);
+
+    assert.equal(ctx.chamadasSalvar.length, 1, "só UMA gravação pode acontecer, mesmo com duas intenções de gravação pendentes (fila de tamanho 1)");
+    assert.equal(ctx.chamadasSalvar[0].dados.permissoes.OPERADOR["obra.criar"], false, "a gravação que aconteceu precisa ser a do estado MAIS RECENTE (geração 2), não a antiga (geração 1)");
+    assert.equal(ctx.chamadasClienteNulo.length, 0);
+  }
+
+  // ---- 6: M.Supa.ready resolvendo false (Supabase indisponível) nunca
+  // chama salvarEstado ----
+  {
+    const ctx = criarContextoHotfix();
+    ctx.app.M.Store.setPermissao("OPERADOR", "obra.criar", true);
+    await esperar(450);
+    ctx.resolverPronto(false);
+    await esperar(50);
+    assert.equal(ctx.chamadasSalvar.length, 0, "ready=false não pode chamar salvarEstado");
+    assert.equal(ctx.chamadasClienteNulo.length, 0, "ready=false nem deveria chegar perto de tentar chamar salvarEstado com cliente nulo");
+  }
+
+  // ---- 7: M.Supa.ready rejeitando não pode gerar unhandled rejection nem
+  // travar o app ----
+  {
+    const rejeicoesNaoTratadas = [];
+    const handler = (motivo)=> rejeicoesNaoTratadas.push(motivo);
+    process.on("unhandledRejection", handler);
+    try{
+      const ctx = criarContextoHotfix();
+      ctx.app.M.Store.setPermissao("OPERADOR", "obra.criar", true);
+      await esperar(450);
+      ctx.rejeitarPronto(new Error("falha simulada de inicialização do Supabase"));
+      await esperar(100);
+      assert.equal(rejeicoesNaoTratadas.length, 0, "M.Supa.ready rejeitando não pode virar unhandled rejection");
+      assert.equal(ctx.chamadasSalvar.length, 0);
+      assert.equal(ctx.chamadasClienteNulo.length, 0);
+    } finally {
+      process.removeListener("unhandledRejection", handler);
+    }
+  }
+
+  // ---- 8: modo Supabase desabilitado continua funcionando 100% em
+  // localStorage (nada disso quebrou o fallback local que já existia) ----
+  {
+    const ctx = criarContextoHotfix({habilitado:false});
+    assert.doesNotThrow(()=>{
+      ctx.app.M.Store.setPermissao("OPERADOR", "obra.criar", true);
+    }, "com Supabase desabilitado, emit() precisa continuar funcionando só com localStorage");
+    await esperar(450);
+    assert.equal(ctx.chamadasSalvar.length, 0);
+    assert.equal(ctx.chamadasClienteNulo.length, 0);
+    const localSalvo = JSON.parse(ctx.app.localStorage.getItem("moodo_producao_state_v1"));
+    assert.equal(localSalvo.permissoes.OPERADOR["obra.criar"], true, "localStorage precisa continuar funcionando normalmente com Supabase desabilitado");
+  }
+
+  // ---- 9: migrarChecklistLegado() sem nada pra migrar não chama emit();
+  // aplicarEstadoRemoto() com checklist legado migra UMA vez e persiste; no
+  // próximo ciclo (estado já migrado voltando da nuvem) NÃO migra de novo —
+  // fecha o loop da causa raiz nº 2 (ver HOTFIX-3.1-CAUSA-E-ABORDAGEM.md) ----
+  {
+    // este teste precisa da sincronizarComSupabase() de verdade rodando no
+    // boot (é dali que vem o assinarMudancas de verdade) — só aqui abrimos
+    // mão do isolamento padrão.
+    const ctx = criarContextoHotfix({semSincronizacaoNoBoot:false});
+    ctx.resolverPronto(true);
+    await esperar(50); // deixa o boot (carregarEstado=null -> "seed" a nuvem com o state local) assentar
+    ctx.chamadasSalvar.length = 0; // baseline limpo - a gravação de "seed" do boot não é o que este teste mede
+
+    const cb = ctx.obterMudancaCb();
+    assert.ok(cb, "assinarMudancas precisa ter sido registrado no boot (sincronizarComSupabase)");
+
+    const remotoComChecklistLegado = estadoDeExemplo();
+    const movelAlvo = remotoComChecklistLegado.obras[0].ambientes[0].moveis[0];
+    movelAlvo.checklist = [{nome:"Corpo MDF (legado)", concluido:false}];
+
+    cb(remotoComChecklistLegado, "carimbo-ciclo-1"); // simula uma sincronização real trazendo dado legado da nuvem
+
+    // a migração roda SÍNCRONA dentro de aplicarEstadoRemoto -> migrarChecklistLegado()
+    const tarefaMigrada = ctx.app.M.Store.state.tarefas.find(t=>t.origemChecklist && t.titulo==="Corpo MDF (legado)");
+    assert.ok(tarefaMigrada, "checklist legado vindo da nuvem precisa virar uma Tarefa real, igual já acontecia no boot local");
+    const movelNoStateAtual = ctx.app.M.Store.findMovel(movelAlvo.id).m;
+    assert.deepEqual(Array.from(movelNoStateAtual.checklist||[]), [], "checklist legado precisa ser esvaziado depois de migrado");
+
+    await esperar(450); // deixa a gravação (emitida pela migração) sair
+    assert.equal(ctx.chamadasSalvar.length, 1, "migrarChecklistLegado() encontrando algo pra migrar precisa gerar exatamente UMA gravação na nuvem");
+    assert.equal(ctx.chamadasClienteNulo.length, 0);
+    const estadoJaMigrado = ctx.chamadasSalvar[0].dados;
+    ctx.chamadasSalvar.length = 0; // baseline limpo pro "próximo ciclo"
+
+    cb(estadoJaMigrado, "carimbo-ciclo-2"); // "próximo ciclo": a nuvem agora devolve a versão JÁ migrada
+    await esperar(450);
+    assert.equal(ctx.chamadasSalvar.length, 0, "com o estado já migrado, migrarChecklistLegado() não pode achar nada pra migrar de novo, e não pode gerar nova gravação (sem isso, é o loop infinito da causa raiz nº 2)");
+  }
+
+  console.log("Hotfix 3.1 (persistencia Supabase antes do cliente pronto): OK");
+}
+
+rodarTestesHotfix().catch(err=>{
+  console.error(err);
+  process.exitCode = 1;
+});
