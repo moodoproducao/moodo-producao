@@ -187,10 +187,37 @@ p{ margin:0; }
   .mobile-nav{
     display:flex; position:fixed; bottom:0; left:0; right:0; background:var(--brand-darker);
     z-index:30; padding:6px 4px calc(6px + env(safe-area-inset-bottom)); justify-content:space-around;
+    /* FASE 2 (Navegação V2): cada perfil tem sua própria lista de itens (2 a
+       7), não mais um número fixo pensado pro layout. Até 6 itens (testado
+       ao vivo em 375/360/320px), cabem soltos aqui, sem rolar. Quem passa de
+       6 (hoje só o Admin) não usa mais rolagem horizontal pra alcançar o
+       resto — testado em 375/360px e o último item ficava cortado na borda,
+       sem nenhuma pista visual de que dava pra rolar até ele (ajuste
+       pós-aprovação, antes do publish). Em vez disso, o 6º "item" vira um
+       botão "Mais" (ver js/main.js navHtml()) que abre o painel abaixo.
+       overflow-x:auto continua como rede de segurança pra telas ainda mais
+       estreitas que as testadas, não como o mecanismo principal. */
+    overflow-x:auto; -webkit-overflow-scrolling:touch;
   }
-  .mobile-nav .m-link{ display:flex; flex-direction:column; align-items:center; gap:2px; color:var(--on-dark-text-mute); font-size:9.5px; padding:6px 8px; border-radius:var(--radius-sm); }
+  .mobile-nav .m-link{ display:flex; flex-direction:column; align-items:center; gap:2px; color:var(--on-dark-text-mute); font-size:9.5px; padding:6px 8px; border-radius:var(--radius-sm); flex:0 0 auto; background:none; border:none; font-family:inherit; cursor:pointer; -webkit-appearance:none; appearance:none; }
   .mobile-nav .m-link.active{ color:#fff; }
   .mobile-nav .m-link .ico{ font-size:17px; }
+  .mobile-nav .m-link.m-mais{ position:relative; }
+  /* painel do botão "Mais": cartão pequeno ancorado acima da barra, só com
+     os itens que não couberam soltos (ex.: Admin: Agenda + Admin) — mesmo
+     estilo visual da barra, sem inventar um padrão novo de componente. */
+  .mobile-mais-backdrop{ position:fixed; inset:0; z-index:29; background:transparent; }
+  .mobile-mais-painel{
+    position:fixed; right:8px; bottom:calc(64px + env(safe-area-inset-bottom));
+    z-index:31; background:var(--brand-darker); border:1px solid rgba(255,255,255,0.12);
+    border-radius:var(--radius); padding:6px; display:flex; flex-direction:column; gap:2px;
+    min-width:168px; box-shadow:0 -6px 20px rgba(0,0,0,0.35);
+  }
+  .mobile-mais-item{
+    display:flex; align-items:center; gap:10px; color:var(--on-dark-text-mute);
+    font-size:13px; padding:10px 10px; border-radius:var(--radius-sm);
+  }
+  .mobile-mais-item.active{ color:#fff; background:rgba(255,255,255,0.08); }
   .content{ padding-bottom:80px; }
 
   /* CORREÇÃO (auditoria UI/UX): no cabeçalho mobile, título longo + badge de

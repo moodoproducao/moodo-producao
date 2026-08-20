@@ -58,6 +58,8 @@
     upload:          `<path d="M12 15V4M8 8l4-4 4 4"/><path d="M5 19h14"/>`,
     "map-pin":       `<path d="M12 21s7-7.5 7-12a7 7 0 0 0-14 0c0 4.5 7 12 7 12z"/><circle cx="12" cy="9" r="2.5"/>`,
     image:           `<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16l-5.5-5.5L4 21"/>`,
+    // FASE 2 (Navegação V2 — ajuste pós-aprovação): botão "Mais" da barra mobile.
+    "more-horizontal": `<circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/>`,
   };
   function icon(name, size){
     const s = size||16;

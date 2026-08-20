@@ -9,8 +9,14 @@
   // CORREÇÃO (itens 9 e 10): sem verTodasObras, só mostra as obras onde a
   // pessoa tem algo atribuído (mesma regra do Kanban); sem verValores, o
   // valor líquido fica mascarado igual no resto do app.
-  M.Pages.obras = function(){
-    const restrito = !M.Store.pode("verTodasObras");
+  //
+  // FASE 2 (Navegação V2): "Minhas Obras" (rota nova "#/minhas-obras", menu
+  // do Montador) é o MESMO M.Pages.obras() de sempre, sem tabela nova nem
+  // lógica nova — só força a visão restrita (mesmo sem verTodasObras=false)
+  // e troca o título. "Obras" (rota "#/obras", menu de Admin/PCP/Líder/
+  // Gestor) continua exatamente como era.
+  M.Pages.obras = function(forcarMinhas){
+    const restrito = forcarMinhas || !M.Store.pode("verTodasObras");
     const meuObraIds = restrito ? M.Store.obraIdsDoColaborador(M.Store.state.usuarioAtual) : null;
     const obras = restrito ? M.Store.state.obras.filter(o=>meuObraIds.has(o.id)) : M.Store.state.obras;
     const rows = obras.map(o=>{
@@ -36,7 +42,7 @@
         </table>
       </div>
     `;
-    return {title:"Obras", crumb:"Todas as obras em produção", html,
+    return {title: forcarMinhas ? "Minhas Obras" : "Obras", crumb: forcarMinhas ? "Obras onde você tem algo atribuído" : "Todas as obras em produção", html,
       actionsHtml: UI.botaoNovaObraHtml()};
   };
 })();

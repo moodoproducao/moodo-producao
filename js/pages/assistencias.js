@@ -29,7 +29,20 @@
       </div>`).join("")}</div>`;
   }
 
-  M.Pages.assistencias = function(){
+  // FASE 2 (Navegação V2): "Atendimentos" (rota nova "#/atendimentos", menu
+  // do perfil Assistência) é o MESMO M.Pages.assistencias() de sempre — só
+  // rótulo/crumb diferentes, mesma permissão (assistencia.ver), mesmos
+  // dados. Não criamos uma tela nem uma tabela nova.
+  //
+  // AVISO EXPLÍCITO (checagem pedida antes do publish da Fase 2): "#/atendimentos"
+  // é, NESTA FASE, só um alias/recorte de rótulo sobre a tela ATUAL de
+  // Assistências — não é, e não deve ser confundido com, o fluxo final de
+  // Assistência V2/mobile (tela própria, fluxo próprio, pensada do zero pra
+  // quem faz atendimento em campo pelo celular). Isso continua pra fase
+  // própria, ainda não iniciada. Quem for mexer aqui depois: não estenda
+  // este parâmetro pra "virar" a V2 — quando a V2 vier, ela troca essa
+  // função por uma nova, não acrescenta mais flags nesta.
+  M.Pages.assistencias = function(comoAtendimentos){
     const f = M.UIState.assistFiltro;
     const nome = M.Store.state.usuarioAtual;
     const colab = M.colabByNome(nome);
@@ -100,7 +113,7 @@
       </div>
       ${cards}
     `;
-    return {title: somenteMinhas?"Minhas Assistências":"Assistências", crumb:"Ajuste, regulagem, dano, garantia e pós-venda", html,
+    return {title: comoAtendimentos ? "Atendimentos" : (somenteMinhas?"Minhas Assistências":"Assistências"), crumb:"Ajuste, regulagem, dano, garantia e pós-venda", html,
       actionsHtml:`<button class="btn primary" onclick="Act.openAssistenciaForm(null)">${UI.icon('plus',14)} Nova assistência</button>`};
   };
 

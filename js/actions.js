@@ -30,6 +30,11 @@
     assistExpandido: null,
     tvWidgets: null, // preenchido a partir de M.Store.state se necessário
     fluxoDraft: null, // {tipo, passos:[]} — rascunho em edição do editor de fluxo padrão de pendência (item 12)
+    // FASE 2 (Navegação V2 — ajuste pós-aprovação, checagem de mobile
+    // pequeno): painel "Mais" da barra mobile, usado só quando o menu do
+    // perfil não cabe em 375/360px sem cortar item (hoje só o Admin, 7
+    // itens — ver comentário completo em js/main.js navHtml()).
+    mobileMaisAberto: false,
   };
 
   // ---------- upload de arquivos/fotos (Supabase Storage) ----------
@@ -60,6 +65,7 @@
     go(route){ location.hash = route; },
     rerender(){ M.render(); },
     trocarUsuario(nome){ M.Store.setUsuarioAtual(nome); UI.toast("Agora navegando como "+nome+"."); location.hash = "#/hoje"; },
+    toggleMobileMais(){ M.UIState.mobileMaisAberto = !M.UIState.mobileMaisAberto; Act.rerender(); },
 
     // ---------- equipe (grava direto na tabela colaboradores do Supabase) ----------
     openColaboradorForm(id){

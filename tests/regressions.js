@@ -219,9 +219,42 @@ function comoUsuario(nome, fn){
 // rota de render() - reimplementado aqui de proposito (sem executar
 // main.js, que precisa de DOM/addEventListener que este harness nao
 // simula), pra testar a MESMA regra de dados que o app usa de verdade.
-function itemVisivel(it){ return !it.perm || app.M.Store.pode(it.perm); }
-function menuVisivelPara(nome, menuArr){
-  return comoUsuario(nome, ()=> menuArr.flatMap(g=> g.items.filter(itemVisivel).map(it=>it.key)));
+// FASE 2: precisa aceitar tambem perm em array (semantica OR - usada pelo
+// item "admin" do menu), igual main.js's filtraPorPermissao passou a fazer.
+function itemVisivel(it){
+  if(!it.perm) return true;
+  return Array.isArray(it.perm) ? it.perm.some(p=> app.M.Store.pode(p)) : app.M.Store.pode(it.perm);
+}
+// FASE 2 (Navegacao V2): o menu deixou de ser MENU/MENU_OPERADOR (2 listas
+// fixas) e passou a ser M.Router.menuDoPerfil(perfilKey) - uma lista por
+// perfil (8 no total), a MESMA fonte usada por main.js pro desktop e pro
+// mobile (nav unica, sem duas navegacoes podendo divergir). Aqui aplicamos
+// o mesmo filtro de permissao que main.js aplica (filtraPorPermissao) pra
+// obter o menu de VERDADE que aparece pra aquele perfil. Store.pode() olha
+// sempre o perfil do usuario ATUAL (M.Store.perfilAtual()) - entao so pode
+// ser chamada de dentro de um comoUsuario(...) com alguem daquele perfil.
+// Array.from() no final e proposital: M.Router.menuDoPerfil roda dentro do
+// contexto vm isolado (realm proprio, com seu proprio Array/Array.prototype
+// distinto do Node hospedeiro) - sem isso, assert.deepEqual falha por
+// "mesma estrutura, mas nao referencia-iguais" mesmo com valores identicos
+// (arrays de realms diferentes nao sao === -reference-equal- mesmo vazios).
+function itensVisiveisDoPerfil(perfilKey){
+  return Array.from(app.M.Router.menuDoPerfil(perfilKey).filter(itemVisivel), it=> it.key);
+}
+// menu de verdade (ja filtrado) de um colaborador REAL, pelo proprio perfil dele.
+function menuVisivelPara(nome){
+  return comoUsuario(nome, ()=> itensVisiveisDoPerfil(app.M.Store.perfilAtual().key));
+}
+// pra perfis sem colaborador dedicado no seed (GESTOR/ASSISTENCIA) - reatribui
+// temporariamente o perfil de "Ana Ferreira" (mesmo padrao ja usado no resto
+// deste arquivo pra testar esses perfis), le o menu ja filtrado, desfaz.
+function menuVisivelReatribuindo(perfilKey){
+  const alvo = app.M.COLABORADORES.find(c=>c.nome==="Ana Ferreira");
+  const perfilOriginal = alvo.perfil;
+  alvo.perfil = perfilKey;
+  const itens = menuVisivelPara("Ana Ferreira");
+  alvo.perfil = perfilOriginal;
+  return itens;
 }
 // mesma semantica string-ou-array de M.Router.ROUTE_PERMS usada em
 // js/main.js render() - reimplementada aqui pelo mesmo motivo (sem DOM).
@@ -344,17 +377,14 @@ comoUsuario("Paulo Henrique", ()=>{ // GESTOR (reatribuicao temporaria, igual ao
 comoUsuario("Roberto Diniz", ()=> assert.equal(app.M.Store.podeAbrirObra(undefined), false, "sem obraId, nega por padrao (Montador nao tem verTodas)"));
 comoUsuario("Paulo Henrique", ()=> assert.equal(app.M.Store.podeAbrirObra(undefined), true, "sem obraId, verTodas ainda libera (Admin)"));
 
-// ---- perfil x menu: itens que devem ter sumido de verdade (nao so por
-// nao terem chave "perm" antes - agora tem, e a permissao default e false) ----
-const menuMontador = menuVisivelPara("Roberto Diniz", app.M.Router.MENU_OPERADOR);
-assert.ok(!menuMontador.includes("obras"), "Montador nao deveria ver 'Obras' no menu");
-assert.ok(!menuMontador.includes("assistencias"), "Montador NAO deveria mais ver 'Assistencias' no menu (corrigido nesta rodada)");
-const footerMontador = comoUsuario("Roberto Diniz", ()=> app.M.Router.FOOTER_OPERADOR.filter(itemVisivel).map(it=>it.key));
-assert.ok(!footerMontador.includes("equipe"), "Montador NAO deveria mais ver 'Equipe' no rodape (corrigido nesta rodada)");
-const menuProducao = menuVisivelPara("Willian Souza", app.M.Router.MENU_OPERADOR);
-assert.ok(!menuProducao.includes("assistencias") && !menuProducao.includes("calendario"), "Producao nao deveria ver Assistencias/Calendario no menu");
-const menuAdmin = menuVisivelPara("Paulo Henrique", app.M.Router.MENU);
-assert.ok(menuAdmin.includes("obras") && menuAdmin.includes("indicadores") && menuAdmin.includes("auditoria") && menuAdmin.includes("producao"), "Admin deveria ver tudo, incluindo Producao (item 1 novo: producao.ver)");
+// ---- perfil x menu (FASE 2 - Navegacao V2): cada perfil tem sua propria
+// lista, exata, na ordem pedida - nao so "ausencia de item legado" ----
+const menuMontador = menuVisivelPara("Roberto Diniz");
+assert.deepEqual(menuMontador, ["hoje","minhasObras","agenda","pendencias"], "Montador (Fase 2): Hoje, Minhas Obras, Agenda, Pendencias - nesta ordem, nada mais (equipe/obras/assistencias tambem sumiram do menu)");
+const menuProducao = menuVisivelPara("Willian Souza");
+assert.deepEqual(menuProducao, ["hoje","pendencias"], "Producao (Fase 2): so Hoje e Pendencias - simplificacao imediata pedida, sem Assistencias/Calendario/Agenda");
+const menuAdmin = menuVisivelPara("Paulo Henrique");
+assert.deepEqual(menuAdmin, ["hoje","obras","pendencias","montagem","assistencias","agenda","admin"], "Admin (Fase 2): as 7 areas de primeiro nivel da arquitetura V2, nesta ordem (Indicadores/Desempenho/Auditoria/Equipe/Configuracoes agora vivem dentro do hub 'Admin', nao mais como itens de topo)");
 
 // ---- item 6.4: PCP nao acessa Configuracoes/Admin por padrao ----
 comoUsuario("Beatriz Nogueira", ()=>{
@@ -416,10 +446,8 @@ comoUsuario("Paulo Henrique", ()=>{
     assert.equal(app.M.Store.pode("assistencia.ver"), true);
     assert.equal(app.M.Store.pode("agenda.ver"), true);
     assert.equal(app.M.Store.pode("pendencia.ver"), true);
-    const menuDaAssistencia = app.M.Router.MENU.flatMap(g=>g.items.filter(itemVisivel).map(it=>it.key));
-    assert.ok(!menuDaAssistencia.includes("producao"), "Assistencia nao deveria ver 'Producao' no menu (corrigido nesta rodada)");
-    assert.ok(!menuDaAssistencia.includes("obras"));
-    assert.ok(!menuDaAssistencia.includes("montagem"));
+    const menuDaAssistencia = itensVisiveisDoPerfil("ASSISTENCIA");
+    assert.deepEqual(menuDaAssistencia, ["hoje","atendimentos","agenda","pendencias"], "Assistencia (Fase 2): Hoje, Atendimentos, Agenda, Pendencias - nesta ordem, nada mais (sem Producao/Obras/Montagem)");
   });
   alvo.perfil = perfilOriginal;
 });
@@ -495,14 +523,159 @@ comoUsuario("Juliana Prado", ()=>{
   assert.equal(app.M.Store.pode("admin.indicadores"), false, "Lider nao deveria acessar Indicadores por padrao (corrigido na rodada 3)");
   assert.equal(passaNaRota("indicadores"), false, "ROTA #/indicadores deveria bloquear o Lider agora");
   assert.equal(passaNaRota("desempenho"), false, "ROTA #/desempenho (mesma chave admin.indicadores) tambem deveria bloquear o Lider");
-  const menuDoLider = app.M.Router.MENU.flatMap(g=>g.items.filter(itemVisivel).map(it=>it.key));
-  assert.ok(!menuDoLider.includes("indicadores"), "Indicadores nao deveria mais aparecer no menu do Lider");
-  assert.ok(!menuDoLider.includes("desempenho"), "Desempenho nao deveria mais aparecer no menu do Lider");
+  const menuDoLider = itensVisiveisDoPerfil("LIDERANCA");
+  assert.deepEqual(menuDoLider, ["hoje","obras","pendencias","montagem","agenda"], "Lider (Fase 2): sem Admin (perdeu admin.indicadores por padrao) - Indicadores/Desempenho nem existem mais como item de topo, viraram parte do hub Admin");
+  assert.ok(!menuDoLider.includes("admin"), "Lider NAO deveria ver o item 'Admin' (nao tem nenhuma das 4 permissoes admin.* por padrao)");
   // resto do acesso operacional do Lider continua intacto:
   assert.equal(app.M.Store.pode("liberarExcecao"), true);
   assert.equal(app.M.Store.pode("obra.editar"), true);
   assert.equal(app.M.Store.pode("pendencia.atribuir"), true);
 });
+
+// ==================================================================
+// FASE 2 (Navegacao V2) - testes obrigatorios da autorizacao de push:
+// menu por perfil (os 8), ausencia estrutural das rotas legadas no menu,
+// acesso direto as rotas legadas ainda respeitando os guards da Fase 1,
+// rotas novas gating pela permissao certa, Hoje como 1o item universal,
+// nenhuma permissao nova inventada, nenhum arquivo/rota legada apagada, e
+// confirmacao de que a matriz de permissoes em si nao mudou 1 bit.
+// ==================================================================
+
+// ---- menu por perfil: PCP, Gestor e TV (Admin/Producao/Montador/
+// Assistencia/Lider ja foram conferidos, exatos, logo acima) ----
+const menuPCP = menuVisivelPara("Beatriz Nogueira");
+assert.deepEqual(menuPCP, ["hoje","obras","pendencias","montagem","agenda"], "PCP (Fase 2): Hoje, Obras, Pendencias, Montagem, Agenda - sem Assistencias, sem Admin");
+const menuGestor = menuVisivelReatribuindo("GESTOR");
+assert.deepEqual(menuGestor, ["hoje","obras","pendencias","montagem","assistencias","agenda"], "Gestor (Fase 2): Hoje, Obras, Pendencias, Montagem, Assistencias, Agenda - sem Admin (falta admin.configuracoes das 4 exigidas)");
+assert.equal(app.M.Router.menuDoPerfil("TV").length, 0, "TV (Fase 2): sem menu operacional comum - continua superficie separada, fora desta navegacao");
+
+// ---- ausencia ESTRUTURAL das rotas legadas no menu: pra nenhum dos 8
+// perfis existe item de menu apontando pra uma rota legada ----
+const ROTAS_LEGADAS_HASH = ["#/producao","#/para-finalizar","#/meu-painel","#/tarefas","#/lotes",
+  "#/indicadores","#/desempenho","#/auditoria","#/calendario","#/chao-de-fabrica","#/equipe",
+  "#/configuracoes","#/dashboard","#/tv"];
+["ADMIN","GESTOR","PCP","LIDERANCA","OPERADOR","MONTADOR","ASSISTENCIA","TV"].forEach(perfilKey=>{
+  Array.from(app.M.Router.menuDoPerfil(perfilKey)).forEach(it=>{
+    assert.ok(!ROTAS_LEGADAS_HASH.includes(it.route), `Item "${it.key}" do menu de ${perfilKey} nao deveria apontar pra rota legada ${it.route}`);
+  });
+});
+
+// ---- rotas legadas continuam RESPONDENDO (guard da Fase 1 intacto) mesmo
+// tendo sumido do menu - digitar a URL direto nao muda o comportamento ----
+comoUsuario("Willian Souza", ()=>{ // Producao
+  assert.equal(passaNaRota("producao"), true, "Producao ainda acessa a rota legada #/producao direto por URL (producao.ver=true) - so sumiu do MENU, o guard da rota continua igual");
+  assert.equal(passaNaRota("equipe"), false, "Producao continua sem acesso a rota legada #/equipe (guard nao foi relaxado)");
+  assert.equal(passaNaRota("indicadores"), false, "Producao continua sem acesso a rota legada #/indicadores");
+});
+comoUsuario("Roberto Diniz", ()=>{ // Montador
+  assert.equal(passaNaRota("producao"), true, "Montador ainda acessa #/producao direto por URL mesmo sem estar mais no menu");
+  assert.equal(passaNaRota("assistencias"), false, "Montador continua sem acesso a rota legada #/assistencias (guard nao foi relaxado)");
+  assert.equal(passaNaRota("calendario"), true, "Montador continua acessando #/calendario (rota legada, mesma permissao agenda.ver de #/agenda)");
+});
+comoUsuario("Beatriz Nogueira", ()=>{ // PCP
+  assert.equal(passaNaRota("equipe"), false, "PCP continua sem acesso a #/equipe");
+  assert.equal(passaNaRota("configuracoes"), false, "PCP continua sem acesso a #/configuracoes");
+  assert.equal(passaNaRota("indicadores"), false, "PCP continua sem acesso a #/indicadores");
+});
+comoUsuario("Juliana Prado", ()=>{ // Lider
+  assert.equal(passaNaRota("indicadores"), false, "Lider continua sem acesso a #/indicadores");
+  assert.equal(passaNaRota("equipe"), false, "Lider continua sem acesso a #/equipe");
+});
+comoUsuario("Paulo Henrique", ()=>{ // Admin
+  ["producao","para-finalizar","tarefas","indicadores","desempenho","auditoria","calendario","lotes","chao-de-fabrica","equipe","configuracoes","meu-painel"]
+    .forEach(k=> assert.equal(passaNaRota(k), true, `Admin deveria continuar acessando a rota legada #/${k} direto por URL`));
+});
+
+// ---- rotas NOVAS da Fase 2: gate exatamente pela permissao reaproveitada
+// (nenhuma permissao nova foi criada so pra elas) ----
+comoUsuario("Roberto Diniz", ()=> assert.equal(passaNaRota("minhas-obras"), true, "Montador acessa #/minhas-obras (obra.verAtribuidas=true, ja existia desde a Fase 1)"));
+comoUsuario("Willian Souza", ()=> assert.equal(passaNaRota("minhas-obras"), false, "Producao NAO acessa #/minhas-obras (obra.verAtribuidas=false)"));
+comoUsuario("Paulo Henrique", ()=>{
+  const alvo = app.M.COLABORADORES.find(c=>c.nome==="Ana Ferreira");
+  const perfilOriginal = alvo.perfil;
+  alvo.perfil = "ASSISTENCIA";
+  comoUsuario("Ana Ferreira", ()=>{
+    assert.equal(passaNaRota("atendimentos"), true, "Assistencia acessa #/atendimentos (assistencia.ver=true)");
+    assert.equal(passaNaRota("agenda"), true, "Assistencia acessa #/agenda (agenda.ver=true)");
+    assert.equal(passaNaRota("admin"), false, "Assistencia NAO acessa #/admin (nenhuma admin.* = true)");
+  });
+  alvo.perfil = perfilOriginal;
+});
+comoUsuario("Juliana Prado", ()=> assert.equal(passaNaRota("admin"), false, "Lider NAO acessa #/admin (nenhuma das 4 admin.* = true por padrao)"));
+comoUsuario("Paulo Henrique", ()=> assert.equal(passaNaRota("admin"), true, "Admin acessa #/admin (tem as 4 permissoes admin.*)"));
+comoUsuario("Willian Souza", ()=> assert.equal(passaNaRota("agenda"), false, "Producao NAO acessa #/agenda (agenda.ver=false, mesma permissao de sempre)"));
+
+// ---- Hoje: continua sem guard de permissao (acesso universal) e e sempre
+// o 1o item de todo perfil que tem menu - destino inicial correto por
+// perfil (a troca de fato em DOMContentLoaded pra sempre cair em #/hoje
+// mora em js/main.js e roda com DOM, fora do alcance deste harness - fica
+// confirmada ao vivo no Playwright da Fase 2 (task de validacao)) ----
+assert.equal(app.M.Router.ROUTE_PERMS.hoje, undefined, "Hoje precisa continuar sem guard de permissao (acesso universal)");
+["ADMIN","GESTOR","PCP","LIDERANCA","OPERADOR","MONTADOR","ASSISTENCIA"].forEach(perfilKey=>{
+  const primeiro = app.M.Router.menuDoPerfil(perfilKey)[0];
+  assert.equal(primeiro && primeiro.key, "hoje", `Hoje precisa ser o primeiro item do menu de ${perfilKey}`);
+});
+
+// ---- nenhuma permissao NOVA foi inventada so pra Fase 2: toda "perm"
+// usada em ROUTE_PERMS/MENU_ITEMS ja existia na matriz de perfis (a chave
+// existe em M.perfilDef(...).pode - nao e um nome novo so pra "fazer o
+// menu aparecer") ----
+{
+  const chavesConhecidas = new Set(Object.keys(app.M.perfilDef("ADMIN").pode));
+  const permsUsadas = new Set();
+  Object.values(app.M.Router.ROUTE_PERMS).forEach(p=> (Array.isArray(p)?p:[p]).forEach(k=> permsUsadas.add(k)));
+  permsUsadas.forEach(k=> assert.ok(chavesConhecidas.has(k), `permissao "${k}" usada em ROUTE_PERMS precisa ja existir na matriz de perfis (nenhuma permissao nova pra Fase 2)`));
+}
+
+// ---- nenhum arquivo/logica legado foi apagado: toda pagina antiga
+// continua existindo e carregando sem erro, e toda rota antiga continua
+// mapeada de verdade pra sua funcao (contexto isolado so pra este check,
+// pra nao interferir no resto da suite) ----
+{
+  const appPaginas = contextoBase();
+  executar(appPaginas, "js/data.js");
+  executar(appPaginas, "js/pdf-import.js");
+  appPaginas.M.UI = {};
+  appPaginas.M.Pages = {};
+  executar(appPaginas, "js/store.js");
+  executar(appPaginas, "js/calc.js");
+  const arquivosDePagina = ["dashboard.js","hoje.js","producao.js","obras.js","novaObra.js","obraDetail.js",
+    "tarefas.js","pendencias.js","paraFinalizar.js","indicadores.js","desempenho.js","calendario.js",
+    "lotes.js","montagem.js","chaoDeFabrica.js","tv.js","equipe.js","configuracoes.js","meuPainel.js",
+    "assistencias.js","auditoria.js","adminHub.js"];
+  arquivosDePagina.forEach(f=> executar(appPaginas, "js/pages/"+f));
+  executar(appPaginas, "js/router.js");
+  const paginasEsperadas = ["dashboard","hoje","producao","obras","novaObra","obraDetail","tarefas",
+    "pendencias","paraFinalizar","indicadores","desempenho","calendario","lotes","montagem",
+    "chaoDeFabrica","tv","equipe","configuracoes","meuPainel","assistencias","auditoria","adminHub"];
+  paginasEsperadas.forEach(k=> assert.equal(typeof appPaginas.M.Pages[k], "function", `M.Pages.${k} precisa continuar existindo (arquivo/logica legado nao pode ter sido apagado nesta fase)`));
+  const rotasLegadasEsperadas = {producao:"producao", "para-finalizar":"paraFinalizar", tarefas:"tarefas",
+    indicadores:"indicadores", desempenho:"desempenho", auditoria:"auditoria", calendario:"calendario",
+    lotes:"lotes", montagem:"montagem", "chao-de-fabrica":"chaoDeFabrica", tv:"tv", equipe:"equipe",
+    configuracoes:"configuracoes", "meu-painel":"meuPainel", dashboard:"hoje"};
+  Object.keys(rotasLegadasEsperadas).forEach(rotaKey=> assert.equal(typeof appPaginas.M.Router.ROUTES[rotaKey], "function", `ROUTES["${rotaKey}"] precisa continuar respondendo (alias legado)`));
+}
+
+// ---- nenhuma permissao foi RELAXADA nesta fase: snapshot das chaves que a
+// navegacao V2 passou a depender, comparado com a matriz da Fase 1 (rodada
+// 3) - Fase 2 e so navegacao, zero mudanca esperada em js/data.js ----
+{
+  const snapshotEsperado = {
+    ADMIN:       {"obra.ver":true,  "montagem.ver":true,  "assistencia.ver":true,  "agenda.ver":true,  "admin.equipe":true,  "admin.configuracoes":true,  "admin.indicadores":true,  "admin.auditoria":true},
+    PCP:         {"obra.ver":true,  "montagem.ver":true,  "assistencia.ver":true,  "agenda.ver":true,  "admin.equipe":false, "admin.configuracoes":false, "admin.indicadores":false, "admin.auditoria":false},
+    LIDERANCA:   {"obra.ver":true,  "montagem.ver":true,  "assistencia.ver":true,  "agenda.ver":true,  "admin.equipe":false, "admin.configuracoes":false, "admin.indicadores":false, "admin.auditoria":false},
+    OPERADOR:    {"obra.ver":false, "montagem.ver":false, "assistencia.ver":false, "agenda.ver":false, "admin.equipe":false, "admin.configuracoes":false, "admin.indicadores":false, "admin.auditoria":false, "obra.verAtribuidas":false},
+    MONTADOR:    {"obra.ver":false, "montagem.ver":true,  "assistencia.ver":false, "agenda.ver":true,  "admin.equipe":false, "admin.configuracoes":false, "admin.indicadores":false, "admin.auditoria":false, "obra.verAtribuidas":true},
+    ASSISTENCIA: {"obra.ver":false, "montagem.ver":false, "assistencia.ver":true,  "agenda.ver":true,  "admin.equipe":false, "admin.configuracoes":false, "admin.indicadores":false, "admin.auditoria":false},
+    GESTOR:      {"obra.ver":true,  "montagem.ver":true,  "assistencia.ver":true,  "agenda.ver":true,  "admin.equipe":true,  "admin.configuracoes":false, "admin.indicadores":true,  "admin.auditoria":true},
+  };
+  Object.keys(snapshotEsperado).forEach(perfilKey=>{
+    const pode = app.M.perfilDef(perfilKey).pode;
+    Object.keys(snapshotEsperado[perfilKey]).forEach(chave=>{
+      assert.equal(pode[chave], snapshotEsperado[perfilKey][chave], `permissao "${chave}" do perfil ${perfilKey} nao pode ter mudado nesta fase (esperado ${snapshotEsperado[perfilKey][chave]})`);
+    });
+  });
+}
 
 // ------------------------------------------------------------------
 // Compatibilidade de migracao: Store.load() precisa mesclar de verdade

@@ -5,48 +5,64 @@
   "use strict";
   const M = window.M;
   const UI = M.UI;
-  const APP_VERSION = "3.6.1";
+  const APP_VERSION = "3.7.0";
 
   function usuarioAtualColab(){
     return M.colabByNome(M.Store.state.usuarioAtual) || M.COLABORADORES[9];
   }
-  function isOperador(colab){ return colab && (colab.perfil==="OPERADOR" || colab.perfil==="MONTADOR"); }
 
-  // FASE 1 (V2 — permissões por ação, camada MENU): item com "perm" só entra
-  // se M.Store.pode(perm) for verdadeiro; item sem "perm" continua sempre
-  // visível (comportamento inalterado). Aditivo sobre a troca binária
-  // MENU/MENU_OPERADOR que já existia — não substitui, só filtra em cima.
-  const filtraPorPermissao = (items)=> items.filter(it=> !it.perm || M.Store.pode(it.perm));
+  // FASE 2 (Navegação V2): a navegação inteira (desktop e mobile) vem de
+  // M.Router.menuDoPerfil(perfilKey) — uma lista de itens JÁ na ordem e no
+  // recorte certos pro perfil, definida em js/router.js (MENU_POR_PERFIL).
+  // Não existe mais menu "cheio" vs. "reduzido" no código — cada perfil tem
+  // a sua lista, ponto. O filtro de permissão continua existindo em cima
+  // (defesa em profundidade: mesmo que um item apareça na lista do perfil,
+  // só renderiza se M.Store.pode(perm) for true) — item sem "perm" é de
+  // acesso universal, igual sempre foi.
+  const filtraPorPermissao = (items)=> items.filter(it=>{
+    if(!it.perm) return true;
+    return Array.isArray(it.perm) ? it.perm.some(p=>M.Store.pode(p)) : M.Store.pode(it.perm);
+  });
+
+  // FASE 2 (ajuste pós-aprovação — checagem de mobile pequeno pedida antes do
+  // publish): validado ao vivo em 375/360/320px. Até 6 itens (ex.: Gestor)
+  // cabem soltos na barra sem precisar rolar. Com 7 (hoje só o Admin), o
+  // último item ficava cortado bem na borda da tela, sem nenhuma pista
+  // visual de que dava pra rolar até ele — "navegação desconfortável" de
+  // verdade, não só teórica, então NÃO ficou como estava. Em vez de
+  // redesenhar a barra pra todo mundo, só quem excede o limite ganha um
+  // botão "Mais" no lugar do 6º item em diante — os 5 primeiros do perfil
+  // continuam soltos, fixos, do jeito que já estavam. Ninguém perde item;
+  // ninguém que já cabia (≤6) muda de comportamento.
+  const MOBILE_LIMITE_SEM_MAIS = 6;
+  const MOBILE_ITENS_FIXOS_COM_MAIS = 5;
 
   function navHtml(activeKey, mobile, colab){
-    const op = isOperador(colab);
-    const renderItem = (it)=> mobile
-      ? `<a class="m-link ${it.key===activeKey?'active':''}" href="${it.route}">${UI.icon(it.icon,20)}${it.label}</a>`
-      : `<a class="nav-link ${it.key===activeKey?'active':''}" href="${it.route}">${UI.icon(it.icon,16)}${it.label}</a>`;
-    if(mobile){
-      const flat = op ? M.Router.MOBILE_NAV_OPERADOR : [
-        {key:"hoje",label:"Hoje",icon:"home",route:"#/hoje"},
-        {key:"producao",label:"Produção",icon:"kanban",route:"#/producao"},
-        {key:"pendencias",label:"Pendências",icon:"alert",route:"#/pendencias"},
-        {key:"tarefas",label:"Tarefas",icon:"list",route:"#/tarefas"},
-        {key:"meu-painel",label:"Eu",icon:"user",route:"#/meu-painel"}];
-      return filtraPorPermissao(flat).map(renderItem).join("");
+    const itens = filtraPorPermissao(M.Router.menuDoPerfil(colab.perfil));
+    const renderItem = (it, tam)=> `<a class="m-link ${it.key===activeKey?'active':''}" href="${it.route}">${UI.icon(it.icon,tam)}${it.label}</a>`;
+    if(!mobile){
+      const renderDesktop = (it)=> `<a class="nav-link ${it.key===activeKey?'active':''}" href="${it.route}">${UI.icon(it.icon,16)}${it.label}</a>`;
+      return `<div class="nav-group">${itens.map(renderDesktop).join("")}</div>`;
     }
-    const menu = op ? M.Router.MENU_OPERADOR : M.Router.MENU;
-    return menu.map(g=> `
-      ${g.group? `<div class="nav-label">${g.group}</div>`:""}
-      <div class="nav-group">${filtraPorPermissao(g.items).map(renderItem).join("")}</div>
-    `).join("");
-  }
-  function footerHtml(activeKey, colab){
-    const op = isOperador(colab);
-    const footer = filtraPorPermissao(op ? M.Router.FOOTER_OPERADOR : M.Router.FOOTER);
-    const links = footer.map(it=> `<a class="nav-link ${it.key===activeKey?'active':''}" href="${it.route}">${UI.icon(it.icon,16)}${it.label}</a>`).join("");
-    // regrupamento visual (Fase 6 — handoff): rótulo "Administração" sobre os
-    // mesmos links Equipe/Configurações já existentes — não muda visibilidade
-    // nem permissão (OPERADOR/MONTADOR continuam só com FOOTER_OPERADOR, sem
-    // o rótulo, igual hoje), é só o mesmo padrão .nav-label usado no menu.
-    return op ? links : `<div class="nav-label">Administração</div>${links}`;
+    if(itens.length <= MOBILE_LIMITE_SEM_MAIS){
+      return itens.map(it=> renderItem(it,20)).join("");
+    }
+    const principais = itens.slice(0, MOBILE_ITENS_FIXOS_COM_MAIS);
+    const extras = itens.slice(MOBILE_ITENS_FIXOS_COM_MAIS);
+    const maisContemAtivo = extras.some(it=> it.key===activeKey);
+    const painelAberto = !!(M.UIState && M.UIState.mobileMaisAberto);
+    return `
+      ${principais.map(it=> renderItem(it,20)).join("")}
+      <button type="button" class="m-link m-mais ${maisContemAtivo||painelAberto?'active':''}" onclick="Act.toggleMobileMais()">
+        ${UI.icon('more-horizontal',20)}Mais
+      </button>
+      ${painelAberto ? `
+        <div class="mobile-mais-painel" onclick="event.stopPropagation()">
+          ${extras.map(it=> `<a class="mobile-mais-item ${it.key===activeKey?'active':''}" href="${it.route}">${UI.icon(it.icon,18)}${it.label}</a>`).join("")}
+        </div>
+        <div class="mobile-mais-backdrop" onclick="Act.toggleMobileMais()"></div>
+      ` : ""}
+    `;
   }
 
   function perfilSwitcherHtml(colab){
@@ -79,7 +95,6 @@
           <div style="flex:1; overflow-y:auto;">${navHtml(activeKey,false,colab)}</div>
           <div class="sidebar-footer">
             ${perfilSwitcherHtml(colab)}
-            ${footerHtml(activeKey,colab)}
           </div>
         </aside>
         <div class="main">
@@ -110,6 +125,13 @@
     const hashAtual = location.hash;
     const navegou = hashAtual !== ultimoHashRenderizado;
     ultimoHashRenderizado = hashAtual;
+    // FASE 2 (ajuste pós-aprovação): painel "Mais" da barra mobile fecha
+    // sozinho em toda navegação de verdade (clicar num item de dentro dele já
+    // muda o hash, então isso cobre o caso comum; também cobre back/forward
+    // do navegador). Re-render por mudança de estado na mesma tela (navegou
+    // false) não mexe nisso — o toggle do próprio botão só muda UIState, não
+    // o hash, então o painel abre/fecha normalmente por cima.
+    if(navegou && M.UIState) M.UIState.mobileMaisAberto = false;
     const {key, params} = M.Router.parseHash();
     const fn = M.Router.ROUTES[key] || M.Router.ROUTES["hoje"];
     let page;
@@ -183,10 +205,13 @@
 
   window.addEventListener("hashchange", render);
   window.addEventListener("DOMContentLoaded", ()=>{
-    if(!location.hash){
-      const colab = usuarioAtualColab();
-      location.hash = isOperador(colab) ? "#/meu-painel" : "#/hoje";
-    }
+    // FASE 2 (Navegação V2 — "Hoje contextual"): Hoje passa a ser o destino
+    // inicial de TODO perfil, sem exceção — antes Produção/Montador caíam
+    // direto em "Minha Produção" (#/meu-painel). Essa rota continua existindo
+    // (alias legado, não some do app — só some do menu), só deixa de ser o
+    // destino automático. O conteúdo de "Hoje" já se adapta por perfil
+    // (ver js/pages/hoje.js, que já filtra por verTodasObras/contexto).
+    if(!location.hash) location.hash = "#/hoje";
     render();
     M.Store.subscribe(render);
 

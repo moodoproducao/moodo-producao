@@ -5,67 +5,67 @@
   "use strict";
   const M = window.M;
 
-  // FASE 1 (V2 — permissões por ação, camada MENU): item com "perm" só
-  // aparece no menu se M.Store.pode(perm) — ver navHtml()/footerHtml() em
-  // js/main.js. Item sem "perm" continua visível igual sempre foi (não
-  // redesenhamos a navegação nesta fase — só acrescentamos o filtro sobre a
-  // mesma estrutura MENU/MENU_OPERADOR/FOOTER/FOOTER_OPERADOR que já existia).
-  const MENU = [
-    {group:"", items:[
-      {key:"hoje", label:"Hoje", icon:"home", route:"#/hoje"},
-    ]},
-    {group:"Produção", items:[
-      {key:"producao", label:"Produção", icon:"kanban", route:"#/producao", perm:"producao.ver"},
-      {key:"obras", label:"Obras", icon:"building", route:"#/obras", perm:"obra.ver"},
-      {key:"pendencias", label:"Pendências", icon:"alert", route:"#/pendencias"},
-      {key:"para-finalizar", label:"Para Finalizar", icon:"check-circle", route:"#/para-finalizar", perm:"montagem.ver"},
-      {key:"tarefas", label:"Tarefas", icon:"list", route:"#/tarefas"},
-      {key:"lotes", label:"Lotes", icon:"package", route:"#/lotes"},
-      {key:"montagem", label:"Montagem", icon:"wrench", route:"#/montagem", perm:"montagem.ver"},
-      {key:"assistencias", label:"Assistências", icon:"lifebuoy", route:"#/assistencias", perm:"assistencia.ver"},
-    ]},
-    {group:"Gestão", items:[
-      {key:"indicadores", label:"Indicadores", icon:"bar-chart", route:"#/indicadores", perm:"admin.indicadores"},
-      {key:"desempenho", label:"Desempenho", icon:"trophy", route:"#/desempenho", perm:"admin.indicadores"},
-      {key:"auditoria", label:"Auditoria", icon:"shield", route:"#/auditoria", perm:"admin.auditoria"},
-      {key:"calendario", label:"Calendário", icon:"calendar", route:"#/calendario", perm:"agenda.ver"},
-    ]},
-    {group:"Chão de fábrica", items:[
-      {key:"chao-de-fabrica", label:"Chão de Fábrica", icon:"tv", route:"#/chao-de-fabrica"},
-      {key:"tv", label:"Painel TV", icon:"tv", route:"#/tv"},
-      {key:"meu-painel", label:"Minha Produção", icon:"user", route:"#/meu-painel"},
-    ]},
-  ];
-  const FOOTER = [
-    {key:"equipe", label:"Equipe", icon:"users", route:"#/equipe", perm:"admin.equipe"},
-    {key:"configuracoes", label:"Configurações", icon:"settings", route:"#/configuracoes", perm:"admin.configuracoes"},
-  ];
+  // FASE 2 (Navegação V2): a navegação deixa de ser o binário "MENU" (Admin/
+  // PCP/Líder/Gestor/TV) vs. "MENU_OPERADOR" (Produção/Montador) e passa a
+  // ser definida POR PERFIL — cada um dos 8 perfis tem sua própria lista de
+  // itens de topo, exatamente a arquitetura V2 aprovada:
+  //   HOJE · OBRAS · PENDÊNCIAS · MONTAGEM · ASSISTÊNCIAS · AGENDA · ADMIN
+  // (TV continua como superfície separada — não entra nesta navegação.)
+  //
+  // Isso é REORGANIZAÇÃO DE NAVEGAÇÃO, não remoção de funcionalidade: as
+  // rotas antigas (Produção, Para Finalizar, Tarefas, Lotes, Indicadores,
+  // Desempenho, Auditoria, Calendário, Chão de Fábrica, Equipe,
+  // Configurações, Minha Produção) continuam respondendo por compatibilidade
+  // (ver ROUTES abaixo) — só saem do MENU. Nenhum arquivo/lógica foi
+  // apagado; a remoção física é a Fase 10, não esta.
+  //
+  // Cada item aqui usa a MESMA chave de permissão já validada na Fase 1
+  // (nenhuma permissão nova foi criada só pra fazer um item aparecer) — a
+  // navegação se adapta à permissão que já existe, nunca o contrário. Item
+  // sem "perm" é de acesso universal, igual sempre foi (Hoje/Pendências).
+  const MENU_ITEMS = {
+    hoje:         {label:"Hoje",         icon:"home",     route:"#/hoje"},
+    obras:        {label:"Obras",        icon:"building", route:"#/obras",        perm:"obra.ver"},
+    // "Minhas Obras" (Montador): mesma tela de Obras, mesmos dados — só
+    // permissão diferente (obra.verAtribuidas, que o Montador já tinha desde
+    // a Fase 1) e força a visão restrita/rótulo próprio (ver js/pages/obras.js).
+    minhasObras:  {label:"Minhas Obras", icon:"building", route:"#/minhas-obras", perm:"obra.verAtribuidas"},
+    pendencias:   {label:"Pendências",   icon:"alert",    route:"#/pendencias"},
+    montagem:     {label:"Montagem",     icon:"wrench",   route:"#/montagem",     perm:"montagem.ver"},
+    assistencias: {label:"Assistências", icon:"lifebuoy", route:"#/assistencias", perm:"assistencia.ver"},
+    // "Atendimentos" (Assistência): alias/recorte de rótulo sobre a MESMA
+    // tela/rota de Assistências de hoje, mesma permissão — NÃO é o fluxo
+    // final de Assistência V2/mobile (isso é fase própria, ainda não
+    // iniciada). Ver aviso completo em js/pages/assistencias.js.
+    atendimentos: {label:"Atendimentos", icon:"lifebuoy", route:"#/atendimentos", perm:"assistencia.ver"},
+    // "Agenda": mesmo Calendário de sempre, só com o rótulo novo pedido pra
+    // esta fase — a tela nova da Agenda é a Fase 6, não reescrita aqui.
+    agenda:       {label:"Agenda",       icon:"calendar", route:"#/agenda",       perm:"agenda.ver"},
+    // "Admin": entrada única no menu (hub temporário — js/pages/adminHub.js).
+    // Array = OR (mesma semântica já usada em ROUTE_PERMS["obra"]): aparece
+    // pra quem tiver QUALQUER uma das permissões administrativas.
+    admin:        {label:"Admin",        icon:"settings", route:"#/admin",        perm:["admin.equipe","admin.configuracoes","admin.indicadores","admin.auditoria"]},
+  };
 
-  // menu reduzido para OPERADOR/MONTADOR — regra de menor acesso (seção 56)
-  const MENU_OPERADOR = [
-    {group:"", items:[
-      {key:"meu-painel", label:"Minha Produção", icon:"home", route:"#/meu-painel"},
-    ]},
-    {group:"Meu trabalho", items:[
-      {key:"producao", label:"Produção", icon:"kanban", route:"#/producao", perm:"producao.ver"},
-      {key:"tarefas", label:"Minhas Tarefas", icon:"list", route:"#/tarefas"},
-      {key:"pendencias", label:"Minhas Pendências", icon:"alert", route:"#/pendencias"},
-      {key:"assistencias", label:"Assistências", icon:"lifebuoy", route:"#/assistencias", perm:"assistencia.ver"},
-      {key:"calendario", label:"Calendário", icon:"calendar", route:"#/calendario", perm:"agenda.ver"},
-    ]},
-  ];
-  const FOOTER_OPERADOR = [
-    {key:"equipe", label:"Equipe", icon:"users", route:"#/equipe", perm:"admin.equipe"},
-  ];
-
-  // navegação mobile do operador (seção "NAVEGAÇÃO MOBILE" do PWA)
-  const MOBILE_NAV_OPERADOR = [
-    {key:"meu-painel", label:"Hoje", icon:"home", route:"#/meu-painel"},
-    {key:"tarefas", label:"Tarefas", icon:"list", route:"#/tarefas"},
-    {key:"pendencias", label:"Pendências", icon:"alert", route:"#/pendencias"},
-    {key:"assistencias", label:"Assist.", icon:"lifebuoy", route:"#/assistencias", perm:"assistencia.ver"},
-    {key:"mais", label:"Mais", icon:"grip", route:"#/equipe", perm:"admin.equipe"},
-  ];
+  // Lista de chaves de MENU_ITEMS, na ordem, por perfil — exatamente a
+  // "MENU POR PERFIL" do pedido da Fase 2. TV não tem menu operacional
+  // (superfície separada, sem colaborador real atribuído).
+  const MENU_POR_PERFIL = {
+    ADMIN:       ["hoje","obras","pendencias","montagem","assistencias","agenda","admin"],
+    GESTOR:      ["hoje","obras","pendencias","montagem","assistencias","agenda"],
+    PCP:         ["hoje","obras","pendencias","montagem","agenda"],
+    LIDERANCA:   ["hoje","obras","pendencias","montagem","agenda"],
+    OPERADOR:    ["hoje","pendencias"],
+    MONTADOR:    ["hoje","minhasObras","agenda","pendencias"],
+    ASSISTENCIA: ["hoje","atendimentos","agenda","pendencias"],
+    TV:          [],
+  };
+  // monta a lista de itens (com perm já resolvida) pro perfil informado —
+  // usada tanto pelo menu desktop quanto pelo mobile (mesma fonte de dados,
+  // sem duas navegações divergentes por engano).
+  function menuDoPerfil(perfilKey){
+    return (MENU_POR_PERFIL[perfilKey] || []).map(k=> Object.assign({key:k}, MENU_ITEMS[k]));
+  }
 
   // FASE 1 (V2 — permissões por ação, camada ROTA): chave da rota → ação
   // exigida. Se M.Store.pode(perm) for falso, main.js render() não chama a
@@ -110,6 +110,12 @@
     "calendario": "agenda.ver",
     "equipe": "admin.equipe",
     "configuracoes": "admin.configuracoes",
+    // FASE 2 (Navegação V2) — rotas novas, todas reaproveitando permissão já
+    // existente da Fase 1 (nenhuma permissão nova criada pra isso):
+    "minhas-obras": "obra.verAtribuidas",
+    "atendimentos": "assistencia.ver",
+    "agenda": "agenda.ver",
+    "admin": ["admin.equipe", "admin.configuracoes", "admin.indicadores", "admin.auditoria"],
   };
 
   function parseHash(){
@@ -144,7 +150,14 @@
     "equipe": ()=> M.Pages.equipe(),
     "configuracoes": (p)=> M.Pages.configuracoes(p[0]),
     "meu-painel": ()=> M.Pages.meuPainel(),
+    // FASE 2 (Navegação V2) — rotas novas, todas reaproveitando página/dado
+    // que já existia (ver comentário em MENU_ITEMS acima e nos respectivos
+    // js/pages/*.js — nenhuma tabela nem tela nova foi criada):
+    "minhas-obras": ()=> M.Pages.obras(true),
+    "atendimentos": ()=> M.Pages.assistencias(true),
+    "agenda": ()=> M.Pages.calendario(),
+    "admin": ()=> M.Pages.adminHub(),
   };
 
-  M.Router = { MENU, FOOTER, MENU_OPERADOR, FOOTER_OPERADOR, MOBILE_NAV_OPERADOR, parseHash, ROUTES, ROUTE_PERMS };
+  M.Router = { menuDoPerfil, parseHash, ROUTES, ROUTE_PERMS };
 })();
