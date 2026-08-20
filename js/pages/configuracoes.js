@@ -356,30 +356,62 @@
   // item 10: permissões agora são editáveis de verdade (state.permissoes,
   // via Store.pode/setPermissao) — só quem tem "editarPermissoes" vê
   // checkbox; os outros continuam vendo a bolinha somente-leitura de sempre.
+  // FASE 1 (V2 — permissões por ação): mesma tabela de sempre, agora com
+  // duas mudanças aditivas —
+  // 1) duas colunas novas (GESTOR, ASSISTENCIA — os dois perfis novos, hoje
+  //    sem nenhum colaborador atribuído);
+  // 2) linhas novas com as chaves de ação granulares (obra.*, pendencia.*,
+  //    montagem.*, assistencia.*, agenda.*, admin.*, tv.configurar),
+  //    agrupadas por recurso, além das 10 flags antigas que continuam no
+  //    topo intactas. valorDe() ganhou uma checagem defensiva a mais:
+  //    antes ela quebrava (TypeError) se state.permissoes[perfilKey] não
+  //    existisse — o que aconteceria pra qualquer perfil novo num estado
+  //    salvo antes desta fase, se Store.load() não tivesse sido corrigido
+  //    junto (ver mergePermissoes em js/store.js). Deixamos a checagem aqui
+  //    também, redundante de propósito — não custa nada e blinda esta tela
+  //    mesmo se o dado chegar de outro jeito no futuro.
   function secPermissoes(){
-    const cols = ["ADMIN","PCP","LIDERANCA","OPERADOR","MONTADOR","TV"];
+    const cols = ["ADMIN","PCP","LIDERANCA","OPERADOR","MONTADOR","TV","GESTOR","ASSISTENCIA"];
     const linhas = [
       ["Ver valores das obras","verValores"], ["Ver indicadores financeiros","verIndicadores"],
       ["Ver desempenho / ranking completo","verDesempenho"], ["Ver ranking (próprio + colegas)","verRanking"],
       ["Ver auditoria","verAuditoria"], ["Ver todas as obras","verTodasObras"],
       ["Acessar configurações","verConfiguracoes"], ["Liberar avanço excepcional","liberarExcecao"],
       ["Editar processos (tarefas/fluxos/requisitos)","editarProcesso"], ["Editar permissões","editarPermissoes"],
+      ["— Obra: ver (lista)","obra.ver"], ["— Obra: criar","obra.criar"], ["— Obra: editar","obra.editar"],
+      ["— Obra: arquivar","obra.arquivar"], ["— Obra: cancelar","obra.cancelar"],
+      ["— Obra: ver todas (detalhe, amplo)","obra.verTodas"], ["— Obra: ver atribuídas (detalhe)","obra.verAtribuidas"], ["— Obra: ver contexto (detalhe)","obra.verContexto"],
+      ["— Pendência: ver","pendencia.ver"], ["— Pendência: criar","pendencia.criar"], ["— Pendência: editar","pendencia.editar"],
+      ["— Pendência: atribuir","pendencia.atribuir"], ["— Pendência: resolver","pendencia.resolver"],
+      ["— Montagem: ver","montagem.ver"], ["— Montagem: marcar pronto","montagem.marcarPronto"],
+      ["— Montagem: aprovar finalização","montagem.aprovarFinalizacao"], ["— Montagem: finalizar com ressalva","montagem.finalizarComRessalva"],
+      ["— Assistência: ver","assistencia.ver"], ["— Assistência: criar","assistencia.criar"],
+      ["— Assistência: editar","assistencia.editar"], ["— Assistência: concluir","assistencia.concluir"],
+      ["— Agenda: ver","agenda.ver"], ["— Agenda: criar","agenda.criar"], ["— Agenda: editar","agenda.editar"],
+      ["— Admin: ver","admin.ver"], ["— Admin: indicadores","admin.indicadores"], ["— Admin: auditoria","admin.auditoria"],
+      ["— Admin: equipe","admin.equipe"], ["— Admin: configurações","admin.configuracoes"], ["— Admin: usuários","admin.usuarios"],
+      ["— Produção: ver (quadro)","producao.ver"], ["— TV: configurar","tv.configurar"],
     ];
     const podeEditar = M.Store.pode("editarPermissoes");
-    const valorDe = (perfilKey,acao)=> (M.Store.state.permissoes && M.Store.state.permissoes[perfilKey] && Object.prototype.hasOwnProperty.call(M.Store.state.permissoes[perfilKey],acao))
-      ? M.Store.state.permissoes[perfilKey][acao] : M.perfilDef(perfilKey).pode[acao];
+    const valorDe = (perfilKey,acao)=>{
+      const overrides = M.Store.state.permissoes && M.Store.state.permissoes[perfilKey];
+      if(overrides && Object.prototype.hasOwnProperty.call(overrides,acao)) return overrides[acao];
+      return M.perfilDef(perfilKey).pode[acao];
+    };
     return `
-      <p class="small muted" style="margin-bottom:12px;">Nesta versão os perfis são fixos (Administrador, PCP/Gestão, Liderança, Operador, Montador, Consulta/TV) — a regra de menor acesso já está ativa na navegação e agora também bloqueia acesso direto por link, não só esconde o menu. ${podeEditar? 'Clique numa caixinha pra ligar/desligar.' : 'Só quem tem "Editar permissões" pode alterar esta tabela.'}</p>
-      <div class="perm-grid">
-        <div class="perm-head" style="text-align:left;">Permissão</div>
-        ${cols.map(c=>`<div class="perm-head">${M.perfilDef(c).label}</div>`).join("")}
-        ${linhas.map(([label,key])=>`
-          <div class="perm-row-label">${label}</div>
-          ${cols.map(c=> podeEditar
-            ? `<div class="perm-check"><input type="checkbox" ${valorDe(c,key)?'checked':''} onchange="Act.togglePermissao('${c}','${key}',this.checked)"></div>`
-            : `<div class="perm-check">${permCheck(valorDe(c,key))}</div>`
-          ).join("")}
-        `).join("")}
+      <p class="small muted" style="margin-bottom:12px;">Nesta versão os perfis são fixos (Administrador, PCP/Gestão, Líder, Produção, Montador, Consulta/TV, Gestor, Assistência) — a regra de menor acesso já está ativa na navegação e agora também bloqueia acesso direto por link, não só esconde o menu. ${podeEditar? 'Clique numa caixinha pra ligar/desligar.' : 'Só quem tem "Editar permissões" pode alterar esta tabela.'} As linhas com "—" são as permissões novas por ação (Fase 1) — mais granulares que as de cima, e ainda ajustáveis aqui, perfil por perfil.</p>
+      <div class="perm-grid-wrap">
+        <div class="perm-grid" style="--perm-cols:${cols.length};">
+          <div class="perm-head" style="text-align:left;">Permissão</div>
+          ${cols.map(c=>`<div class="perm-head">${M.perfilDef(c).label}</div>`).join("")}
+          ${linhas.map(([label,key])=>`
+            <div class="perm-row-label">${label}</div>
+            ${cols.map(c=> podeEditar
+              ? `<div class="perm-check"><input type="checkbox" ${valorDe(c,key)?'checked':''} onchange="Act.togglePermissao('${c}','${key}',this.checked)"></div>`
+              : `<div class="perm-check">${permCheck(valorDe(c,key))}</div>`
+            ).join("")}
+          `).join("")}
+        </div>
       </div>`;
   }
 

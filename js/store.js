@@ -116,6 +116,33 @@
     };
   }
 
+  // FASE 1 (V2 — permissões por ação): antes esta migração era um "OU" cru
+  // (parsed.permissoes || fresh.permissoes) — um estado salvo antigo simplesmente
+  // MANTINHA seu objeto de permissões inteiro, sem nunca ganhar as chaves novas
+  // (perfis GESTOR/ASSISTENCIA recém-criados, ou as novas ações granulares tipo
+  // "obra.criar") que só existem em `fresh` (semente atual de M.PERFIS). Isso
+  // não quebrava Store.pode() (ele já cai no padrão de M.PERFIS quando a chave
+  // não existe em state.permissoes), mas quebraria a tela de edição de
+  // permissões (Configurações → Permissões), que lê state.permissoes[perfilKey]
+  // diretamente. Corrigido aqui: mescla de verdade, por perfil e por ação —
+  // toda chave nova (perfil novo ou ação nova) de `fresh` aparece com seu
+  // padrão, e qualquer valor já customizado em `saved` continua valendo
+  // (nunca se perde uma edição feita por um administrador).
+  function mergePermissoes(saved, fresh){
+    const out = {};
+    Object.keys(fresh).forEach(perfilKey=>{
+      out[perfilKey] = Object.assign({}, fresh[perfilKey], (saved && saved[perfilKey]) || {});
+    });
+    // preserva perfil eventualmente salvo que não exista mais na semente atual
+    // (não deveria acontecer hoje, mas não descarta dado por segurança)
+    if(saved){
+      Object.keys(saved).forEach(perfilKey=>{
+        if(!out[perfilKey]) out[perfilKey] = Object.assign({}, saved[perfilKey]);
+      });
+    }
+    return out;
+  }
+
   function load(){
     try{
       const raw = localStorage.getItem(LS_KEY);
@@ -131,7 +158,7 @@
             auditoria: parsed.auditoria || fresh.auditoria,
             tarefasPadrao: parsed.tarefasPadrao || fresh.tarefasPadrao,
             fluxosPadrao: parsed.fluxosPadrao || fresh.fluxosPadrao,
-            permissoes: parsed.permissoes || fresh.permissoes,
+            permissoes: mergePermissoes(parsed.permissoes, fresh.permissoes),
             pesosDesempenho: parsed.pesosDesempenho || fresh.pesosDesempenho,
             notificacoes: parsed.notificacoes || fresh.notificacoes,
             metaMensal: parsed.metaMensal || fresh.metaMensal,
@@ -466,6 +493,42 @@
       return ids;
     },
 
+    // AJUSTE (rodada 3, item 1) — guard contextual REAL da rota de detalhe
+    // de obra ("obra/:id"). Até aqui, obra.verTodas/verAtribuidas/
+    // verContexto só precisavam EXISTIR (ver comentário em js/router.js e
+    // no topo de js/data.js) — não conferia se a obra pedida na URL era
+    // realmente do contexto da pessoa. Isso deixava aberta a possibilidade
+    // de, por exemplo, um Montador digitar na mão o ID de uma obra que não
+    // é dele e abrir do mesmo jeito. Agora:
+    //  - obra.verTodas      -> abre qualquer obra (hoje: Admin/PCP/Líder/
+    //                          Gestor/TV).
+    //  - obra.verAtribuidas -> só abre se obraId ∈ obraIdsDoColaborador(
+    //                          usuário atual) — o MESMO cálculo já usado em
+    //                          Hoje/Produção/Montagem/Obras/Calendário pra
+    //                          "minhas obras" (tarefa responsavelPlanejado/
+    //                          executadoPor, pendência responsavel,
+    //                          assistência responsavel — cobre tarefa
+    //                          vinculada, pendência vinculada, assistência
+    //                          vinculada e atividade de montagem atribuída,
+    //                          já que montagem usa a mesma tabela de
+    //                          tarefas). Não inventamos um cálculo novo.
+    //  - obra.verContexto   -> mesma verificação (é exatamente o conjunto
+    //                          de vínculos reais que o pedido de ajuste
+    //                          pediu pra cobrir: pendência/tarefa/
+    //                          assistência ligada à pessoa).
+    // Se a pessoa não tem NENHUMA das 3 chaves, ou tem alguma mas o obraId
+    // não está no conjunto dela, NEGA por padrão — nunca libera "todas"
+    // como fallback só porque algum contexto ainda não é comprovável.
+    podeAbrirObra(obraId){
+      if(Store.pode("obra.verTodas")) return true;
+      if(!obraId) return false;
+      const temAtribuidas = Store.pode("obra.verAtribuidas");
+      const temContexto = Store.pode("obra.verContexto");
+      if(!temAtribuidas && !temContexto) return false;
+      const meuContexto = Store.obraIdsDoColaborador(state.usuarioAtual);
+      return meuContexto.has(obraId);
+    },
+
     // ============================================================
     // ETAPAS — configuráveis (Configurações → Processos → Etapas)
     // ============================================================
@@ -750,28 +813,45 @@
     },
 
     // ---------- pendências (com fluxo operacional — seção 24) ----------
+    // FASE 1 (V2 — permissões por ação, camada AÇÃO, rodada 2): inventário
+    // das mutações de Pendência pedido pelo handoff — nenhuma delas tinha
+    // guard nenhum até aqui (nem a antiga, nem a nova). Guard colocado no
+    // próprio Store (não só no Act do actions.js) — assim vale mesmo pra
+    // quem chamar Store.criarPendencia/etc. direto, sem passar pela tela.
+    // Contrato: como nada aqui usava {ok,...} antes, e nenhum chamador (ver
+    // js/actions.js) lia o valor de retorno de sucesso, mudar pra {ok:true,...}
+    // no caminho feliz é seguro — só o caminho de erro é novo de verdade.
     criarPendencia(p){
+      if(!Store.pode("pendencia.criar")) return {ok:false, motivo:"SEM_PERMISSAO"};
       const item = novaPendenciaObj(p);
       state.pendencias.push(item);
       Store.log(p.obraId, "PENDENCIA_ABERTA", `${p.categoria}: ${p.descricao}`);
       emit();
-      return item;
+      return {ok:true, pendencia:item};
     },
     avancarFluxoPendencia(pendId){
-      const p = state.pendencias.find(x=>x.id===pendId); if(!p) return;
+      if(!Store.pode("pendencia.editar")) return {ok:false, motivo:"SEM_PERMISSAO"};
+      const p = state.pendencias.find(x=>x.id===pendId); if(!p) return {ok:false, motivo:"NAO_ENCONTRADA"};
       if(p.passoAtual < p.fluxoPassos.length-1){
         p.passoAtual++;
         p.status = "EM_TRATAMENTO";
         p.atualizadoPor = state.usuarioAtual||null; p.atualizadoEm = M.todayISO();
         Store.log(p.obraId, "PENDENCIA_AVANCOU", `${p.categoria}: passo "${p.fluxoPassos[p.passoAtual]}"`);
       } else {
-        Store.atualizarStatusPendencia(pendId, "RESOLVIDA");
-        return;
+        // último passo do fluxo = resolve de vez — delega pra
+        // atualizarStatusPendencia, que já checa "pendencia.resolver" (mais
+        // restrita que "pendencia.editar") por conta própria.
+        return Store.atualizarStatusPendencia(pendId, "RESOLVIDA");
       }
       emit();
+      return {ok:true};
     },
     atualizarStatusPendencia(pendId, status){
-      const p = state.pendencias.find(x=>x.id===pendId); if(!p) return;
+      // resolver é mais sensível que só mudar status (reabrir/avançar fluxo)
+      // — ganha permissão própria; o resto usa "pendencia.editar".
+      const acaoNecessaria = status==="RESOLVIDA" ? "pendencia.resolver" : "pendencia.editar";
+      if(!Store.pode(acaoNecessaria)) return {ok:false, motivo:"SEM_PERMISSAO"};
+      const p = state.pendencias.find(x=>x.id===pendId); if(!p) return {ok:false, motivo:"NAO_ENCONTRADA"};
       const eraResolvida = p.status==="RESOLVIDA";
       p.status = status;
       p.atualizadoPor = state.usuarioAtual||null; p.atualizadoEm = M.todayISO();
@@ -792,20 +872,22 @@
         if(p.componenteCriticoId) Store._sincronizarComponenteDaPendencia(p, "AGUARDANDO");
       }
       emit();
+      return {ok:true};
     },
     // FASE 2 (handoff): "serão exigidas [fotos] ao marcar como resolvida" —
     // fluxo dedicado (Act.abrirResolverPendencia) pra anexar fotosResolucao
     // (autor+data próprios, separadas das fotosAbertura) na hora de resolver.
     resolverPendencia(pendId, {fotosResolucao, observacao} = {}){
-      const p = state.pendencias.find(x=>x.id===pendId); if(!p) return;
+      if(!Store.pode("pendencia.resolver")) return {ok:false, motivo:"SEM_PERMISSAO"};
+      const p = state.pendencias.find(x=>x.id===pendId); if(!p) return {ok:false, motivo:"NAO_ENCONTRADA"};
       const agora = M.todayISO();
       const autor = state.usuarioAtual||null;
       p.fotosResolucao = (p.fotosResolucao||[]).concat((fotosResolucao||[]).map(url=>
         (typeof url === "string" ? {url, autor, data:agora, principal:false} : url)));
       if(observacao) p.observacaoResolucao = observacao;
-      Store.atualizarStatusPendencia(pendId, "RESOLVIDA");
+      return Store.atualizarStatusPendencia(pendId, "RESOLVIDA");
     },
-    reabrirPendencia(pendId){ Store.atualizarStatusPendencia(pendId, "ABERTA"); },
+    reabrirPendencia(pendId){ return Store.atualizarStatusPendencia(pendId, "ABERTA"); },
     // grava o novo status diretamente no componente vinculado, sem passar de
     // novo por Store.mudarStatusComponente (evitaria ida-e-volta infinita entre
     // pendência↔componente — aqui é só espelhar o campo, não gerar/fechar pendência).
@@ -953,7 +1035,11 @@
     },
 
     // ---------- assistências (seção 44-47) ----------
+    // FASE 1 (V2 — permissões por ação, rodada 2): "criar/editar/concluir
+    // assistência" do inventário pedido — mesmo raciocínio de pendência:
+    // guard no próprio Store, contrato {ok,...} igual ao resto.
     criarAssistencia(a){
+      if(!Store.pode("assistencia.criar")) return {ok:false, motivo:"SEM_PERMISSAO"};
       // Fase 5 (handoff): toda assistência nasce com garantia (default "Em
       // análise" — não é nem coberto nem não-coberto até alguém decidir) e
       // com o histórico de visitas vazio (N visitas por chamado).
@@ -963,15 +1049,21 @@
       Store.audit({categoria:"QUALIDADE", tipo:"ASSISTENCIA_ABERTA", obraId:a.obraId,
         descricao:`Assistência aberta — ${a.categoria}: ${a.descricao}`, motivo:a.origem||"-"});
       emit();
-      return item;
+      return {ok:true, assistencia:item};
     },
     atualizarAssistencia(id, patch){
-      const a = state.assistencias.find(x=>x.id===id); if(!a) return;
+      // concluir é mais sensível que só editar status/campos — ganha
+      // permissão própria ("assistencia.concluir"), igual ao par
+      // pendencia.editar/pendencia.resolver acima.
+      const acaoNecessaria = patch.status==="CONCLUIDA" ? "assistencia.concluir" : "assistencia.editar";
+      if(!Store.pode(acaoNecessaria)) return {ok:false, motivo:"SEM_PERMISSAO"};
+      const a = state.assistencias.find(x=>x.id===id); if(!a) return {ok:false, motivo:"NAO_ENCONTRADA"};
       Object.assign(a, patch);
       if(patch.status==="CONCLUIDA"){
         Store.audit({categoria:"QUALIDADE", tipo:"ASSISTENCIA_CONCLUIDA", obraId:a.obraId, descricao:`Assistência concluída — ${a.categoria}: ${a.descricao}`});
       }
       emit();
+      return {ok:true};
     },
     // ---------- assistência: N visitas por chamado (Fase 5 — handoff) ----------
     // "N visitas por assistência; cada visita termina em resolvida ou retorno
@@ -981,6 +1073,11 @@
     // atualizarAssistencia acima, só acrescenta o histórico de visitas.
     registrarVisitaAssistencia(assistId, opts){
       opts = opts || {};
+      // mesma régua de atualizarAssistencia: visita que resolve = "concluir";
+      // visita que só registra retorno necessário = "editar". Checado antes
+      // de tudo (mesmo de achar a assistência) igual ao resto do arquivo.
+      const acaoNecessaria = opts.desfecho==="RESOLVIDA" ? "assistencia.concluir" : "assistencia.editar";
+      if(!Store.pode(acaoNecessaria)) return {ok:false, motivo:"SEM_PERMISSAO"};
       const a = state.assistencias.find(x=>x.id===assistId); if(!a) return {ok:false};
       if(!opts.desfecho) return {ok:false, motivo:"DESFECHO_OBRIGATORIO"};
       a.visitas = a.visitas || [];
@@ -1123,7 +1220,11 @@
       Store.tarefasObrigatoriasAbertas(m).forEach(t=> itens.push(`Tarefa obrigatória em aberto: ${t.titulo}`));
       return itens;
     },
+    // FASE 1 (V2 — permissões por ação, rodada 2): esta é a ação real de
+    // "marcar pronto" a nível de móvel (item 4 do pedido de ajuste) —
+    // mapeamento direto pra "montagem.marcarPronto", sem inventar nada novo.
     concluirMontagem(movelId, checklistOk, temPendenciasInformado){
+      if(!Store.pode("montagem.marcarPronto")) return {ok:false, motivo:"SEM_PERMISSAO"};
       const f = Store.findMovel(movelId); if(!f) return {ok:false};
       const pendReais = Store.pendenciasReaisMovel(f.m);
       const temPendencias = !!(temPendenciasInformado || pendReais.length);
@@ -1167,7 +1268,11 @@
         return {ok:false, motivo:"PENDENTE", bloqueios, itensChecklistFaltando, naoMontados};
       }
       if(opts.ressalva){
-        if(!Store.pode("liberarExcecao")) return {ok:false, motivo:"SEM_PERMISSAO"};
+        // FASE 1 (V2): aceita a permissão antiga (liberarExcecao) OU a nova
+        // ("montagem.finalizarComRessalva", que hoje espelha liberarExcecao
+        // pra cada perfil — ver M.PERFIS) — aditivo, não tira acesso de
+        // ninguém que já podia fazer isso antes.
+        if(!Store.pode("liberarExcecao") && !Store.pode("montagem.finalizarComRessalva")) return {ok:false, motivo:"SEM_PERMISSAO"};
         if(!opts.motivo) return {ok:false, motivo:"MOTIVO_OBRIGATORIO"};
       }
       a.montagemChecklist = checklistState;

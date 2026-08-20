@@ -310,7 +310,7 @@
         const submitBtn = form.querySelector('button[type=submit]');
         if(submitBtn) submitBtn.disabled = true;
         const fotos = await uploadArquivos(fd.getAll("fotos").filter(x=>x && x.size), (fd.get("obraId")||"avulsas")+"/pendencias");
-        M.Store.criarPendencia({
+        const r = M.Store.criarPendencia({
           obraId: fd.get("obraId"), ambienteId: fd.get("ambienteId")||null, movelId: mv||null,
           obraNome: f? f.o.cliente : (M.Store.getObra(fd.get("obraId"))||{}).cliente,
           ambienteNome: f? f.a.nome : "", movelNome: f? f.m.nome : (fd.get("descricaoLivre")||"Item avulso"),
@@ -319,6 +319,7 @@
           fornecedor: fd.get("fornecedor"), prazo: fd.get("prazo")||null, prioridade: fd.get("prioridade"),
           origem: fd.get("origem")||null, fotos,
         });
+        if(!r.ok){ UI.toast("Seu perfil não tem permissão para criar pendência."); if(submitBtn) submitBtn.disabled = false; return; }
         UI.closeModal(); UI.toast("Pendência criada — fluxo iniciado.");
       });
     },
@@ -326,10 +327,20 @@
       // "Resolvida" pede fotos de resolução (handoff) — abre um passo extra em
       // vez de resolver na hora; qualquer outro status muda direto.
       if(status==="RESOLVIDA"){ Act.abrirResolverPendencia(id); return; }
-      M.Store.atualizarStatusPendencia(id, status); UI.toast("Status atualizado.");
+      const r = M.Store.atualizarStatusPendencia(id, status);
+      if(!r.ok){ UI.toast("Seu perfil não tem permissão para alterar esta pendência."); Act.rerender(); return; }
+      UI.toast("Status atualizado.");
     },
-    avancarFluxo(id){ M.Store.avancarFluxoPendencia(id); UI.toast("Pendência avançou no fluxo."); },
-    reabrirPendencia(id){ M.Store.reabrirPendencia(id); UI.toast("Pendência reaberta."); },
+    avancarFluxo(id){
+      const r = M.Store.avancarFluxoPendencia(id);
+      if(!r.ok){ UI.toast("Seu perfil não tem permissão para avançar esta pendência."); Act.rerender(); return; }
+      UI.toast("Pendência avançou no fluxo.");
+    },
+    reabrirPendencia(id){
+      const r = M.Store.reabrirPendencia(id);
+      if(!r.ok){ UI.toast("Seu perfil não tem permissão para reabrir pendência."); Act.rerender(); return; }
+      UI.toast("Pendência reaberta.");
+    },
     setPendFiltro(campo, val){ M.UIState.pendFiltro[campo]=val; Act.rerender(); },
     limparPendFiltros(){ M.UIState.pendFiltro = {categoria:"", status:"", tipo:"", obraId:"", responsavel:"", prioridade:"", bloqueiaFechamento:false, busca:""}; Act.rerender(); },
     setPendView(v){ M.UIState.pendView = v; Act.rerender(); },
@@ -347,7 +358,8 @@
         const submitBtn = form.querySelector('button[type=submit]');
         if(submitBtn) submitBtn.disabled = true;
         const fotosResolucao = await uploadArquivos(fd.getAll("fotos").filter(x=>x && x.size), (p.obraId||"avulsas")+"/pendencias-resolucao");
-        M.Store.resolverPendencia(id, {fotosResolucao, observacao: fd.get("observacao")||""});
+        const r = M.Store.resolverPendencia(id, {fotosResolucao, observacao: fd.get("observacao")||""});
+        if(!r.ok){ UI.toast("Seu perfil não tem permissão para resolver pendência."); if(submitBtn) submitBtn.disabled = false; return; }
         UI.closeModal(); UI.toast("Pendência resolvida.");
       });
     },
@@ -448,17 +460,22 @@
         const fd = new FormData(form);
         const obra = M.Store.getObra(fd.get("obraId"));
         const fotos = await uploadArquivos(fd.getAll("fotos").filter(x=>x && x.size), (fd.get("obraId")||"avulsas")+"/assistencias");
-        M.Store.criarAssistencia({
+        const r = M.Store.criarAssistencia({
           obraId: fd.get("obraId"), obraNome: obra? obra.cliente: "", cliente: obra? obra.cliente: fd.get("clienteLivre"),
           ambienteNome: fd.get("ambienteNome"), movelNome: fd.get("movelNome"),
           descricao: fd.get("descricao"), categoria: fd.get("categoria"), origem: fd.get("origem"),
           prioridade: fd.get("prioridade"), responsavel: fd.get("responsavel"), prazo: fd.get("prazo")||null, fotos,
           garantia: fd.get("garantia")||"EM_ANALISE",
         });
+        if(!r.ok){ UI.toast("Seu perfil não tem permissão para registrar assistência."); return; }
         UI.closeModal(); UI.toast("Assistência registrada.");
       });
     },
-    setAssistenciaStatus(id, status){ M.Store.atualizarAssistencia(id,{status}); UI.toast("Status da assistência atualizado."); },
+    setAssistenciaStatus(id, status){
+      const r = M.Store.atualizarAssistencia(id,{status});
+      if(!r.ok){ UI.toast("Seu perfil não tem permissão para alterar esta assistência."); Act.rerender(); return; }
+      UI.toast("Status da assistência atualizado.");
+    },
     setAssistFiltro(campo,val){ M.UIState.assistFiltro[campo]=val; Act.rerender(); },
     toggleAssistExpandido(id){ M.UIState.assistExpandido = (M.UIState.assistExpandido===id)?null:id; Act.rerender(); },
     // ---------- N visitas por chamado + garantia (Fase 5 — handoff) ----------
@@ -487,7 +504,10 @@
           data: fd.get("data")||M.todayISO(), tecnico: fd.get("tecnico"), diagnostico: fd.get("diagnostico"),
           fotos: fotosVisita, desfecho, proximoStatus: fd.get("proximoStatus"), pecaNecessaria,
         });
-        if(!r.ok){ UI.toast("Escolha o resultado desta visita."); return; }
+        if(!r.ok){
+          UI.toast(r.motivo==="SEM_PERMISSAO" ? "Seu perfil não tem permissão para registrar esta visita." : "Escolha o resultado desta visita.");
+          return;
+        }
         UI.closeModal();
         UI.toast(r.pendenciaGerada? "Visita registrada — pendência de peça criada." : (desfecho==="RESOLVIDA"? "Assistência resolvida!" : "Visita registrada — retorno necessário."));
       });
@@ -502,6 +522,7 @@
         const total = document.querySelectorAll(".mont-check").length;
         const temPendenciasInformado = document.getElementById("temPendencias").checked;
         const r = M.Store.concluirMontagem(movelId, `${checks}/${total}`, temPendenciasInformado);
+        if(!r.ok){ UI.toast("Seu perfil não tem permissão para concluir montagem."); return; }
         UI.closeModal();
         UI.toast(r.temPendencias? "Montagem encerrada como concluída com pendências — segue visível em Para Finalizar." : "Montagem concluída!");
       });
@@ -631,6 +652,17 @@
     },
     novaObraResetAjustes(){ M.UIState.novaObra.ambientesAjuste = {}; Act.rerender(); },
     novaObraCriar(){
+      // FASE 1 (V2 — permissões por ação, camada AÇÃO): esta é a lacuna que o
+      // handoff cita como exemplo obrigatório (Montador → Criar Obra deve ser
+      // NÃO nas 3 camadas). Antes desta mudança não havia NENHUMA checagem
+      // aqui — mesmo alguém que chegasse nesta tela por engano (ou por link
+      // direto) conseguia criar a obra de verdade. Agora, mesmo que a pessoa
+      // chegue até aqui (com JS customizado, por exemplo), a ação real não
+      // acontece sem "obra.criar".
+      if(!M.Store.pode("obra.criar")){
+        UI.toast("Seu perfil não tem permissão para criar obra.");
+        return;
+      }
       const nova = M.Pages.novaObraMontar();
       M.Store.criarObra(nova);
       UI.toast("Obra criada com sucesso!");

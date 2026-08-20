@@ -166,7 +166,7 @@
     if(producaoView==="macro"){
       const html = toggleTopoHtml + producaoMacroHtml(obrasVisiveis);
       return {title:"Produção", crumb:"Painel de obras — macro por padrão", html,
-        actionsHtml:`<a href="#/nova-obra" class="btn primary">${UI.icon('plus',14)} Nova Obra</a>`};
+        actionsHtml: UI.botaoNovaObraHtml()};
     }
 
     const view = M.UIState.kanbanView || "ambientes";
@@ -232,7 +232,7 @@
       </div>
     `;
     return {title:"Produção", crumb:"Kanban — obra / ambiente / móvel", html,
-      actionsHtml:`<a href="#/nova-obra" class="btn primary">${UI.icon('plus',14)} Nova Obra</a>`};
+      actionsHtml: UI.botaoNovaObraHtml()};
   };
 
   // ---------- modal de móvel (compartilhado) ----------

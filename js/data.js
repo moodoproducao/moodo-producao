@@ -254,19 +254,167 @@ window.M = window.M || {};
   const garantiaDef = (key)=> GARANTIA_DEF.find(g=>g.key===key) || GARANTIA_DEF[2];
 
   // perfis de acesso (seção 53-57)
+  //
+  // FASE 1 (V2 — permissões por ação, handoff): além das 10 flags antigas
+  // (mantidas 100% intactas, ninguém foi removida nem renomeada — é o que
+  // Store.pode()/os ~13 pontos de checagem espalhados pelo código ainda leem),
+  // cada perfil agora também ganha um conjunto de chaves de AÇÃO granulares
+  // (formato "recurso.acao": obra.ver, pendencia.criar, montagem.ver, etc.).
+  // Store.pode(acao) já era genérico o bastante pra aceitar essas chaves novas
+  // sem nenhuma mudança nele mesmo (ver js/store.js) — só passamos a alimentá-lo
+  // com mais entradas. Os valores abaixo são um PONTO DE PARTIDA razoável por
+  // perfil, não uma decisão definitiva de negócio: qualquer um pode ser
+  // ajustado depois em Configurações → Permissões (Store.setPermissao), sem
+  // precisar mexer em código.
+  //
+  // RODADA 2 (ajustes pedidos após revisão): a matriz da rodada 1 tinha
+  // concedido algumas permissões novas só pra não fazer sumir um item que já
+  // existia no menu antigo (ex.: Produção/Montador com assistencia.ver=true,
+  // agenda.ver=true, admin.equipe=true). Isso estava errado — a matriz precisa
+  // representar a arquitetura V2 de verdade, não proteger o menu legado. Os
+  // defaults abaixo foram corrigidos: cada perfil só tem a permissão que faz
+  // sentido pra ele na V2; se isso faz um item do menu legado sumir pra algum
+  // perfil, é a Fase 2 (nova navegação) que vai tratar disso, não uma
+  // permissão emprestada. O relatório desta rodada documenta exatamente quais
+  // itens de menu somem por causa disso.
+  //
+  // Renomeação conceitual (item 5 da Fase 1): "OPERADOR" passa a ser chamado
+  // de "Produção" e "LIDERANCA" de "Líder" — mas só o "label" (o que a pessoa
+  // vê na tela) mudou. A "key" interna (usada em COLABORADORES[].perfil,
+  // isOperador(), Store.pode(), etc.) continua exatamente "OPERADOR" e
+  // "LIDERANCA", de propósito, pra não quebrar nenhum colaborador já salvo em
+  // produção nem exigir migração de dado nenhuma.
+  //
+  // Dois perfis novos (item 4): GESTOR e ASSISTENCIA. Nenhum colaborador é
+  // atribuído a eles automaticamente (item 7) — hoje ninguém em COLABORADORES
+  // usa nenhuma das duas chaves; um admin precisa escolher manualmente em
+  // Equipe/Configurações pra alguém passar a ser GESTOR ou ASSISTENCIA.
+  //
+  // TV (item 6): continua existindo (nada removido — pode haver dependência
+  // de código/tela hoje), mas deixa de ser um perfil pensado pra pessoa real —
+  // nenhum COLABORADORES[].perfil usa "TV" (confirmado), e a intenção daqui
+  // pra frente é tratá-lo só como o modo de exibição do painel de chão de
+  // fábrica, não como um "usuário". Sua matriz é SOMENTE LEITURA — nenhuma
+  // chave de ação mutável (criar/editar/resolver/concluir/marcarPronto/
+  // aprovar/finalizar) é true pra TV, em lugar nenhum abaixo; as únicas true
+  // são as de leitura estritamente necessárias pro painel de chão de fábrica
+  // mostrar o estado da fábrica (obra.ver/obra.verTodas, montagem.ver,
+  // pendencia.ver, admin.indicadores — mantém o que a legada verIndicadores
+  // já dava).
+  //
+  // Acesso contextual à obra (item 3 do pedido de ajuste): "obra.ver"
+  // continua controlando só a LISTA (menu/rota "obras" — sem mudança). Três
+  // chaves novas, mais finas, descrevem o que cada perfil pode ver quando
+  // abre uma obra pelo DETALHE (rota "obra/:id"):
+  //   obra.verTodas      — acesso amplo, igual à lista completa (Admin/PCP/
+  //                         Líder/Gestor/TV).
+  //   obra.verAtribuidas — obras onde a pessoa tem algo atribuído (tarefa/
+  //                         pendência/assistência) — mesmo conceito que já
+  //                         existe em Store.obraIdsDoColaborador, usado hoje
+  //                         pra filtrar a lista restrita de Obras/Calendário.
+  //   obra.verContexto   — pode abrir UMA obra específica quando chega até
+  //                         ela por um caminho contextual legítimo (a própria
+  //                         pendência/tarefa/atendimento que menciona aquela
+  //                         obra), mesmo sem lista geral nem "atribuídas".
+  // AJUSTE (rodada 3, item 1): a rota de detalhe da obra não só EXIGE uma
+  // das três — agora TAMBÉM verifica se a obra específica pedida na URL é
+  // realmente do contexto da pessoa (Store.podeAbrirObra(obraId), em
+  // js/store.js). obra.verTodas continua liberando qualquer obra; já
+  // obra.verAtribuidas e obra.verContexto só liberam se o obraId estiver em
+  // Store.obraIdsDoColaborador(usuário atual) — sem isso, nega, mesmo com a
+  // permissão "presente". Não existe mais brecha de digitar o ID de uma
+  // obra alheia na URL. Ver ROUTE_PERMS/main.js pro guard de verdade e o
+  // comentário completo em Store.podeAbrirObra.
   const PERFIS = [
     {key:"ADMIN",     label:"Administrador",   descricao:"Acesso total, inclusive configurações e permissões.",
-      pode:{verValores:true, verIndicadores:true, verDesempenho:true, verRanking:true, verAuditoria:true, verTodasObras:true, verConfiguracoes:true, liberarExcecao:true, editarProcesso:true, editarPermissoes:true}},
-    {key:"PCP",       label:"PCP / Gestão",    descricao:"Planeja, acompanha e libera exceções do dia a dia.",
-      pode:{verValores:true, verIndicadores:true, verDesempenho:true, verRanking:true, verAuditoria:true, verTodasObras:true, verConfiguracoes:true, liberarExcecao:true, editarProcesso:true, editarPermissoes:false}},
-    {key:"LIDERANCA", label:"Liderança",       descricao:"Acompanha equipe e obras, pode liberar exceções.",
-      pode:{verValores:true, verIndicadores:true, verDesempenho:true, verRanking:true, verAuditoria:true, verTodasObras:true, verConfiguracoes:false, liberarExcecao:true, editarProcesso:false, editarPermissoes:false}},
-    {key:"OPERADOR",  label:"Operador",        descricao:"Executa tarefas, registra pendências e problemas.",
-      pode:{verValores:false, verIndicadores:false, verDesempenho:false, verRanking:true, verAuditoria:false, verTodasObras:false, verConfiguracoes:false, liberarExcecao:false, editarProcesso:false, editarPermissoes:false}},
-    {key:"MONTADOR",  label:"Montador",        descricao:"Executa montagem e entrega, registra pendências em obra.",
-      pode:{verValores:false, verIndicadores:false, verDesempenho:false, verRanking:true, verAuditoria:false, verTodasObras:false, verConfiguracoes:false, liberarExcecao:false, editarProcesso:false, editarPermissoes:false}},
-    {key:"TV",        label:"Consulta / TV",   descricao:"Apenas visualização — painel de chão de fábrica.",
-      pode:{verValores:false, verIndicadores:true, verDesempenho:false, verRanking:false, verAuditoria:false, verTodasObras:true, verConfiguracoes:false, liberarExcecao:false, editarProcesso:false, editarPermissoes:false}},
+      pode:{verValores:true, verIndicadores:true, verDesempenho:true, verRanking:true, verAuditoria:true, verTodasObras:true, verConfiguracoes:true, liberarExcecao:true, editarProcesso:true, editarPermissoes:true,
+        "obra.ver":true, "obra.criar":true, "obra.editar":true, "obra.arquivar":true, "obra.cancelar":true,
+        "obra.verTodas":true, "obra.verAtribuidas":true, "obra.verContexto":true,
+        "pendencia.ver":true, "pendencia.criar":true, "pendencia.editar":true, "pendencia.atribuir":true, "pendencia.resolver":true,
+        "montagem.ver":true, "montagem.marcarPronto":true, "montagem.aprovarFinalizacao":true, "montagem.finalizarComRessalva":true,
+        "assistencia.ver":true, "assistencia.criar":true, "assistencia.editar":true, "assistencia.concluir":true,
+        "agenda.ver":true, "agenda.criar":true, "agenda.editar":true,
+        "admin.ver":true, "admin.indicadores":true, "admin.auditoria":true, "admin.equipe":true, "admin.configuracoes":true, "admin.usuarios":true,
+        "producao.ver":true, "tv.configurar":true}},
+    {key:"PCP",       label:"PCP / Gestão",    descricao:"Planeja, acompanha e libera exceções do dia a dia. Responsável pela pré-produção (medição, projeto executivo, plano de corte, liberação para produção). Sem acesso administrativo por padrão (configurações/equipe/auditoria/indicadores) — só quem decidir isso no futuro liga de novo.",
+      pode:{verValores:true, verIndicadores:true, verDesempenho:true, verRanking:true, verAuditoria:true, verTodasObras:true, verConfiguracoes:true, liberarExcecao:true, editarProcesso:true, editarPermissoes:false,
+        "obra.ver":true, "obra.criar":true, "obra.editar":true, "obra.arquivar":false, "obra.cancelar":false,
+        "obra.verTodas":true, "obra.verAtribuidas":true, "obra.verContexto":true,
+        "pendencia.ver":true, "pendencia.criar":true, "pendencia.editar":true, "pendencia.atribuir":true, "pendencia.resolver":true,
+        "montagem.ver":true, "montagem.marcarPronto":true, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":true,
+        "assistencia.ver":true, "assistencia.criar":true, "assistencia.editar":true, "assistencia.concluir":true,
+        "agenda.ver":true, "agenda.criar":true, "agenda.editar":true,
+        "admin.ver":false, "admin.indicadores":false, "admin.auditoria":false, "admin.equipe":false, "admin.configuracoes":false, "admin.usuarios":false,
+        "producao.ver":true, "tv.configurar":false}},
+    {key:"LIDERANCA", label:"Líder",           descricao:"Acompanha equipe e obras, pode liberar exceções. Sem acesso administrativo geral por padrão (equipe/configurações/auditoria/indicadores) — não herda mais isso do sistema antigo. Indicadores administrativos não fazem parte do menu operacional padrão do Líder na V2; pode ser liberado depois via Permissões, se decidido. (Nome interno preservado como \"LIDERANCA\" por compatibilidade de dados — ver comentário acima.)",
+      pode:{verValores:true, verIndicadores:true, verDesempenho:true, verRanking:true, verAuditoria:true, verTodasObras:true, verConfiguracoes:false, liberarExcecao:true, editarProcesso:false, editarPermissoes:false,
+        "obra.ver":true, "obra.criar":false, "obra.editar":true, "obra.arquivar":false, "obra.cancelar":false,
+        "obra.verTodas":true, "obra.verAtribuidas":true, "obra.verContexto":true,
+        "pendencia.ver":true, "pendencia.criar":true, "pendencia.editar":true, "pendencia.atribuir":true, "pendencia.resolver":true,
+        "montagem.ver":true, "montagem.marcarPronto":true, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":true,
+        "assistencia.ver":true, "assistencia.criar":true, "assistencia.editar":true, "assistencia.concluir":true,
+        "agenda.ver":true, "agenda.criar":true, "agenda.editar":true,
+        // AJUSTE (rodada 3, item 2): admin.indicadores era true — passa a
+        // false. Indicadores/Desempenho saem do menu do Líder por padrão
+        // (ambos os itens de menu usam perm:"admin.indicadores" em
+        // js/router.js). verIndicadores (flag legada) É MANTIDA true de
+        // propósito (compatibilidade — ver comentário no topo do arquivo),
+        // mas isso não reabre a página: a camada ROTA usa admin.indicadores
+        // e bloqueia antes mesmo de M.Pages.indicadores() ser chamada, então
+        // não há contradição prática, só a flag antiga preservada sem efeito.
+        "admin.ver":false, "admin.indicadores":false, "admin.auditoria":false, "admin.equipe":false, "admin.configuracoes":false, "admin.usuarios":false,
+        "producao.ver":true, "tv.configurar":false}},
+    {key:"OPERADOR",  label:"Produção",        descricao:"Executa tarefas, registra pendências e problemas. Experiência enxuta, focada no trabalho do dia — só Hoje/Produção/Pendências/Tarefas e suas próprias ações; sem Obras, Assistências, Agenda ou Admin por padrão. (Nome interno preservado como \"OPERADOR\" por compatibilidade de dados.)",
+      pode:{verValores:false, verIndicadores:false, verDesempenho:false, verRanking:true, verAuditoria:false, verTodasObras:false, verConfiguracoes:false, liberarExcecao:false, editarProcesso:false, editarPermissoes:false,
+        "obra.ver":false, "obra.criar":false, "obra.editar":false, "obra.arquivar":false, "obra.cancelar":false,
+        "obra.verTodas":false, "obra.verAtribuidas":false, "obra.verContexto":true,
+        "pendencia.ver":true, "pendencia.criar":true, "pendencia.editar":false, "pendencia.atribuir":false, "pendencia.resolver":false,
+        "montagem.ver":false, "montagem.marcarPronto":false, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":false,
+        "assistencia.ver":false, "assistencia.criar":false, "assistencia.editar":false, "assistencia.concluir":false,
+        "agenda.ver":false, "agenda.criar":false, "agenda.editar":false,
+        "admin.ver":false, "admin.indicadores":false, "admin.auditoria":false, "admin.equipe":false, "admin.configuracoes":false, "admin.usuarios":false,
+        "producao.ver":true, "tv.configurar":false}},
+    {key:"MONTADOR",  label:"Montador",        descricao:"Executa montagem e entrega, registra pendências em obra. Não acessa Assistências como módulo geral, Equipe nem nenhuma área administrativa. Abre obra apenas no contexto de algo atribuído a ele (obra.verAtribuidas/verContexto) — não a lista geral.",
+      pode:{verValores:false, verIndicadores:false, verDesempenho:false, verRanking:true, verAuditoria:false, verTodasObras:false, verConfiguracoes:false, liberarExcecao:false, editarProcesso:false, editarPermissoes:false,
+        "obra.ver":false, "obra.criar":false, "obra.editar":false, "obra.arquivar":false, "obra.cancelar":false,
+        "obra.verTodas":false, "obra.verAtribuidas":true, "obra.verContexto":true,
+        "pendencia.ver":true, "pendencia.criar":true, "pendencia.editar":false, "pendencia.atribuir":false, "pendencia.resolver":false,
+        "montagem.ver":true, "montagem.marcarPronto":true, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":false,
+        "assistencia.ver":false, "assistencia.criar":false, "assistencia.editar":false, "assistencia.concluir":false,
+        "agenda.ver":true, "agenda.criar":false, "agenda.editar":false,
+        "admin.ver":false, "admin.indicadores":false, "admin.auditoria":false, "admin.equipe":false, "admin.configuracoes":false, "admin.usuarios":false,
+        "producao.ver":true, "tv.configurar":false}},
+    {key:"TV",        label:"Consulta / TV",   descricao:"Apenas visualização — painel de chão de fábrica. Matriz 100% somente-leitura (nenhuma chave mutável é true). Não é (e não deve ser) atribuído a nenhum colaborador real — ver nota acima.",
+      pode:{verValores:false, verIndicadores:true, verDesempenho:false, verRanking:false, verAuditoria:false, verTodasObras:true, verConfiguracoes:false, liberarExcecao:false, editarProcesso:false, editarPermissoes:false,
+        "obra.ver":true, "obra.criar":false, "obra.editar":false, "obra.arquivar":false, "obra.cancelar":false,
+        "obra.verTodas":true, "obra.verAtribuidas":true, "obra.verContexto":true,
+        "pendencia.ver":true, "pendencia.criar":false, "pendencia.editar":false, "pendencia.atribuir":false, "pendencia.resolver":false,
+        "montagem.ver":true, "montagem.marcarPronto":false, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":false,
+        "assistencia.ver":false, "assistencia.criar":false, "assistencia.editar":false, "assistencia.concluir":false,
+        "agenda.ver":false, "agenda.criar":false, "agenda.editar":false,
+        "admin.ver":false, "admin.indicadores":true, "admin.auditoria":false, "admin.equipe":false, "admin.configuracoes":false, "admin.usuarios":false,
+        "producao.ver":true, "tv.configurar":false}},
+    // ---- novos perfis (Fase 1, item 4) — zero colaboradores atribuídos hoje ----
+    {key:"GESTOR",    label:"Gestor",          descricao:"Acesso amplo operacional (obras, produção, montagem, equipe), mas não necessariamente configurações técnicas. Arquivar/cancelar obra ficam só com Admin até decisão futura.",
+      pode:{verValores:true, verIndicadores:true, verDesempenho:true, verRanking:true, verAuditoria:true, verTodasObras:true, verConfiguracoes:false, liberarExcecao:true, editarProcesso:false, editarPermissoes:false,
+        "obra.ver":true, "obra.criar":true, "obra.editar":true, "obra.arquivar":false, "obra.cancelar":false,
+        "obra.verTodas":true, "obra.verAtribuidas":true, "obra.verContexto":true,
+        "pendencia.ver":true, "pendencia.criar":true, "pendencia.editar":true, "pendencia.atribuir":true, "pendencia.resolver":true,
+        "montagem.ver":true, "montagem.marcarPronto":true, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":true,
+        "assistencia.ver":true, "assistencia.criar":true, "assistencia.editar":true, "assistencia.concluir":true,
+        "agenda.ver":true, "agenda.criar":true, "agenda.editar":true,
+        "admin.ver":true, "admin.indicadores":true, "admin.auditoria":true, "admin.equipe":true, "admin.configuracoes":false, "admin.usuarios":false,
+        "producao.ver":true, "tv.configurar":false}},
+    {key:"ASSISTENCIA",label:"Assistência",    descricao:"Restrita a atendimentos de assistência técnica, agenda e pendências relacionadas — sem Obras geral, Produção, Montagem geral ou Admin. Só abre o contexto da obra vinculada ao atendimento (obra.verContexto), nunca a lista geral.",
+      pode:{verValores:false, verIndicadores:false, verDesempenho:false, verRanking:false, verAuditoria:false, verTodasObras:false, verConfiguracoes:false, liberarExcecao:false, editarProcesso:false, editarPermissoes:false,
+        "obra.ver":false, "obra.criar":false, "obra.editar":false, "obra.arquivar":false, "obra.cancelar":false,
+        "obra.verTodas":false, "obra.verAtribuidas":false, "obra.verContexto":true,
+        "pendencia.ver":true, "pendencia.criar":true, "pendencia.editar":true, "pendencia.atribuir":false, "pendencia.resolver":true,
+        "montagem.ver":false, "montagem.marcarPronto":false, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":false,
+        "assistencia.ver":true, "assistencia.criar":true, "assistencia.editar":true, "assistencia.concluir":true,
+        "agenda.ver":true, "agenda.criar":true, "agenda.editar":true,
+        "admin.ver":false, "admin.indicadores":false, "admin.auditoria":false, "admin.equipe":false, "admin.configuracoes":false, "admin.usuarios":false,
+        "producao.ver":false, "tv.configurar":false}},
   ];
   const perfilDef = (key)=> PERFIS.find(p=>p.key===key) || PERFIS[3];
 

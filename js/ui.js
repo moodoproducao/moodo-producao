@@ -259,6 +259,19 @@
       : `<span class="small muted" title="Seu perfil não vê valores financeiros">•••••</span>`;
   }
 
+  // FASE 1 (V2 — permissões por ação, camada MENU): botão "+ Nova Obra"
+  // aparece em 4 telas (Hoje, Dashboard, Obras, Produção) fora do menu
+  // lateral — cada uma montava o próprio <a href="#/nova-obra">...</a> sem
+  // checagem nenhuma. Esta função central substitui as 4 cópias: some quando
+  // o perfil não tem "obra.criar" (ex. obrigatório da Fase 1: Montador não
+  // vê o botão) e continua igual pra quem tem. Ponto único, pra não voltar a
+  // ficar 4 versões que podem ir divergindo entre si (mesmo raciocínio de
+  // tarefaAcoesHtml acima).
+  function botaoNovaObraHtml(){
+    return (M.Store && M.Store.pode("obra.criar"))
+      ? `<a href="#/nova-obra" class="btn primary">${icon('plus',14)} Nova Obra</a>` : "";
+  }
+
   // botão de ação de uma tarefa (Iniciar/Concluir) — ponto único usado em
   // Tarefas geral, na aba Tarefas da obra e no modal do móvel, pra não ter
   // 3 versões que podem ir ficando diferentes entre si. voltarMovelId (opcional):
@@ -274,7 +287,7 @@
   const UI = {
     esc, initials, avatar, person, riscoChip, statusPendenciaChip, prioridadeChip, impactoChip, tipoChip, situacaoAmbienteChip, garantiaChip,
     tarefaStatusChip, resultadoChip, progressBar, stageDaysChip, icon, ICONS,
-    assistenciaStatusChip, perfilChip, valorOuOculto, tarefaAcoesHtml,
+    assistenciaStatusChip, perfilChip, valorOuOculto, tarefaAcoesHtml, botaoNovaObraHtml,
     statTile, card, progressRow, attentionItem, pageSearchInput, attachQuickSearch,
     fotoFieldHtml, fotosGaleriaHtml,
 

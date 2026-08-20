@@ -7,8 +7,22 @@
   M.Pages = M.Pages || {};
 
   M.Pages.paraFinalizar = function(){
-    const obras = M.Store.state.obras.slice().sort((a,b)=> C.progressoObra(b).pct - C.progressoObra(a).pct);
+    // AJUSTE (rodada 3, item 1): mesmo padrão de restrição já usado em
+    // Produção/Hoje/Montagem/Obras/Calendário (item 9) — sem verTodasObras,
+    // só entram obras onde a pessoa tem algo atribuído. Antes esta tela
+    // mostrava todas as obras pra qualquer perfil com montagem.ver (inclui
+    // Montador, que é restrito) e o link "Abrir obra →" sempre funcionava
+    // porque a rota de detalhe não tinha guard nenhum; agora que
+    // Store.podeAbrirObra() verifica o contexto de verdade, deixar esta
+    // lista sem o mesmo filtro criaria links "mortos" (aparecem, mas caem
+    // em "Acesso restrito") — corrigido aqui pra manter a lista coerente
+    // com o que a pessoa pode de fato abrir, não pra mudar regra de negócio.
+    const restrito = !M.Store.pode("verTodasObras");
+    const meuObraIds = restrito ? M.Store.obraIdsDoColaborador(M.Store.state.usuarioAtual) : null;
+    const obras = (restrito ? M.Store.state.obras.filter(o=>meuObraIds.has(o.id)) : M.Store.state.obras)
+      .slice().sort((a,b)=> C.progressoObra(b).pct - C.progressoObra(a).pct);
     const html = `
+      ${restrito? `<div class="help-banner">${UI.icon('user',13)} Mostrando só as obras onde você tem tarefa, pendência ou assistência atribuída.</div>`:""}
       <div class="help-banner">${UI.icon('check-circle',13)} Pergunta que esta tela responde: "o que falta para terminar cada obra?"</div>
       <div class="grid-2">
         ${obras.map(o=>{

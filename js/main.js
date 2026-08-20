@@ -12,6 +12,12 @@
   }
   function isOperador(colab){ return colab && (colab.perfil==="OPERADOR" || colab.perfil==="MONTADOR"); }
 
+  // FASE 1 (V2 — permissões por ação, camada MENU): item com "perm" só entra
+  // se M.Store.pode(perm) for verdadeiro; item sem "perm" continua sempre
+  // visível (comportamento inalterado). Aditivo sobre a troca binária
+  // MENU/MENU_OPERADOR que já existia — não substitui, só filtra em cima.
+  const filtraPorPermissao = (items)=> items.filter(it=> !it.perm || M.Store.pode(it.perm));
+
   function navHtml(activeKey, mobile, colab){
     const op = isOperador(colab);
     const renderItem = (it)=> mobile
@@ -24,17 +30,17 @@
         {key:"pendencias",label:"Pendências",icon:"alert",route:"#/pendencias"},
         {key:"tarefas",label:"Tarefas",icon:"list",route:"#/tarefas"},
         {key:"meu-painel",label:"Eu",icon:"user",route:"#/meu-painel"}];
-      return flat.map(renderItem).join("");
+      return filtraPorPermissao(flat).map(renderItem).join("");
     }
     const menu = op ? M.Router.MENU_OPERADOR : M.Router.MENU;
     return menu.map(g=> `
       ${g.group? `<div class="nav-label">${g.group}</div>`:""}
-      <div class="nav-group">${g.items.map(renderItem).join("")}</div>
+      <div class="nav-group">${filtraPorPermissao(g.items).map(renderItem).join("")}</div>
     `).join("");
   }
   function footerHtml(activeKey, colab){
     const op = isOperador(colab);
-    const footer = op ? M.Router.FOOTER_OPERADOR : M.Router.FOOTER;
+    const footer = filtraPorPermissao(op ? M.Router.FOOTER_OPERADOR : M.Router.FOOTER);
     const links = footer.map(it=> `<a class="nav-link ${it.key===activeKey?'active':''}" href="${it.route}">${UI.icon(it.icon,16)}${it.label}</a>`).join("");
     // regrupamento visual (Fase 6 — handoff): rótulo "Administração" sobre os
     // mesmos links Equipe/Configurações já existentes — não muda visibilidade
@@ -107,6 +113,39 @@
     const {key, params} = M.Router.parseHash();
     const fn = M.Router.ROUTES[key] || M.Router.ROUTES["hoje"];
     let page;
+    // FASE 1 (V2 — permissões por ação, camada ROTA): "não basta esconder
+    // botão" — se a rota exige uma ação (M.Router.ROUTE_PERMS) e o perfil
+    // atual não pode fazer essa ação, a função de página de verdade nem é
+    // chamada, mesmo que a pessoa tenha chegado aqui digitando a URL direto
+    // (não só pelo menu). Ex. obrigatório da Fase 1: Montador em "#/nova-obra"
+    // cai aqui, não em M.Pages.novaObra(). O valor em ROUTE_PERMS pode ser
+    // uma string (uma permissão) ou um array (BASTA UMA das listadas —
+    // usado por "obra", que aceita qualquer um dos 3 tipos de acesso
+    // contextual: ver comentário em js/router.js).
+    //
+    // AJUSTE (rodada 3, item 1): "obra" (detalhe) é caso especial — não
+    // basta ter uma das 3 permissões, tem que ser dono do CONTEXTO daquela
+    // obra específica pedida na URL (params[0] = obraId). Isso é decidido
+    // por M.Store.podeAbrirObra(obraId), não pelo check genérico de
+    // string/array — ver comentário completo em js/store.js.
+    const permNecessaria = M.Router.ROUTE_PERMS && M.Router.ROUTE_PERMS[key];
+    const temPermissaoDaRota = key==="obra"
+      ? M.Store.podeAbrirObra(params[0])
+      : (!permNecessaria || (Array.isArray(permNecessaria)
+          ? permNecessaria.some(p=> M.Store.pode(p))
+          : M.Store.pode(permNecessaria)));
+    if(permNecessaria && !temPermissaoDaRota){
+      const msgObra = `Esta obra não está no seu contexto (nenhuma tarefa, pendência ou assistência atribuída a você nela).`;
+      const msgPadrao = `Seu perfil (<b>${UI.esc(M.Store.perfilAtual().label)}</b>) não tem acesso a esta área.`;
+      page = {title:"Acesso restrito",
+        html:`<div class="card pad"><p>${key==="obra" ? msgObra : msgPadrao}</p></div>`};
+      document.body.classList.toggle("tv-mode", false);
+      const appRestrito = document.getElementById("app");
+      appRestrito.innerHTML = shell(key, page);
+      if(navegou) window.scrollTo(0,0);
+      renderPwaBanner();
+      return;
+    }
     try{
       page = fn(params) || {html:"<p>Página não encontrada.</p>"};
     }catch(e){

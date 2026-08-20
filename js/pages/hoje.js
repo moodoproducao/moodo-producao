@@ -164,7 +164,7 @@
       </div>
     `;
     return {title:"Hoje", crumb:"O que exige você, hoje", html,
-      actionsHtml:`${UI.pageSearchInput({id:'hojeSearch', placeholder:'Buscar obra, cliente, OS...'})} <a href="#/nova-obra" class="btn primary">${UI.icon('plus',14)} Nova Obra</a> <button class="btn" onclick="Act.openPendenciaForm(null,null,null)">${UI.icon('alert',14)} Registrar pendência</button>`,
+      actionsHtml:`${UI.pageSearchInput({id:'hojeSearch', placeholder:'Buscar obra, cliente, OS...'})} ${UI.botaoNovaObraHtml()} <button class="btn" onclick="Act.openPendenciaForm(null,null,null)">${UI.icon('alert',14)} Registrar pendência</button>`,
       afterRender(){
         UI.attachQuickSearch('hojeSearch', M.Store.state.obras.map(o=>({label:o.cliente, sub:o.numeroOS, href:`#/obra/${o.id}`})));
       }

@@ -128,7 +128,7 @@
       </div>
     `;
     return {title:"Dashboard", crumb:"O que está acontecendo agora na produção", html,
-      actionsHtml:`${UI.pageSearchInput({id:'dashSearch', placeholder:'Buscar obra, cliente, OS...'})} <a href="#/nova-obra" class="btn primary">${UI.icon('plus',14)} Nova Obra</a> <a href="#/chao-de-fabrica" class="btn hide-tv">${UI.icon('tv',14)} Modo TV</a>`,
+      actionsHtml:`${UI.pageSearchInput({id:'dashSearch', placeholder:'Buscar obra, cliente, OS...'})} ${UI.botaoNovaObraHtml()} <a href="#/chao-de-fabrica" class="btn hide-tv">${UI.icon('tv',14)} Modo TV</a>`,
       afterRender(){
         UI.attachQuickSearch('dashSearch', obras.map(o=>({label:o.cliente, sub:o.numeroOS, href:`#/obra/${o.id}`})));
       }

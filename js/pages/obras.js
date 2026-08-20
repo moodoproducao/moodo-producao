@@ -37,6 +37,6 @@
       </div>
     `;
     return {title:"Obras", crumb:"Todas as obras em produção", html,
-      actionsHtml:`<a href="#/nova-obra" class="btn primary">+ Nova Obra</a>`};
+      actionsHtml: UI.botaoNovaObraHtml()};
   };
 })();
