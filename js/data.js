@@ -270,13 +270,18 @@ window.M = window.M || {};
   // citação literal). Distinto do checklist antigo de MÓVEL já existente em
   // js/pages/montagem.js (CHECKLIST_ENCERRAMENTO) — este é por ambiente.
   // ============================================================
+  // FASE 5 (Montagem V2 — "ESTADOS APROVADOS"): renomeado de PRONTO/
+  // FINALIZADO_RESSALVA pra bater exatamente com os 6 nomes aprovados. Este
+  // catálogo continua não sendo lido por M.Calc.situacaoAmbiente (que monta
+  // seus próprios literais {key,label,tone,...} — ver comentário lá) — é só
+  // referência/documentação, mas as chaves precisam bater com as de lá.
   const STATUS_AMBIENTE_DEF = [
-    {key:"NAO_INICIADO",       label:"Não iniciado",             tone:"neutral"},
-    {key:"EM_MONTAGEM",        label:"Em montagem",              tone:"neutral"},
-    {key:"TRAVADO",            label:"Travado",                  tone:"blocked"},
-    {key:"PRONTO",             label:"Pronto para finalizar",    tone:"info"},
-    {key:"FINALIZADO",         label:"Finalizado",               tone:"good"},
-    {key:"FINALIZADO_RESSALVA",label:"Finalizado com ressalva",  tone:"warning"},
+    {key:"NAO_INICIADO",           label:"Não iniciado",             tone:"neutral"},
+    {key:"EM_MONTAGEM",            label:"Em montagem",              tone:"info"},
+    {key:"TRAVADO",                label:"Travado",                  tone:"blocked"},
+    {key:"PRONTO_PARA_FINALIZAR",  label:"Pronto para finalizar",    tone:"pronto"},
+    {key:"FINALIZADO",             label:"Finalizado",               tone:"good"},
+    {key:"FINALIZADO_COM_RESSALVA",label:"Finalizado com ressalva",  tone:"warning"},
   ];
   const CHECKLIST_ENCERRAMENTO_AMBIENTE = [
     "Móveis instalados","Portas reguladas","Frentes","Puxadores","Acabamentos",
@@ -368,13 +373,23 @@ window.M = window.M || {};
   // permissão "presente". Não existe mais brecha de digitar o ID de uma
   // obra alheia na URL. Ver ROUTE_PERMS/main.js pro guard de verdade e o
   // comentário completo em Store.podeAbrirObra.
+  //
+  // FASE 5 (rodada de ajustes) — montagem.iniciar / montagem.travar /
+  // montagem.destravar são chaves NOVAS e granulares (antes, essas 3 ações
+  // reaproveitavam montagem.marcarPronto). Defaults abaixo: ADMIN, PCP,
+  // LIDERANCA, GESTOR e MONTADOR = true nas 3; OPERADOR, TV e ASSISTENCIA =
+  // false. Editável depois pela matriz de Permissões (Configurações), como
+  // qualquer outra chave — não há perfil hardcoded em nenhuma ação de
+  // montagem. Ver Store.mergePermissoes: estado salvo antigo (sem essas
+  // chaves) ganha os defaults abaixo automaticamente, sem perder nenhuma
+  // customização já feita em outras ações.
   const PERFIS = [
     {key:"ADMIN",     label:"Administrador",   descricao:"Acesso total, inclusive configurações e permissões.",
       pode:{verValores:true, verIndicadores:true, verDesempenho:true, verRanking:true, verAuditoria:true, verTodasObras:true, verConfiguracoes:true, liberarExcecao:true, editarProcesso:true, editarPermissoes:true,
         "obra.ver":true, "obra.criar":true, "obra.editar":true, "obra.arquivar":true, "obra.cancelar":true,
         "obra.verTodas":true, "obra.verAtribuidas":true, "obra.verContexto":true,
         "pendencia.ver":true, "pendencia.criar":true, "pendencia.editar":true, "pendencia.atribuir":true, "pendencia.resolver":true,
-        "montagem.ver":true, "montagem.marcarPronto":true, "montagem.aprovarFinalizacao":true, "montagem.finalizarComRessalva":true,
+        "montagem.ver":true, "montagem.iniciar":true, "montagem.travar":true, "montagem.destravar":true, "montagem.marcarPronto":true, "montagem.aprovarFinalizacao":true, "montagem.finalizarComRessalva":true,
         "assistencia.ver":true, "assistencia.criar":true, "assistencia.editar":true, "assistencia.concluir":true,
         "agenda.ver":true, "agenda.criar":true, "agenda.editar":true,
         "admin.ver":true, "admin.indicadores":true, "admin.auditoria":true, "admin.equipe":true, "admin.configuracoes":true, "admin.usuarios":true,
@@ -384,7 +399,7 @@ window.M = window.M || {};
         "obra.ver":true, "obra.criar":true, "obra.editar":true, "obra.arquivar":false, "obra.cancelar":false,
         "obra.verTodas":true, "obra.verAtribuidas":true, "obra.verContexto":true,
         "pendencia.ver":true, "pendencia.criar":true, "pendencia.editar":true, "pendencia.atribuir":true, "pendencia.resolver":true,
-        "montagem.ver":true, "montagem.marcarPronto":true, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":true,
+        "montagem.ver":true, "montagem.iniciar":true, "montagem.travar":true, "montagem.destravar":true, "montagem.marcarPronto":true, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":true,
         "assistencia.ver":true, "assistencia.criar":true, "assistencia.editar":true, "assistencia.concluir":true,
         "agenda.ver":true, "agenda.criar":true, "agenda.editar":true,
         "admin.ver":false, "admin.indicadores":false, "admin.auditoria":false, "admin.equipe":false, "admin.configuracoes":false, "admin.usuarios":false,
@@ -394,7 +409,7 @@ window.M = window.M || {};
         "obra.ver":true, "obra.criar":false, "obra.editar":true, "obra.arquivar":false, "obra.cancelar":false,
         "obra.verTodas":true, "obra.verAtribuidas":true, "obra.verContexto":true,
         "pendencia.ver":true, "pendencia.criar":true, "pendencia.editar":true, "pendencia.atribuir":true, "pendencia.resolver":true,
-        "montagem.ver":true, "montagem.marcarPronto":true, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":true,
+        "montagem.ver":true, "montagem.iniciar":true, "montagem.travar":true, "montagem.destravar":true, "montagem.marcarPronto":true, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":true,
         "assistencia.ver":true, "assistencia.criar":true, "assistencia.editar":true, "assistencia.concluir":true,
         "agenda.ver":true, "agenda.criar":true, "agenda.editar":true,
         // AJUSTE (rodada 3, item 2): admin.indicadores era true — passa a
@@ -412,7 +427,7 @@ window.M = window.M || {};
         "obra.ver":false, "obra.criar":false, "obra.editar":false, "obra.arquivar":false, "obra.cancelar":false,
         "obra.verTodas":false, "obra.verAtribuidas":false, "obra.verContexto":true,
         "pendencia.ver":true, "pendencia.criar":true, "pendencia.editar":false, "pendencia.atribuir":false, "pendencia.resolver":false,
-        "montagem.ver":false, "montagem.marcarPronto":false, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":false,
+        "montagem.ver":false, "montagem.iniciar":false, "montagem.travar":false, "montagem.destravar":false, "montagem.marcarPronto":false, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":false,
         "assistencia.ver":false, "assistencia.criar":false, "assistencia.editar":false, "assistencia.concluir":false,
         "agenda.ver":false, "agenda.criar":false, "agenda.editar":false,
         "admin.ver":false, "admin.indicadores":false, "admin.auditoria":false, "admin.equipe":false, "admin.configuracoes":false, "admin.usuarios":false,
@@ -422,7 +437,7 @@ window.M = window.M || {};
         "obra.ver":false, "obra.criar":false, "obra.editar":false, "obra.arquivar":false, "obra.cancelar":false,
         "obra.verTodas":false, "obra.verAtribuidas":true, "obra.verContexto":true,
         "pendencia.ver":true, "pendencia.criar":true, "pendencia.editar":false, "pendencia.atribuir":false, "pendencia.resolver":false,
-        "montagem.ver":true, "montagem.marcarPronto":true, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":false,
+        "montagem.ver":true, "montagem.iniciar":true, "montagem.travar":true, "montagem.destravar":true, "montagem.marcarPronto":true, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":false,
         "assistencia.ver":false, "assistencia.criar":false, "assistencia.editar":false, "assistencia.concluir":false,
         "agenda.ver":true, "agenda.criar":false, "agenda.editar":false,
         "admin.ver":false, "admin.indicadores":false, "admin.auditoria":false, "admin.equipe":false, "admin.configuracoes":false, "admin.usuarios":false,
@@ -432,7 +447,7 @@ window.M = window.M || {};
         "obra.ver":true, "obra.criar":false, "obra.editar":false, "obra.arquivar":false, "obra.cancelar":false,
         "obra.verTodas":true, "obra.verAtribuidas":true, "obra.verContexto":true,
         "pendencia.ver":true, "pendencia.criar":false, "pendencia.editar":false, "pendencia.atribuir":false, "pendencia.resolver":false,
-        "montagem.ver":true, "montagem.marcarPronto":false, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":false,
+        "montagem.ver":true, "montagem.iniciar":false, "montagem.travar":false, "montagem.destravar":false, "montagem.marcarPronto":false, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":false,
         "assistencia.ver":false, "assistencia.criar":false, "assistencia.editar":false, "assistencia.concluir":false,
         "agenda.ver":false, "agenda.criar":false, "agenda.editar":false,
         "admin.ver":false, "admin.indicadores":true, "admin.auditoria":false, "admin.equipe":false, "admin.configuracoes":false, "admin.usuarios":false,
@@ -443,7 +458,7 @@ window.M = window.M || {};
         "obra.ver":true, "obra.criar":true, "obra.editar":true, "obra.arquivar":false, "obra.cancelar":false,
         "obra.verTodas":true, "obra.verAtribuidas":true, "obra.verContexto":true,
         "pendencia.ver":true, "pendencia.criar":true, "pendencia.editar":true, "pendencia.atribuir":true, "pendencia.resolver":true,
-        "montagem.ver":true, "montagem.marcarPronto":true, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":true,
+        "montagem.ver":true, "montagem.iniciar":true, "montagem.travar":true, "montagem.destravar":true, "montagem.marcarPronto":true, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":true,
         "assistencia.ver":true, "assistencia.criar":true, "assistencia.editar":true, "assistencia.concluir":true,
         "agenda.ver":true, "agenda.criar":true, "agenda.editar":true,
         "admin.ver":true, "admin.indicadores":true, "admin.auditoria":true, "admin.equipe":true, "admin.configuracoes":false, "admin.usuarios":false,
@@ -453,7 +468,7 @@ window.M = window.M || {};
         "obra.ver":false, "obra.criar":false, "obra.editar":false, "obra.arquivar":false, "obra.cancelar":false,
         "obra.verTodas":false, "obra.verAtribuidas":false, "obra.verContexto":true,
         "pendencia.ver":true, "pendencia.criar":true, "pendencia.editar":true, "pendencia.atribuir":false, "pendencia.resolver":true,
-        "montagem.ver":false, "montagem.marcarPronto":false, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":false,
+        "montagem.ver":false, "montagem.iniciar":false, "montagem.travar":false, "montagem.destravar":false, "montagem.marcarPronto":false, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":false,
         "assistencia.ver":true, "assistencia.criar":true, "assistencia.editar":true, "assistencia.concluir":true,
         "agenda.ver":true, "agenda.criar":true, "agenda.editar":true,
         "admin.ver":false, "admin.indicadores":false, "admin.auditoria":false, "admin.equipe":false, "admin.configuracoes":false, "admin.usuarios":false,

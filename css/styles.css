@@ -9,14 +9,14 @@
 :root{
   /* ---- tokens de cor (handoff · Design System) ---- */
   --color-canvas:        #ffffff;   /* fundo de página */
-  --color-surface:       #fafaf9;   /* superfície de card/tabela */
-  --color-surface-alt:   #f1efec;
+  --color-surface:       #fafafa;   /* superfície de card/tabela */
+  --color-surface-alt:   #f2f2f1;   /* AJUSTE (rodada visual): era #f1efec (viés bege) — cinza neutro */
   --color-graphite:      #121213;   /* texto primário */
   --color-graphite-2:    #24272d;   /* mantido por compat — ver --on-dark-active-bg p/ sidebar */
   --color-ink-soft:      #55554f;   /* texto secundário */
   --color-ink-mute:      #9b9b98;   /* texto terciário */
   --color-border:        #e4e4e3;
-  --color-border-strong: #cfcecb;
+  --color-border-strong: #d1d1d0;
 
   --color-success:       #2e6b4c;
   --color-success-bg:    #e4f0e9;
@@ -30,9 +30,13 @@
   --color-blocked-bg:    #e9e9e8;
   --color-accent:        #8a5a38;   /* marrom Moodo — assinatura, nunca preenchimento grande */
   --color-accent-deep:   #5e3b22;
-  --color-accent-bg:     #f1e7de;
+  --color-accent-bg:     #f2f2f1;   /* AJUSTE (rodada visual): era #f1e7de (bege) — usado em help-banner/
+                                        next-action/obra-ambiente-card.foco/chip.brand; marrom já aparece
+                                        nesses componentes via borda/texto/ícone (--brand-dark/--brand),
+                                        então o preenchimento vira cinza neutro (sem bege) e o marrom
+                                        continua como assinatura pontual, não como preenchimento grande */
   --color-neutral:       #9b9b98;
-  --color-neutral-bg:    #f1efec;
+  --color-neutral-bg:    #f2f2f1;
 
   /* ---- tipografia ---- */
   --font-ui:   'IBM Plex Sans', -apple-system, "Segoe UI", system-ui, Roboto, sans-serif;
@@ -63,11 +67,21 @@
   --shadow-lg: 0 20px 48px rgba(18,18,19,0.16);
 
   /* ---- superfícies escuras (sidebar / hero mobile) — tons neutros,
-     marrom Moodo entra só como assinatura pontual (nav ativo) ---- */
-  --on-dark-bg:           #17191a;
-  --on-dark-text:         #ede2d5;
-  --on-dark-text-mute:    #b8a48d;
-  --on-dark-active-bg:    rgba(138,90,56,0.28);
+     marrom Moodo entra só como assinatura pontual (nav ativo).
+     AJUSTE (rodada visual): --on-dark-bg era #17191a (ok, mas ficava perto
+     de grafite-esverdeado); agora #121212 (referência aprovada: preto/
+     grafite #111111–#151515). --on-dark-text/--on-dark-text-mute eram tons
+     quentes (creme/tan, #ede2d5/#b8a48d) — liam como "bege" na sidebar
+     inteira; agora cinza neutro. --on-dark-active-bg era um preenchimento
+     TRANSLÚCIDO MARROM (rgba(138,90,56,...)) — virava uma área marrom
+     grande atrás do item ativo, contrariando "marrom só como assinatura,
+     nunca preenchimento grande"; agora é grafite mais claro (overlay branco
+     translúcido neutro), com o marrom Moodo reservado só pra linha vertical
+     fina (--on-dark-active-accent, no border-left). ---- */
+  --on-dark-bg:           #121212;
+  --on-dark-text:         #d6d6d6;
+  --on-dark-text-mute:    #8f8f8f;
+  --on-dark-active-bg:    rgba(255,255,255,0.08);
   --on-dark-active-accent: var(--color-accent);
 
   /* ---- aliases legados — todo o resto do app (15+ páginas) já lê cor
@@ -228,6 +242,12 @@ p{ margin:0; }
   .topbar{ padding:14px 16px; gap:8px 10px; flex-wrap:wrap; }
   .topbar h1{ font-size:18px; }
   .topbar-actions{ flex-wrap:wrap; row-gap:8px; }
+  /* AJUSTE VISUAL (rodada de ajustes, §7.6): ações de campo (Iniciar,
+     Marcar travado, Destravar, + Pendência, Marcar pronto etc.) precisam
+     de alvo de toque maior no celular — .btn.sm ficava pequeno demais pra
+     operar parado no chão de fábrica. Só no breakpoint mobile; desktop
+     continua compacto. */
+  .btn.sm{ padding:9px 13px; font-size:13px; }
 }
 @media (max-width: 480px){
   .topbar{ flex-direction:column; align-items:stretch; }
@@ -267,6 +287,14 @@ p{ margin:0; }
 .chip.neutral{ background:var(--neutral-bg); color:var(--ink-soft); }
 .chip.brand{ background:var(--brand-wash); color:var(--brand-dark); }
 .chip.gold{ background:var(--gold-soft); color:var(--gold); }
+/* chip.pronto: exclusivo de PRONTO_PARA_FINALIZAR (Montagem V2, rodada
+   visual — §7.4/§7.5). Precisa ser MUITO mais evidente que o .chip.info
+   discreto (usado em EM_MONTAGEM) — preenchimento cheio, não só um tom
+   pálido — porque PRONTO ≠ FINALIZADO e quem aprova precisa bater o olho e
+   ver que algo espera ação. Continua sendo o mesmo azul (--info), só que
+   sólido em vez de pálido — não inventa uma cor nova no sistema. */
+.chip.pronto{ background:var(--info); color:#fff; font-weight:800; }
+.dot.pronto{ background:#fff; }
 /* chip.outline: "contorno" — usado por Garantia "Em análise" (Fase 5). Sem
    preenchimento, só borda — terceira forma geométrica distinta de
    cheio (coberto) e hachurado (não coberto). */

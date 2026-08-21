@@ -102,6 +102,27 @@
     </div>`;
   }
 
+  // FASE 5 (Montagem V2, §1: "quem precisa agir"): ambientes marcados como
+  // prontos por Montador/PCP/Líder/Gestor, aguardando quem tem
+  // montagem.aprovarFinalizacao aprovar. Condicional na PERMISSÃO de quem
+  // está vendo a tela (Store.pode), não no perfil — hoje só Admin tem essa
+  // permissão por padrão, mas se isso mudar em Configurações → Permissões
+  // este bloco aparece sozinho pra quem passar a ter, sem precisar tocar
+  // neste arquivo de novo.
+  function ambientePendenteAprovacaoHtml({o,a}){
+    return `<div class="alert-item" style="cursor:pointer;" onclick="Act.irParaObra('${o.id}','${a.id}')">
+      ${UI.icon('check-circle',13)}
+      <div><div><b>${esc(o.cliente)}</b> · ${esc(a.nome)}</div>
+      <div class="alert-sub">pronto para finalizar — aguardando aprovação</div></div>
+    </div>`;
+  }
+  function blocoAguardandoAprovacaoMontagem(ctx){
+    if(!M.Store.pode("montagem.aprovarFinalizacao")) return "";
+    const itens = ctx.obras.flatMap(o=> o.ambientes.filter(a=> C.situacaoAmbiente(a).key==="PRONTO_PARA_FINALIZAR").map(a=>({o,a})));
+    return blocoLista({titulo:"Aguardando aprovação de finalização", icon:"check-circle", total:itens.length, tone: itens.length?"warning":undefined,
+      itens: itens.map(ambientePendenteAprovacaoHtml), vazio:"Nenhum ambiente aguardando aprovação agora."});
+  }
+
   // compromisso do M.Calendario (mesma fonte da tela Calendário — nunca
   // reimplementa a agregação de eventos aqui).
   function compromissoHtml(e){
@@ -165,6 +186,7 @@
             <div class="alert-sub">${a.prazo&&C.diasAte(a.prazo)<0? "prazo vencido":"retorno necessário"}</div></div></div>`),
           vazio:"Nenhuma assistência crítica agora."})}
       </div>
+      ${(()=>{ const b=blocoAguardandoAprovacaoMontagem(ctx); return b? `<div class="hr"></div>${b}` : ""; })()}
       <div class="hr"></div>
       ${blocoLista({titulo:"Próximos compromissos", icon:"calendar", tone:"neutral",
         itens:ctx.compromissos.map(compromissoHtml), vazio:"Nada nos próximos 7 dias."})}
@@ -209,6 +231,7 @@
         ${blocoLista({titulo:"Em preparação para liberação", icon:"clock", tone:"neutral",
           itens:emPreparacao.map(obraFaseItemHtml), vazio:"Nenhuma obra em plano de corte agora."})}
       </div>
+      ${(()=>{ const b=blocoAguardandoAprovacaoMontagem(ctx); return b? `<div class="hr"></div>${b}` : ""; })()}
       <div class="hr"></div>
       ${blocoLista({titulo:"Prazos próximos", icon:"calendar", tone:"neutral",
         itens:ctx.compromissos.filter(e=>["obra","movel"].includes(e.tipo)||e.tab==="pendencias").slice(0,6).map(compromissoHtml),
@@ -237,6 +260,7 @@
             </div>`).join("") : `<p class="small muted">Nenhum ambiente perto do fechamento agora.</p>`}
         </div>
       </div>
+      ${(()=>{ const b=blocoAguardandoAprovacaoMontagem(ctx); return b? `<div class="hr"></div>${b}` : ""; })()}
     `;
   }
 
@@ -272,34 +296,68 @@
     `;
   }
 
-  // ---- MONTADOR: obra(s) do dia, endereço, equipe, pendências, ambientes
-  // travados. "Ações rápidas futuras (Localização/Projetos/Pendência/Foto/
-  // Finalizar)" — não implementado ainda (Montagem V2 completa é fase
-  // futura); aqui só o essencial pra saber onde ir e o que está travando.
+  // FASE 5 (Montagem V2, §12/§13): próximo passo compacto por ambiente, pra
+  // uso em campo (mobile-first) — mesma decisão de js/pages/montagem.js e
+  // js/pages/obraDetail.js (permissão + estado), versão de UMA ação principal
+  // (não duas), porque aqui o objetivo é "o que eu faço agora nesta obra",
+  // não uma tela de gestão.
+  function acaoRapidaAmbienteHtml(a, sit){
+    // AJUSTE (rodada de ajustes): permissões granulares — iniciar/travar/
+    // destravar não reaproveitam mais montagem.marcarPronto. Aprovar não
+    // aparece aqui de propósito (§7.6/§13 — Montador nunca vê "Aprovar",
+    // mesmo que o perfil dele algum dia ganhasse a permissão por engano na
+    // matriz; esta é a tela de ação rápida em campo, não a de gestão).
+    const podeIniciar = M.Store.pode("montagem.iniciar");
+    const podeTravar = M.Store.pode("montagem.travar");
+    const podeDestravar = M.Store.pode("montagem.destravar");
+    const podeMarcarPronto = M.Store.pode("montagem.marcarPronto");
+    if(sit.key==="TRAVADO"){
+      if(sit.origem==="MANUAL" && podeDestravar) return `<button class="btn sm" onclick="Act.destravarAmbiente('${a.id}')">${UI.icon('lock',12)} Destravar</button>`;
+      return `<a class="btn sm ghost" href="#/pendencias">${UI.icon('lock',12)} Ver pendência</a>`;
+    }
+    if(sit.key==="PRONTO_PARA_FINALIZAR") return `<span class="chip info">${UI.icon('clock',11)} Aguardando aprovação</span>`;
+    if(sit.key==="NAO_INICIADO") return podeIniciar? `<button class="btn sm" onclick="Act.iniciarMontagemAmbiente('${a.id}')">${UI.icon('wrench',12)} Iniciar montagem</button>` : "";
+    if(sit.prontoParaMarcar && podeMarcarPronto) return `<button class="btn sm primary" onclick="Act.abrirFinalizarAmbiente('${a.id}')">${UI.icon('check-circle',12)} Marcar pronto</button>`;
+    return podeTravar? `<button class="btn sm ghost" onclick="Act.abrirMarcarTravado('${a.id}')">${UI.icon('lock',12)} Marcar travado</button>` : "";
+  }
+  // ---- MONTADOR: obra(s) do dia (qualquer obra com ambiente ainda não
+  // finalizado — não mais só quem tem móvel na etapa MONTAGEM, porque agora
+  // "iniciar montagem" é uma ação explícita, não só derivada da etapa do
+  // móvel), ambientes com estado + pendências + ação rápida (§12/§13).
   function grupoMontador(ctx){
-    const obrasDoDia = ctx.obras.filter(o=> M.Store.allMoveis().some(({o:oo,m})=> oo.id===o.id && m.etapa==="MONTAGEM"));
+    const obrasDoDia = ctx.obras.filter(o=> o.ambientes.some(a=>{
+      const k = C.situacaoAmbiente(a).key;
+      return k!=="FINALIZADO" && k!=="FINALIZADO_COM_RESSALVA";
+    }));
     return `
-      <div class="card pad">
-        <div class="card-title"><span style="flex:1;">Obra(s) do dia</span></div>
-        ${obrasDoDia.length ? obrasDoDia.map(o=>{
-          const moveisMontagem = M.Store.allMoveis().filter(({o:oo,m})=> oo.id===o.id && m.etapa==="MONTAGEM");
-          const equipe = Array.from(new Set(moveisMontagem.map(({m})=>m.responsavel).filter(Boolean)));
-          const pend = C.pendenciasAbertasDe(o.id).length;
-          return `<div class="card pad" style="background:var(--surface-alt);margin-bottom:8px;">
-            <div class="flex-between"><b>${esc(o.cliente)}</b><span class="small muted">${o.numeroOS}</span></div>
-            ${o.endereco? `<div class="small muted" style="margin-top:2px;">${UI.icon('map-pin',11)} ${esc(o.endereco)}</div>`:""}
-            <div class="small muted" style="margin-top:2px;">${equipe.length? "Equipe: "+equipe.map(esc).join(", ") : ""}</div>
-            <div class="small muted" style="margin-top:2px;">${pend? `${pend} pendência(s) na obra` : "sem pendências"}</div>
-            <div style="margin-top:8px;display:flex;gap:8px;">
-              <a class="btn sm ghost" href="#/montagem">Ver montagem</a>
-              <a class="btn sm ghost" href="#/obra/${o.id}">Abrir obra</a>
-            </div>
-          </div>`;
-        }).join("") : `<p class="small muted">Nenhuma obra em montagem atribuída a você hoje.</p>`}
-      </div>
-      <div class="hr"></div>
-      ${blocoLista({titulo:"Ambientes travados", icon:"lock", total:ctx.ambientesTravados.length,
-        itens:ctx.ambientesTravados.map(ambienteTravadoHtml), vazio:"Nenhum ambiente travado nas suas obras."})}
+      ${obrasDoDia.length ? obrasDoDia.map(o=>{
+        const ambientesAbertos = o.ambientes.filter(a=>{
+          const k = C.situacaoAmbiente(a).key;
+          return k!=="FINALIZADO" && k!=="FINALIZADO_COM_RESSALVA";
+        });
+        return `<div class="card pad" style="margin-bottom:10px;">
+          <div class="flex-between"><b>${esc(o.cliente)}</b><span class="small muted">${o.numeroOS}</span></div>
+          ${o.endereco? `<div class="small muted" style="margin-top:2px;">${UI.icon('map-pin',11)} ${esc(o.endereco)}</div>`:""}
+          <div style="margin-top:8px;">
+            ${ambientesAbertos.map(a=>{
+              const sit = C.situacaoAmbiente(a);
+              const pend = M.Store.state.pendencias.filter(p=>p.ambienteId===a.id && p.status!=="RESOLVIDA").length;
+              return `<div class="check-row" style="align-items:flex-start;">
+                <div style="flex:1;">
+                  <div class="flex-gap" style="align-items:center;"><b>${esc(a.nome)}</b>${UI.situacaoAmbienteChip(sit)}</div>
+                  ${sit.motivo? `<div class="small" style="color:var(--critical);margin-top:2px;">${UI.icon('lock',10)} ${esc(sit.motivo)}</div>`:""}
+                  ${pend? `<div class="small muted" style="margin-top:2px;">${pend} pendência(s) neste ambiente</div>`:""}
+                </div>
+                <div>${acaoRapidaAmbienteHtml(a, sit)}</div>
+              </div>`;
+            }).join("")}
+          </div>
+          <div style="margin-top:8px;display:flex;gap:8px;">
+            <a class="btn sm ghost" href="#/obra/${o.id}">Abrir obra</a>
+            ${M.Store.pode("pendencia.criar")? `<button class="btn sm ghost" onclick="Act.openPendenciaForm('${o.id}',null)">${UI.icon('alert',12)} + Pendência</button>`:""}
+          </div>
+        </div>`;
+      }).join("") : `<p class="small muted">Nenhuma obra com ambiente em aberto atribuída a você hoje.</p>`}
     `;
   }
 

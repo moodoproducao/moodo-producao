@@ -258,24 +258,86 @@
             <p class="small muted">Componentes: ${o.fichaTecnica.componentes.join(", ")}</p>` : ""}
         </div>
       </div>
+
+      ${planejamentoMontagemCardHtml(o)}
     `;
   }
 
+  // FASE 5 (§10/§15): planejamento vive DENTRO da obra (sem aba nova) — bloco
+  // contextual na Visão Geral, não uma aba "Montagem" separada. Editar exige
+  // obra.editar (mesma permissão de sempre pra mexer em dados da obra).
+  function planejamentoMontagemCardHtml(o){
+    const p = o.planejamentoMontagem || {};
+    const podeEditar = M.Store.pode("obra.editar");
+    const semDados = !p.inicioPrevisto && !p.inicioReal;
+    return `
+      <div class="hr" style="margin:18px 0;"></div>
+      <div class="card pad">
+        <div class="flex-between">
+          <div class="card-title" style="margin:0;">${UI.icon('calendar',13)}Planejamento de montagem</div>
+          ${podeEditar? `<button class="btn sm ghost" onclick="Act.abrirPlanejamentoMontagem('${o.id}')">${semDados?'Planejar montagem':'Editar planejamento'}</button>` : ""}
+        </div>
+        ${semDados ? `<p class="small muted" style="margin-top:8px;">Nenhum planejamento definido ainda.</p>` : `
+        <div style="margin-top:10px;display:flex;gap:28px;flex-wrap:wrap;">
+          <div style="min-width:170px;">
+            <div class="small muted" style="font-family:var(--font-mono);font-size:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:500;">Previsto</div>
+            <div class="mono" style="font-size:13px;margin-top:3px;">${p.inicioPrevisto?C.fmtDate(p.inicioPrevisto):"—"} → ${p.fimPrevistoCalculado?C.fmtDate(p.fimPrevistoCalculado):"—"}</div>
+          </div>
+          <div style="min-width:170px;">
+            <div class="small muted" style="font-family:var(--font-mono);font-size:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:500;">Realizado</div>
+            <div class="mono" style="font-size:13px;margin-top:3px;">${p.inicioReal?C.fmtDate(p.inicioReal):"—"} → ${p.fimReal?C.fmtDate(p.fimReal):"— (em andamento)"}${p.duracaoRealDias!=null?` · ${p.duracaoRealDias}d`:""}</div>
+          </div>
+        </div>
+        ${p.equipePlanejada? `<div class="small muted" style="margin-top:10px;">Equipe planejada: ${UI.esc(p.equipePlanejada)}</div>`:""}
+        ${p.observacoes? `<div class="small muted" style="margin-top:4px;">${UI.esc(p.observacoes)}</div>`:""}
+        `}
+      </div>
+    `;
+  }
+
+  // FASE 5: próximo passo por estado — mesma decisão de
+  // js/pages/montagem.js (o botão que faz sentido conforme estado +
+  // permissão de quem está olhando), versão compacta pro contexto de Obra.
+  function proximoPassoAmbienteObraHtml(a, sitAmb){
+    // AJUSTE (rodada de ajustes): permissões granulares — iniciar/travar/
+    // destravar não reaproveitam mais montagem.marcarPronto.
+    const podeIniciar = M.Store.pode("montagem.iniciar");
+    const podeTravar = M.Store.pode("montagem.travar");
+    const podeDestravar = M.Store.pode("montagem.destravar");
+    const podeMarcarPronto = M.Store.pode("montagem.marcarPronto");
+    const podeAprovar = M.Store.pode("montagem.aprovarFinalizacao");
+    if(sitAmb.key==="TRAVADO"){
+      if(sitAmb.origem==="MANUAL" && podeDestravar) return `<button class="btn sm" onclick="Act.destravarAmbiente('${a.id}')">${UI.icon('lock',12)} Destravar</button>`;
+      return `<a class="btn sm" href="#/pendencias">${UI.icon('lock',12)} Ver pendência</a>`;
+    }
+    if(sitAmb.key==="PRONTO_PARA_FINALIZAR"){
+      if(podeAprovar) return `<button class="btn sm primary" onclick="Act.aprovarFinalizacaoAmbiente('${a.id}')">${UI.icon('check-circle',12)} Aprovar finalização</button>`;
+      return `<span class="chip info">${UI.icon('clock',11)} Aguardando aprovação</span>`;
+    }
+    if(sitAmb.key==="FINALIZADO" || sitAmb.key==="FINALIZADO_COM_RESSALVA"){
+      return `<button class="btn sm" onclick="Act.reabrirAmbiente('${a.id}')">${UI.icon('refresh',12)} Reabrir</button>`;
+    }
+    if(sitAmb.key==="NAO_INICIADO" && podeIniciar){
+      return `<button class="btn sm" onclick="Act.iniciarMontagemAmbiente('${a.id}')">${UI.icon('wrench',12)} Iniciar montagem</button>`;
+    }
+    // EM_MONTAGEM (ou NAO_INICIADO sem permissão de agir)
+    if(!podeMarcarPronto && !podeTravar) return "";
+    return `${(sitAmb.prontoParaMarcar && podeMarcarPronto)? `<button class="btn sm" onclick="Act.abrirFinalizarAmbiente('${a.id}')">${UI.icon('check-circle',12)} Marcar pronto</button>` : ""}
+      ${podeTravar? `<button class="btn sm ghost" onclick="Act.abrirMarcarTravado('${a.id}')">${UI.icon('lock',12)} Marcar travado</button>` : ""}`;
+  }
   function tabAmbientes(o){
     return o.ambientes.map(a=>{
       const prog = C.progressoAmbiente(a);
       const sitAmb = C.situacaoAmbiente(a);
-      const podeFinalizar = sitAmb.key!=='FINALIZADO' && sitAmb.key!=='FINALIZADO_RESSALVA';
       return `<div class="card pad" style="margin-bottom:12px;">
         <div class="flex-between" style="flex-wrap:wrap;gap:6px;">
           <div class="flex-gap" style="align-items:center;"><b>${UI.esc(a.nome)}</b>${UI.situacaoAmbienteChip(sitAmb)}</div>
           <span class="small muted">${UI.valorOuOculto(C.fmtBRL(a.valorLiquido))} · ${prog.pct}%</span>
         </div>
+        ${sitAmb.motivo? `<div class="small" style="margin-top:2px;color:var(--critical);">${UI.icon('lock',10)} ${UI.esc(sitAmb.motivo)}</div>` : ""}
         ${UI.progressBar(prog.pct, sitAmb.key==="TRAVADO"?"blocked":"")}
-        <div style="display:flex;justify-content:flex-end;margin-top:8px;">
-          ${podeFinalizar
-            ? `<button class="btn sm" onclick="Act.abrirFinalizarAmbiente('${a.id}')">${UI.icon(sitAmb.key==='TRAVADO'?'lock':'check-circle',12)} ${sitAmb.key==='TRAVADO'?'Destravar':'Finalizar'}</button>`
-            : `<button class="btn sm" onclick="Act.reabrirAmbiente('${a.id}')">${UI.icon('refresh',12)} Reabrir</button>`}
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px;">
+          ${proximoPassoAmbienteObraHtml(a, sitAmb)}
         </div>
         <div style="margin-top:10px;">
           ${a.moveis.map(m=>{

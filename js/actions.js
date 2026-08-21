@@ -577,7 +577,13 @@
         UI.toast(r.temPendencias? "Montagem encerrada como concluída com pendências — segue visível em Para Finalizar." : "Montagem concluída!");
       });
     },
-    // ---------- finalizar AMBIENTE (Fase 4 — handoff) ----------
+    // ---------- marcar pronto / finalizar com ressalva (Fase 4 — handoff; fluxo de 2 passos — Fase 5, rodada de ajustes) ----------
+    // Esta ação NUNCA finaliza um ambiente direto — no máximo marca "pronto
+    // para finalizar" (Store.marcarProntoAmbiente). Aprovar é sempre uma ação
+    // separada (ver aprovarFinalizacaoAmbiente, abaixo). A única saída que
+    // fecha por aqui sem passar pela aprovação é a ressalva explícita
+    // (Store.finalizarComRessalva), quando a caixa "finalizar com ressalva"
+    // está marcada.
     abrirFinalizarAmbiente(ambienteId){
       const f = M.Store.findAmbiente(ambienteId); if(!f) return;
       UI.openModal(M.Pages.finalizarAmbienteHtml(f), {});
@@ -589,14 +595,84 @@
         document.querySelectorAll(".amb-check").forEach(el=>{ checklist[el.dataset.item] = el.checked; });
         const ressalvaEl = document.getElementById("ambRessalva");
         const ressalva = ressalvaEl ? ressalvaEl.checked : false;
-        const r = M.Store.finalizarAmbiente(ambienteId, {checklist, ressalva, motivo: fd.get("motivo")||"", pendenciaVinculada: fd.get("pendenciaVinculada")||null});
+        const r = ressalva
+          ? M.Store.finalizarComRessalva(ambienteId, {checklist, motivo: fd.get("motivo")||"", pendenciaVinculada: fd.get("pendenciaVinculada")||null})
+          : M.Store.marcarProntoAmbiente(ambienteId, {checklist});
         if(!r.ok){
           if(r.motivo==="MOTIVO_OBRIGATORIO"){ UI.toast("Descreva o motivo da ressalva antes de finalizar."); return; }
-          if(r.motivo==="SEM_PERMISSAO"){ UI.toast("Seu perfil não pode finalizar com ressalva — peça para PCP, Liderança ou Administrador."); return; }
+          if(r.motivo==="SEM_PERMISSAO"){ UI.toast(ressalva? "Seu perfil não pode finalizar com ressalva." : "Seu perfil não pode marcar este ambiente como pronto."); return; }
+          if(r.motivo==="TRANSICAO_INVALIDA"){ UI.toast("Este ambiente não está em um estado que permite essa ação agora."); return; }
           UI.toast("Ainda há pendências — marque \"Finalizar com ressalva\" ou resolva antes."); return;
         }
         UI.closeModal();
-        UI.toast(r.ressalva? "Ambiente finalizado com ressalva." : "Ambiente finalizado!");
+        if(r.status==="FINALIZADO_COM_RESSALVA") UI.toast("Ambiente finalizado com ressalva.");
+        else if(r.jaEstavaPronto) UI.toast("Este ambiente já está pronto para finalizar, aguardando aprovação.");
+        else UI.toast("Marcado como pronto para finalizar — aguardando aprovação.");
+      });
+    },
+    // ---------- Montagem V2 (Fase 5) — novas ações de estado do ambiente ----------
+    iniciarMontagemAmbiente(ambienteId){
+      const r = M.Store.iniciarMontagemAmbiente(ambienteId);
+      if(!r.ok){ UI.toast("Seu perfil não pode iniciar a montagem deste ambiente."); return; }
+      UI.toast(r.jaIniciado? "Montagem já estava iniciada." : "Montagem iniciada.");
+    },
+    abrirMarcarTravado(ambienteId){
+      const f = M.Store.findAmbiente(ambienteId); if(!f) return;
+      UI.openModal(M.Pages.marcarTravadoHtml(f), {});
+      const form = document.getElementById("formMarcarTravado");
+      form.addEventListener("submit", (e)=>{
+        e.preventDefault();
+        const motivo = new FormData(form).get("motivo")||"";
+        const r = M.Store.marcarAmbienteTravado(ambienteId, motivo);
+        if(!r.ok){
+          if(r.motivo==="MOTIVO_OBRIGATORIO"){ UI.toast("Descreva o motivo do travamento."); return; }
+          UI.toast("Não foi possível travar este ambiente."); return;
+        }
+        UI.closeModal();
+        UI.toast("Ambiente marcado como travado.");
+      });
+    },
+    destravarAmbiente(ambienteId){
+      UI.confirm("Destravar este ambiente?", ()=>{
+        const r = M.Store.destravarAmbiente(ambienteId);
+        if(!r.ok){
+          if(r.motivo==="TRAVADO_POR_PENDENCIA"){ UI.toast("Este travamento vem de uma pendência aberta — resolva a pendência em Pendências para destravar."); return; }
+          UI.toast("Não foi possível destravar."); return;
+        }
+        UI.toast("Ambiente destravado.");
+      });
+    },
+    aprovarFinalizacaoAmbiente(ambienteId){
+      UI.confirm("Aprovar a finalização deste ambiente? Ele vai contar como Finalizado.", ()=>{
+        const r = M.Store.aprovarFinalizacaoAmbiente(ambienteId);
+        if(!r.ok){
+          if(r.motivo==="SEM_PERMISSAO"){ UI.toast("Seu perfil não pode aprovar finalização."); return; }
+          if(r.motivo==="NAO_ESTA_PRONTO"){ UI.toast("Este ambiente ainda não foi marcado como pronto para finalizar."); return; }
+          if(r.motivo==="BLOQUEIO_SURGIU_APOS_PRONTO"){ UI.toast("Surgiu um bloqueio (pendência ou travamento) depois que o ambiente foi marcado pronto — resolva antes de aprovar."); return; }
+          if(r.motivo==="TRANSICAO_INVALIDA"){ UI.toast("Este ambiente não está em um estado que permite aprovar agora."); return; }
+          UI.toast("Não foi possível aprovar."); return;
+        }
+        UI.toast("Finalização aprovada — ambiente finalizado.");
+      });
+    },
+    // ---------- planejamento de montagem (Fase 5, §10) ----------
+    abrirPlanejamentoMontagem(obraId){
+      const o = M.Store.getObra(obraId); if(!o) return;
+      UI.openModal(M.Pages.planejamentoMontagemHtml(o), {});
+      const form = document.getElementById("formPlanejamentoMontagem");
+      form.addEventListener("submit", (e)=>{
+        e.preventDefault();
+        const fd = new FormData(form);
+        const r = M.Store.setPlanejamentoMontagem(obraId, {
+          inicioPrevisto: fd.get("inicioPrevisto")||null,
+          duracaoEstimadaValor: fd.get("duracaoEstimadaValor")||null,
+          duracaoEstimadaUnidade: fd.get("duracaoEstimadaUnidade")||"dias_uteis",
+          equipePlanejada: fd.get("equipePlanejada")||"",
+          observacoes: fd.get("observacoes")||"",
+        });
+        if(!r.ok){ UI.toast("Seu perfil não pode editar o planejamento desta obra."); return; }
+        UI.closeModal();
+        UI.toast("Planejamento de montagem atualizado.");
       });
     },
     // recalcula, em tempo real (sem re-render de tela), o contador do
@@ -612,13 +688,20 @@
       if(label) label.textContent = `Checklist de finalização · ${feitos}/${total}`;
       const bloqueios = parseInt(form.dataset.bloqueios||"0",10);
       const naoMontados = parseInt(form.dataset.naoMontados||"0",10);
-      const pendente = bloqueios>0 || feitos<total || naoMontados>0;
+      const travamentoManual = form.dataset.travamentoManual==="1";
+      const pendente = bloqueios>0 || travamentoManual || feitos<total || naoMontados>0;
       const pendSection = document.getElementById("faPendenteSection");
       const prontoMsg = document.getElementById("faProntoMsg");
       if(pendSection) pendSection.style.display = pendente? "block":"none";
       if(prontoMsg) prontoMsg.style.display = pendente? "none":"block";
       const btn = document.getElementById("faSubmitBtn");
-      if(btn) btn.textContent = pendente? "Finalizar com ressalva":"Finalizar ambiente";
+      // AJUSTE (rodada de ajustes): este modal nunca finaliza direto, mesmo
+      // para quem tem montagem.aprovarFinalizacao — no máximo marca "pronto
+      // para finalizar" (Store.marcarProntoAmbiente). Aprovar é sempre uma
+      // ação separada, feita depois, noutro lugar (ver
+      // Act.aprovarFinalizacaoAmbiente). O texto do botão reflete isso sem
+      // depender de qual permissão quem está vendo a tela tem.
+      if(btn) btn.textContent = pendente? "Finalizar com ressalva" : "Marcar pronto para finalizar";
       if(!pendente){
         const ressalvaEl = document.getElementById("ambRessalva");
         if(ressalvaEl) ressalvaEl.checked = false;

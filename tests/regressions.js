@@ -1235,6 +1235,562 @@ function pendenciaFixture4(obraId, over){
 console.log("Fase 4 (Pendências + Hoje): OK");
 
 // ==================================================================
+// FASE 5 — MONTAGEM V2 ("estados aprovados", aprovação por permissão,
+// travamento manual com motivo, planejamento previsto×real, fim real da
+// montagem). Contexto isolado (appFase5), fixtures próprias — não reusa
+// nem contamina os dados de seed/dev nem os contextos de fases anteriores.
+// ==================================================================
+const appFase5 = contextoBase();
+executar(appFase5, "js/data.js");
+appFase5.M.UI = {
+  esc:(s)=> String(s==null?"":s), icon:()=>"", card:(o)=> `[[${o.title||""}]]`+(o.body||""),
+  situacaoAmbienteChip:(sit)=> `[chip:${sit.key}]`, progressBar:()=>"", statTile:()=>"", person:(n)=>n||"",
+  valorOuOculto:(v)=>v,
+};
+appFase5.M.Pages = {};
+appFase5.M.UIState = {calFiltros: new Set(["PRODUCAO","ENTREGAS","MONTAGENS","PENDENCIAS","FORNECEDORES","ASSISTENCIAS"])};
+executar(appFase5, "js/store.js");
+executar(appFase5, "js/calc.js");
+executar(appFase5, "js/pages/calendario.js");
+executar(appFase5, "js/pages/montagem.js");
+
+function comoUsuarioFase5(nome, fn){
+  const original = appFase5.M.Store.state.usuarioAtual;
+  appFase5.M.Store.setUsuarioAtual(nome);
+  try{ return fn(); } finally { appFase5.M.Store.setUsuarioAtual(original); }
+}
+let _fx5Seq = 0;
+// por padrão, o móvel já nasce em "FINALIZADA" (além de MONTAGEM) — assim
+// naoMontados=0 de cara, e cada teste só precisa se preocupar com o que
+// está testando (bloqueio/checklist/permissão), não com etapa de móvel.
+function obraFixture5(over){
+  _fx5Seq++;
+  const id = "fx5-obra-"+_fx5Seq;
+  const ambId = "fx5-amb-"+_fx5Seq, movId = "fx5-mov-"+_fx5Seq;
+  return Object.assign({
+    id, numeroOS:"OS FIXTURE5/"+_fx5Seq, cliente:"Cliente Fixture 5",
+    dataOS:appFase5.M.todayISO(), criadaEm:appFase5.M.todayISO(),
+    dataEntregaPrevista:appFase5.M.dOff(30), dataEntregaReal:null,
+    valorBruto:1000, valorLiquido:1000, status:"EM_PRODUCAO", responsavel:"Teste",
+    ambientes:[{id:ambId, nome:"Ambiente Fixture 5", moveis:[{id:movId, nome:"Móvel Fixture 5", etapa:"FINALIZADA", componentesCriticos:[]}]}],
+  }, over);
+}
+function checklistCompleto(){
+  const c = {}; appFase5.M.CHECKLIST_ENCERRAMENTO_AMBIENTE.forEach(item=> c[item]=true); return c;
+}
+// perfis reais do seed, sem inventar colaborador novo: Roberto Diniz
+// (MONTADOR: montagem.marcarPronto=true, aprovarFinalizacao=false), Paulo
+// Henrique (ADMIN: as duas true), Willian Souza (OPERADOR: nenhuma das
+// duas — bom pra testar SEM_PERMISSAO de verdade).
+const MONTADOR5 = "Roberto Diniz", APROVADOR5 = "Paulo Henrique", SEM_PERM5 = "Willian Souza";
+
+// ---- 1) NAO_INICIADO → EM_MONTAGEM (iniciar montagem manualmente) ----
+{
+  const o = obraFixture5({ambientes:[{id:"fx5-amb-i1", nome:"Amb", moveis:[{id:"fx5-mov-i1", nome:"Mov", etapa:"CORTE", componentesCriticos:[]}]}]});
+  appFase5.M.Store.state.obras.push(o);
+  const a = o.ambientes[0];
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(a).key, "NAO_INICIADO", "ambiente sem nenhum móvel avançado e sem início manual começa NAO_INICIADO");
+  const semPerm = comoUsuarioFase5(SEM_PERM5, ()=> appFase5.M.Store.iniciarMontagemAmbiente(a.id));
+  assert.equal(semPerm.ok, false, "perfil sem montagem.iniciar não pode iniciar montagem");
+  const r = comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.iniciarMontagemAmbiente(a.id));
+  assert.equal(r.ok, true, "Montador (montagem.iniciar) pode iniciar montagem");
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(a).key, "EM_MONTAGEM", "depois de iniciar, ambiente vira EM_MONTAGEM mesmo sem nenhum móvel ter avançado etapa");
+  assert.ok(!!a.montagemInicioReal, "montagemInicioReal fica registrado no ambiente");
+  assert.ok(o.planejamentoMontagem && !!o.planejamentoMontagem.inicioReal, "início real da OBRA é capturado automaticamente no primeiro ambiente iniciado");
+  const hist = appFase5.M.Store.state.historico.find(h=>h.tipo==="AMBIENTE_MONTAGEM_INICIADA" && h.obraId===o.id);
+  assert.ok(hist, "histórico registra AMBIENTE_MONTAGEM_INICIADA");
+}
+
+// ---- 2/3/4) EM_MONTAGEM → TRAVADO (manual, motivo obrigatório) → EM_MONTAGEM ----
+{
+  const o = obraFixture5(); appFase5.M.Store.state.obras.push(o);
+  const a = o.ambientes[0];
+  comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.iniciarMontagemAmbiente(a.id));
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(a).key, "EM_MONTAGEM");
+  const semMotivo = comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.marcarAmbienteTravado(a.id, ""));
+  assert.equal(semMotivo.ok, false, "travar sem motivo falha");
+  assert.equal(semMotivo.motivo, "MOTIVO_OBRIGATORIO");
+  const semPerm = comoUsuarioFase5(SEM_PERM5, ()=> appFase5.M.Store.marcarAmbienteTravado(a.id, "teste"));
+  assert.equal(semPerm.ok, false, "perfil sem montagem.travar não pode travar manualmente");
+  const r = comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.marcarAmbienteTravado(a.id, "Equipe remanejada pro outro canteiro"));
+  assert.equal(r.ok, true);
+  const sitTravado = appFase5.M.Calc.situacaoAmbiente(a);
+  assert.equal(sitTravado.key, "TRAVADO", "EM_MONTAGEM → TRAVADO com motivo manual");
+  assert.equal(sitTravado.origem, "MANUAL");
+  assert.equal(sitTravado.motivo, "Equipe remanejada pro outro canteiro", "motivo do travamento manual aparece na situação");
+  assert.ok(appFase5.M.Store.state.historico.find(h=>h.tipo==="AMBIENTE_TRAVADO_MANUAL" && h.obraId===o.id), "histórico registra AMBIENTE_TRAVADO_MANUAL");
+  // destravar
+  const destravarSemPerm = comoUsuarioFase5(SEM_PERM5, ()=> appFase5.M.Store.destravarAmbiente(a.id));
+  assert.equal(destravarSemPerm.ok, false, "perfil sem montagem.destravar não pode destravar");
+  const rd = comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.destravarAmbiente(a.id));
+  assert.equal(rd.ok, true, "TRAVADO (manual) → EM_MONTAGEM via destravar");
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(a).key, "EM_MONTAGEM");
+  assert.ok(appFase5.M.Store.state.historico.find(h=>h.tipo==="AMBIENTE_DESTRAVADO" && h.obraId===o.id), "histórico registra AMBIENTE_DESTRAVADO");
+}
+
+// ---- 2b) permissões granulares de fato DESACOPLADAS (rodada de ajustes,
+// item 2 + item 5): desligar montagem.iniciar/travar/destravar do Montador
+// via override NÃO afeta as outras duas — prova de que não é a mesma chave
+// disfarçada de três nomes. Sempre restaura o default no final. ----
+{
+  // iniciar
+  const o1 = obraFixture5(); appFase5.M.Store.state.obras.push(o1);
+  const a1 = o1.ambientes[0];
+  comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.setPermissao("MONTADOR","montagem.iniciar", false));
+  const semIniciar = comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.iniciarMontagemAmbiente(a1.id));
+  assert.equal(semIniciar.ok, false, "override: com montagem.iniciar=false, Montador não inicia mais montagem");
+  assert.equal(semIniciar.motivo, "SEM_PERMISSAO");
+  comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.iniciarMontagemAmbiente(a1.id)); // Admin inicia por ele (mantém montagem.iniciar)
+  const rProntoSemIniciar = comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.marcarProntoAmbiente(a1.id, {checklist: checklistCompleto()}));
+  assert.equal(rProntoSemIniciar.ok, true, "Montador sem montagem.iniciar CONTINUA podendo marcar pronto — as chaves são independentes, não uma reaproveitando a outra");
+  comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.setPermissao("MONTADOR","montagem.iniciar", true)); // restaura
+
+  // travar
+  const o2 = obraFixture5(); appFase5.M.Store.state.obras.push(o2);
+  const a2 = o2.ambientes[0];
+  comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.setPermissao("MONTADOR","montagem.travar", false));
+  const semTravar = comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.marcarAmbienteTravado(a2.id, "motivo qualquer"));
+  assert.equal(semTravar.ok, false, "override: com montagem.travar=false, Montador não trava mais manualmente");
+  assert.equal(semTravar.motivo, "SEM_PERMISSAO");
+  const rIniciarSemTravar = comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.iniciarMontagemAmbiente(a2.id));
+  assert.equal(rIniciarSemTravar.ok, true, "Montador sem montagem.travar CONTINUA podendo iniciar montagem — chaves independentes");
+  comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.setPermissao("MONTADOR","montagem.travar", true)); // restaura
+
+  // destravar
+  const o3 = obraFixture5(); appFase5.M.Store.state.obras.push(o3);
+  const a3 = o3.ambientes[0];
+  comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.iniciarMontagemAmbiente(a3.id));
+  comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.marcarAmbienteTravado(a3.id, "motivo qualquer"));
+  comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.setPermissao("MONTADOR","montagem.destravar", false));
+  const semDestravar = comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.destravarAmbiente(a3.id));
+  assert.equal(semDestravar.ok, false, "override: com montagem.destravar=false, Montador não destrava mais");
+  assert.equal(semDestravar.motivo, "SEM_PERMISSAO");
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(a3).key, "TRAVADO", "ambiente continua travado — override realmente teve efeito, não foi ignorado");
+  comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.setPermissao("MONTADOR","montagem.destravar", true)); // restaura
+  const rDestravarRestaurado = comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.destravarAmbiente(a3.id));
+  assert.equal(rDestravarRestaurado.ok, true, "depois de restaurar o default, Montador volta a destravar normalmente");
+}
+
+// ---- pendência não trava automaticamente (só impacto que bloqueia fechamento) ----
+{
+  const o = obraFixture5(); appFase5.M.Store.state.obras.push(o);
+  const a = o.ambientes[0];
+  appFase5.M.Store.state.pendencias.push({id:"fx5-pnd-info", obraId:o.id, ambienteId:a.id, status:"ABERTA",
+    categoria:"Teste", impacto:"INFORMATIVO", descricao:"só um aviso", abertura:appFase5.M.todayISO()});
+  assert.notEqual(appFase5.M.Calc.situacaoAmbiente(a).key, "TRAVADO", "pendência Informativo não trava o ambiente");
+  appFase5.M.Store.state.pendencias.push({id:"fx5-pnd-naoimpede", obraId:o.id, ambienteId:a.id, status:"ABERTA",
+    categoria:"Teste", impacto:"NAO_IMPEDE", descricao:"não impede", abertura:appFase5.M.todayISO()});
+  assert.notEqual(appFase5.M.Calc.situacaoAmbiente(a).key, "TRAVADO", "pendência Não impede também não trava o ambiente");
+}
+
+// ---- 5/6/7/8) EM_MONTAGEM → PRONTO_PARA_FINALIZAR (Montador) → aprovação (Admin) → FINALIZADO ----
+{
+  const o = obraFixture5(); appFase5.M.Store.state.obras.push(o);
+  const a = o.ambientes[0];
+  const semPerm = comoUsuarioFase5(SEM_PERM5, ()=> appFase5.M.Store.marcarProntoAmbiente(a.id, {checklist: checklistCompleto()}));
+  assert.equal(semPerm.ok, false, "perfil sem montagem.marcarPronto não pode marcar pronto");
+  assert.equal(semPerm.motivo, "SEM_PERMISSAO");
+
+  const rMontador = comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.marcarProntoAmbiente(a.id, {checklist: checklistCompleto()}));
+  assert.equal(rMontador.ok, true, "Montador consegue marcar pronto (checklist completo, sem bloqueio)");
+  assert.equal(rMontador.status, "PRONTO_PARA_FINALIZAR");
+  assert.equal(rMontador.aguardandoAprovacao, true);
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(a).key, "PRONTO_PARA_FINALIZAR", "EM_MONTAGEM → PRONTO_PARA_FINALIZAR");
+  assert.ok(appFase5.M.Store.state.historico.find(h=>h.tipo==="AMBIENTE_PRONTO_PARA_FINALIZAR" && h.obraId===o.id), "histórico registra AMBIENTE_PRONTO_PARA_FINALIZAR");
+
+  // "O Montador NÃO deve aprovar sozinho a finalização definitiva" — testado
+  // de duas formas: (a) chamar aprovarFinalizacaoAmbiente como Montador falha;
+  // (b) o ambiente PERMANECE PRONTO_PARA_FINALIZAR (não virou FINALIZADO sozinho).
+  const aprovarComoMontador = comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.aprovarFinalizacaoAmbiente(a.id));
+  assert.equal(aprovarComoMontador.ok, false, "Montador não pode aprovar finalização — falta montagem.aprovarFinalizacao");
+  assert.equal(aprovarComoMontador.motivo, "SEM_PERMISSAO");
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(a).key, "PRONTO_PARA_FINALIZAR", "ambiente continua PRONTO_PARA_FINALIZAR, não vira FINALIZADO sozinho");
+
+  // PRONTO_PARA_FINALIZAR não conta como fechado (Calc.taxaFechamento)
+  assert.equal(appFase5.M.Calc.taxaFechamento(o), 0, "PRONTO_PARA_FINALIZAR não conta pra taxa de fechamento");
+  assert.equal(appFase5.M.Calc.montagemFinalizadaObra(o).finalizada, false, "obra não está com montagem finalizada enquanto o ambiente só está PRONTO_PARA_FINALIZAR");
+
+  // quem TEM montagem.aprovarFinalizacao aprova
+  const rAprovar = comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.aprovarFinalizacaoAmbiente(a.id));
+  assert.equal(rAprovar.ok, true, "usuário com montagem.aprovarFinalizacao aprova o ambiente pronto");
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(a).key, "FINALIZADO", "PRONTO_PARA_FINALIZAR → FINALIZADO após aprovação");
+  assert.ok(appFase5.M.Store.state.historico.find(h=>h.tipo==="AMBIENTE_FINALIZADO_APROVADO" && h.obraId===o.id), "histórico registra AMBIENTE_FINALIZADO_APROVADO");
+
+  // FINALIZADO conta para Fechamento
+  assert.equal(appFase5.M.Calc.taxaFechamento(o), 100, "FINALIZADO conta 100% na taxa de fechamento (obra de 1 ambiente)");
+  assert.equal(appFase5.M.Calc.montagemFinalizadaObra(o).finalizada, true, "obra com único ambiente FINALIZADO conta como montagem finalizada (fim real)");
+  assert.ok(o.planejamentoMontagem && !!o.planejamentoMontagem.fimReal, "fim real da obra é capturado automaticamente quando o último ambiente fecha");
+}
+
+// ---- AJUSTE OBRIGATÓRIO (item 1 do pedido): mesmo o Admin, que TEM as
+// duas permissões (montagem.marcarPronto E montagem.aprovarFinalizacao),
+// NÃO pula PRONTO_PARA_FINALIZAR. E aprovar direto num ambiente ainda
+// EM_MONTAGEM (sem passar por marcarPronto) retorna erro de transição. ----
+{
+  const o = obraFixture5(); appFase5.M.Store.state.obras.push(o);
+  const a = o.ambientes[0];
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(a).key, "EM_MONTAGEM");
+
+  const aprovarCedo = comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.aprovarFinalizacaoAmbiente(a.id));
+  assert.equal(aprovarCedo.ok, false, "aprovar direto em EM_MONTAGEM falha — não existe atalho, mesmo pra quem tem as duas permissões");
+  assert.equal(aprovarCedo.motivo, "TRANSICAO_INVALIDA", "aprovar fora de PRONTO_PARA_FINALIZAR retorna erro de transição, não SEM_PERMISSAO");
+  assert.equal(aprovarCedo.estadoAtual, "EM_MONTAGEM");
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(a).key, "EM_MONTAGEM", "estado não mudou depois da tentativa inválida");
+
+  const rPronto = comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.marcarProntoAmbiente(a.id, {checklist: checklistCompleto()}));
+  assert.equal(rPronto.ok, true);
+  assert.equal(rPronto.status, "PRONTO_PARA_FINALIZAR", "Admin com montagem.aprovarFinalizacao TAMBÉM só marca pronto por aqui — nunca pula pra FINALIZADO");
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(a).key, "PRONTO_PARA_FINALIZAR", "mesmo o Admin passa PRIMEIRO por PRONTO_PARA_FINALIZAR");
+
+  const rAprova = comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.aprovarFinalizacaoAmbiente(a.id));
+  assert.equal(rAprova.ok, true, "só DEPOIS, numa ação separada, o Admin aprova de verdade");
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(a).key, "FINALIZADO", "aprovar a partir de PRONTO_PARA_FINALIZAR funciona normalmente");
+}
+
+// ---- pendência BLOQUEIA_AMBIENTE impede fechamento (não existe EM_MONTAGEM
+// enquanto travado, então marcarProntoAmbiente nem chega a olhar pro
+// checklist — falha por transição, não por "pendente") ----
+{
+  const o = obraFixture5(); appFase5.M.Store.state.obras.push(o);
+  const a = o.ambientes[0];
+  appFase5.M.Store.state.pendencias.push({id:"fx5-pnd-bloq", obraId:o.id, ambienteId:a.id, status:"ABERTA",
+    categoria:"Teste", impacto:"BLOQUEIA_AMBIENTE", descricao:"Falta ferragem", abertura:appFase5.M.todayISO()});
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(a).key, "TRAVADO", "pendência BLOQUEIA_AMBIENTE trava o ambiente automaticamente");
+  const r = comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.marcarProntoAmbiente(a.id, {checklist: checklistCompleto()}));
+  assert.equal(r.ok, false, "não dá pra marcar pronto (nem quem aprova) com pendência bloqueante aberta");
+  assert.equal(r.motivo, "TRANSICAO_INVALIDA");
+  assert.equal(r.estadoAtual, "TRAVADO");
+}
+
+// ---- FINALIZADO_COM_RESSALVA exige motivo + permissão; se o travamento vier
+// de pendência, a relação é registrada no histórico automaticamente ----
+{
+  const o = obraFixture5(); appFase5.M.Store.state.obras.push(o);
+  const a = o.ambientes[0];
+  appFase5.M.Store.state.pendencias.push({id:"fx5-pnd-ressalva", obraId:o.id, ambienteId:a.id, status:"ABERTA",
+    categoria:"Teste", impacto:"BLOQUEIA_AMBIENTE", descricao:"Item fora de linha", abertura:appFase5.M.todayISO()});
+  const semPermRessalva = comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.finalizarComRessalva(a.id, {checklist: checklistCompleto(), motivo:"teste"}));
+  assert.equal(semPermRessalva.ok, false, "Montador não tem montagem.finalizarComRessalva — não pode finalizar com ressalva");
+  assert.equal(semPermRessalva.motivo, "SEM_PERMISSAO");
+  const semMotivo = comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.finalizarComRessalva(a.id, {checklist: checklistCompleto(), motivo:""}));
+  assert.equal(semMotivo.ok, false, "ressalva sem motivo falha");
+  assert.equal(semMotivo.motivo, "MOTIVO_OBRIGATORIO");
+  const r = comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.finalizarComRessalva(a.id, {checklist: checklistCompleto(), motivo:"Item fora de linha, cliente ciente"}));
+  assert.equal(r.ok, true);
+  assert.equal(r.status, "FINALIZADO_COM_RESSALVA", "nome canônico do status retornado — não o nome interno antigo FINALIZADA_RESSALVA");
+  assert.equal(a.montagemStatus, "FINALIZADO_COM_RESSALVA", "campo bruto a.montagemStatus também usa o nome canônico");
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(a).key, "FINALIZADO_COM_RESSALVA");
+  assert.equal(appFase5.M.Calc.taxaFechamento(o), 100, "FINALIZADO_COM_RESSALVA também conta pra taxa de fechamento");
+  assert.equal(a.montagemRessalva.pendenciaVinculada, "fx5-pnd-ressalva", "travamento vindo de pendência é vinculado automaticamente na ressalva, mesmo sem informar explicitamente");
+  const histRessalva = appFase5.M.Store.state.historico.find(h=>h.tipo==="AMBIENTE_FINALIZADO_RESSALVA" && h.obraId===o.id);
+  assert.ok(histRessalva, "histórico registra AMBIENTE_FINALIZADO_RESSALVA");
+  assert.ok(histRessalva.descricao.includes("pendência"), "histórico menciona a relação com a pendência que travava o ambiente");
+}
+
+// ---- NAO_INICIADO NÃO pode ir para FINALIZADO_COM_RESSALVA ----
+{
+  const o = obraFixture5({ambientes:[{id:"fx5-amb-ni-r", nome:"Amb", moveis:[{id:"fx5-mov-ni-r", nome:"Mov", etapa:"CORTE", componentesCriticos:[]}]}]});
+  appFase5.M.Store.state.obras.push(o);
+  const a = o.ambientes[0];
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(a).key, "NAO_INICIADO");
+  const r = comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.finalizarComRessalva(a.id, {checklist: checklistCompleto(), motivo:"teste"}));
+  assert.equal(r.ok, false, "NAO_INICIADO não pode ir direto pra FINALIZADO_COM_RESSALVA");
+  assert.equal(r.motivo, "TRANSICAO_INVALIDA");
+  assert.equal(r.estadoAtual, "NAO_INICIADO");
+}
+
+// ---- EM_MONTAGEM / TRAVADO / PRONTO_PARA_FINALIZAR — as 3 origens
+// autorizadas de ressalva funcionam ----
+{
+  const oA = obraFixture5(); appFase5.M.Store.state.obras.push(oA);
+  const aA = oA.ambientes[0];
+  comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.iniciarMontagemAmbiente(aA.id));
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(aA).key, "EM_MONTAGEM");
+  const rA = comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.finalizarComRessalva(aA.id, {checklist:{}, motivo:"ressalva a partir de EM_MONTAGEM"}));
+  assert.equal(rA.ok, true, "ressalva permitida a partir de EM_MONTAGEM");
+
+  const oB = obraFixture5(); appFase5.M.Store.state.obras.push(oB);
+  const aB = oB.ambientes[0];
+  comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.iniciarMontagemAmbiente(aB.id));
+  comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.marcarAmbienteTravado(aB.id, "motivo qualquer"));
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(aB).key, "TRAVADO");
+  const rB = comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.finalizarComRessalva(aB.id, {checklist:{}, motivo:"ressalva a partir de TRAVADO manual"}));
+  assert.equal(rB.ok, true, "ressalva permitida a partir de TRAVADO");
+
+  const oC = obraFixture5(); appFase5.M.Store.state.obras.push(oC);
+  const aC = oC.ambientes[0];
+  comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.marcarProntoAmbiente(aC.id, {checklist: checklistCompleto()}));
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(aC).key, "PRONTO_PARA_FINALIZAR");
+  const rC = comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.finalizarComRessalva(aC.id, {checklist: checklistCompleto(), motivo:"ressalva a partir de PRONTO_PARA_FINALIZAR"}));
+  assert.equal(rC.ok, true, "ressalva permitida a partir de PRONTO_PARA_FINALIZAR");
+}
+
+// ---- fim real só ocorre quando TODOS os ambientes obrigatórios fecham (obra de 2 ambientes) ----
+{
+  const o = obraFixture5({ambientes:[
+    {id:"fx5-amb-2a", nome:"Amb A", moveis:[{id:"fx5-mov-2a", nome:"Mov A", etapa:"FINALIZADA", componentesCriticos:[]}]},
+    {id:"fx5-amb-2b", nome:"Amb B", moveis:[{id:"fx5-mov-2b", nome:"Mov B", etapa:"FINALIZADA", componentesCriticos:[]}]},
+  ]});
+  appFase5.M.Store.state.obras.push(o);
+  const [a1,a2] = o.ambientes;
+  comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.marcarProntoAmbiente(a1.id, {checklist: checklistCompleto()}));
+  comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.aprovarFinalizacaoAmbiente(a1.id));
+  assert.equal(appFase5.M.Calc.montagemFinalizadaObra(o).finalizada, false, "com só 1 de 2 ambientes finalizado, montagem da obra NÃO está finalizada");
+  assert.equal(o.planejamentoMontagem, undefined, "fim real não é gravado enquanto a obra não fechou (nem planejamentoMontagem chega a existir, já que nenhum início real foi capturado neste teste)");
+  comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.marcarProntoAmbiente(a2.id, {checklist: checklistCompleto()}));
+  comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.aprovarFinalizacaoAmbiente(a2.id));
+  assert.equal(appFase5.M.Calc.montagemFinalizadaObra(o).finalizada, true, "com os 2 ambientes finalizados, montagem da obra agora está finalizada (fim real)");
+}
+
+// ---- Produção física × Montagem física × Fechamento continuam métricas
+// separadas (nunca somadas) — fixture onde produção=100%, físico=100%,
+// mas fechamento ainda é 0% (ninguém marcou pronto/aprovou ainda) ----
+{
+  const o = obraFixture5(); appFase5.M.Store.state.obras.push(o); // móvel já nasce FINALIZADA (produção 100%, físico 100%)
+  assert.equal(appFase5.M.Calc.progressoObra(o).pct, 100, "progresso de produção (móvel concluído) é 100%");
+  assert.equal(appFase5.M.Calc.progressoFisicoMontagem(o).valueOf ? appFase5.M.Calc.progressoFisicoMontagem(o) : appFase5.M.Calc.progressoFisicoMontagem(o), 100, "progresso físico de montagem também é 100% (móvel já além da etapa MONTAGEM)");
+  assert.equal(appFase5.M.Calc.taxaFechamento(o), 0, "mas taxa de fechamento é 0% — nenhum ambiente foi formalmente finalizado ainda; as três métricas nunca se confundem");
+}
+
+// ---- reabrir ambiente limpa fimReal da obra (permite recontagem honesta) ----
+{
+  const o = obraFixture5(); appFase5.M.Store.state.obras.push(o);
+  const a = o.ambientes[0];
+  comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.iniciarMontagemAmbiente(a.id));
+  comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.marcarProntoAmbiente(a.id, {checklist: checklistCompleto()}));
+  comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.aprovarFinalizacaoAmbiente(a.id));
+  assert.ok(o.planejamentoMontagem.fimReal, "fim real gravado após finalizar único ambiente");
+  appFase5.M.Store.reabrirAmbiente(a.id);
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(a).key, "EM_MONTAGEM", "ambiente reaberto volta pra EM_MONTAGEM (tinha início real registrado)");
+  assert.equal(o.planejamentoMontagem.fimReal, null, "reabrir limpa o fim real da obra — a montagem não está mais de fato encerrada");
+}
+
+// ---- planejamento de montagem (§10): obra.editar necessário; fim previsto calculado ----
+{
+  const o = obraFixture5(); appFase5.M.Store.state.obras.push(o);
+  const semPerm = comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.setPlanejamentoMontagem(o.id, {inicioPrevisto:"2026-01-01", duracaoEstimadaValor:10, duracaoEstimadaUnidade:"dias_uteis"}));
+  assert.equal(semPerm.ok, false, "Montador não tem obra.editar — não pode planejar montagem");
+  const r = comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.setPlanejamentoMontagem(o.id, {inicioPrevisto:"2026-01-01", duracaoEstimadaValor:10, duracaoEstimadaUnidade:"dias_uteis"}));
+  assert.equal(r.ok, true, "Admin (obra.editar) pode definir planejamento");
+  assert.equal(o.planejamentoMontagem.fimPrevistoCalculado, "2026-01-15", "10 dias úteis a partir de 01/01 calcula fim previsto (~14 dias corridos)");
+  assert.ok(appFase5.M.Store.state.historico.find(h=>h.tipo==="OBRA_PLANEJAMENTO_MONTAGEM_DEFINIDO" && h.obraId===o.id), "histórico registra OBRA_PLANEJAMENTO_MONTAGEM_DEFINIDO");
+}
+
+// ---- nenhuma permissão da Fase 1 foi relaxada (spot-check da matriz montagem.*) ----
+{
+  const esperado = {
+    ADMIN:{marcarPronto:true, aprovarFinalizacao:true, finalizarComRessalva:true},
+    PCP:{marcarPronto:true, aprovarFinalizacao:false, finalizarComRessalva:true},
+    LIDERANCA:{marcarPronto:true, aprovarFinalizacao:false, finalizarComRessalva:true},
+    OPERADOR:{marcarPronto:false, aprovarFinalizacao:false, finalizarComRessalva:false},
+    MONTADOR:{marcarPronto:true, aprovarFinalizacao:false, finalizarComRessalva:false},
+    GESTOR:{marcarPronto:true, aprovarFinalizacao:false, finalizarComRessalva:true},
+    ASSISTENCIA:{marcarPronto:false, aprovarFinalizacao:false, finalizarComRessalva:false},
+  };
+  Object.keys(esperado).forEach(perfilKey=>{
+    const def = appFase5.M.perfilDef(perfilKey);
+    assert.equal(def.pode["montagem.marcarPronto"], esperado[perfilKey].marcarPronto, `montagem.marcarPronto de ${perfilKey} não pode ter mudado`);
+    assert.equal(def.pode["montagem.aprovarFinalizacao"], esperado[perfilKey].aprovarFinalizacao, `montagem.aprovarFinalizacao de ${perfilKey} não pode ter mudado`);
+    assert.equal(def.pode["montagem.finalizarComRessalva"], esperado[perfilKey].finalizarComRessalva, `montagem.finalizarComRessalva de ${perfilKey} não pode ter mudado`);
+  });
+}
+
+// ---- defaults das NOVAS permissões granulares (rodada de ajustes, item 2):
+// Admin/PCP/Líder/Gestor/Montador recebem as 3; Produção/Assistência/TV não
+// recebem nenhuma. Sem perfil hardcoded em código — isto é só a matriz de
+// dados (M.PERFIS), a mesma que Configurações → Permissões edita. ----
+{
+  const esperadoGranular = {
+    ADMIN:true, PCP:true, LIDERANCA:true, GESTOR:true, MONTADOR:true,
+    OPERADOR:false, ASSISTENCIA:false, TV:false,
+  };
+  Object.keys(esperadoGranular).forEach(perfilKey=>{
+    const def = appFase5.M.perfilDef(perfilKey);
+    ["montagem.iniciar","montagem.travar","montagem.destravar"].forEach(chave=>{
+      assert.equal(def.pode[chave], esperadoGranular[perfilKey], `${chave} de ${perfilKey} deveria ser ${esperadoGranular[perfilKey]}`);
+    });
+  });
+}
+
+// ---- estado salvo ANTES desta rodada (com montagem.marcarPronto/
+// aprovarFinalizacao/finalizarComRessalva, mas SEM montagem.iniciar/travar/
+// destravar) ganha as chaves novas via merge, com o default correto, SEM
+// perder uma customização já feita em outra ação — mesmo padrão do teste de
+// migração da Fase 1 (appMigracao), aplicado às chaves desta rodada. ----
+{
+  const appMigracaoFase5 = contextoBase();
+  const estadoAntesDoAjuste = {
+    obras: [{id:"obra-legado-fase5", cliente:"Cliente Legado", numeroOS:"OS 1", ambientes:[]}],
+    permissoes: {
+      ADMIN: {"montagem.ver":true, "montagem.marcarPronto":true, "montagem.aprovarFinalizacao":true, "montagem.finalizarComRessalva":true},
+      // customização real: um administrador tinha desligado marcarPronto
+      // do PCP antes desta rodada — isso não pode se perder na migração.
+      PCP: {"montagem.ver":true, "montagem.marcarPronto":false, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":true},
+      MONTADOR: {"montagem.ver":true, "montagem.marcarPronto":true, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":false},
+    },
+    usuarioAtual: "Paulo Henrique",
+  };
+  appMigracaoFase5.localStorage.setItem("moodo_producao_state_v1", JSON.stringify(estadoAntesDoAjuste));
+  executar(appMigracaoFase5, "js/data.js");
+  executar(appMigracaoFase5, "js/store.js");
+  const permMigradas = appMigracaoFase5.M.Store.state.permissoes;
+  assert.equal(permMigradas.PCP["montagem.marcarPronto"], false, "customização feita antes desta rodada (PCP sem marcarPronto) não pode se perder na migração");
+  assert.equal(permMigradas.PCP["montagem.iniciar"], true, "PCP ganha montagem.iniciar com o default atual (true), mesmo vindo de um estado que não tinha essa chave");
+  assert.equal(permMigradas.MONTADOR["montagem.iniciar"], true, "Montador ganha montagem.iniciar=true (default) ao migrar");
+  assert.equal(permMigradas.MONTADOR["montagem.travar"], true, "Montador ganha montagem.travar=true (default) ao migrar");
+  assert.equal(permMigradas.MONTADOR["montagem.destravar"], true, "Montador ganha montagem.destravar=true (default) ao migrar");
+  assert.equal(permMigradas.ADMIN["montagem.marcarPronto"], true, "chave já existente e não customizada continua com o valor salvo");
+  // e o app não trava calculando pode() pra ninguém depois dessa migração:
+  appMigracaoFase5.M.Store.setUsuarioAtual("Roberto Diniz");
+  assert.equal(appMigracaoFase5.M.Store.pode("montagem.iniciar"), true);
+}
+
+// ==================================================================
+// ÚLTIMOS AJUSTES ANTES DO PUSH — item 1: FINALIZADO_COM_RESSALVA exige
+// EXCLUSIVAMENTE montagem.finalizarComRessalva. liberarExcecao sozinho (sem
+// montagem.finalizarComRessalva) não é mais um bypass válido pra essa
+// transição específica — mesmo que liberarExcecao continue valendo pra
+// outros fluxos legados (garantia CORTESIA, travar pendência).
+// ==================================================================
+{
+  const o = obraFixture5(); appFase5.M.Store.state.obras.push(o);
+  const a = o.ambientes[0];
+  // PCP tem liberarExcecao=true por padrão — desliga só montagem.finalizarComRessalva
+  // pra isolar exatamente o caso pedido: liberarExcecao=true E
+  // montagem.finalizarComRessalva=false.
+  assert.equal(appFase5.M.perfilDef("PCP").pode.liberarExcecao, true, "pré-condição do teste: PCP tem liberarExcecao=true por padrão");
+  appFase5.M.Store.setPermissao("PCP", "montagem.finalizarComRessalva", false);
+  const rBloqueado = comoUsuarioFase5("Beatriz Nogueira" /* PCP no seed */, ()=> appFase5.M.Store.finalizarComRessalva(a.id, {checklist: checklistCompleto(), motivo:"tentativa via liberarExcecao"}));
+  assert.equal(rBloqueado.ok, false, "liberarExcecao=true sozinho NÃO autoriza mais finalizar com ressalva na Montagem V2");
+  assert.equal(rBloqueado.motivo, "SEM_PERMISSAO");
+  assert.notEqual(appFase5.M.Calc.situacaoAmbiente(a).key, "FINALIZADO_COM_RESSALVA", "ambiente não foi finalizado com ressalva pelo bypass");
+  appFase5.M.Store.setPermissao("PCP", "montagem.finalizarComRessalva", true); // restaura, não deixar resíduo pros testes seguintes
+
+  // e com montagem.finalizarComRessalva=true (o critério correto e único agora),
+  // a ação funciona normalmente pro mesmo perfil.
+  const rAutorizado = comoUsuarioFase5("Beatriz Nogueira", ()=> appFase5.M.Store.finalizarComRessalva(a.id, {checklist: checklistCompleto(), motivo:"agora com a permissão certa"}));
+  assert.equal(rAutorizado.ok, true, "montagem.finalizarComRessalva sozinho autoriza a ressalva quando os demais critérios são válidos");
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(a).key, "FINALIZADO_COM_RESSALVA");
+
+  // liberarExcecao continua funcionando nos fluxos legados que já usavam
+  // essa permissão (não foi removida do sistema, só deixou de valer aqui) —
+  // spot-check: garantia CORTESIA continua exigindo liberarExcecao normalmente.
+  assert.equal(appFase5.M.Store.pode("liberarExcecao"), true, "liberarExcecao continua ativa/consultável normalmente pra outros fluxos");
+}
+
+// ==================================================================
+// ÚLTIMOS AJUSTES ANTES DO PUSH — item 2: nomenclatura canônica de
+// a.montagemStatus (FINALIZADO / FINALIZADO_COM_RESSALVA, nunca mais
+// FINALIZADA / FINALIZADA_RESSALVA) + migração explícita de estado salvo
+// ANTES desta padronização.
+// ==================================================================
+{
+  const o = obraFixture5(); appFase5.M.Store.state.obras.push(o);
+  const a = o.ambientes[0];
+  comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.marcarProntoAmbiente(a.id, {checklist: checklistCompleto()}));
+  comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.aprovarFinalizacaoAmbiente(a.id));
+  assert.equal(a.montagemStatus, "FINALIZADO", "campo bruto grava direto o nome canônico — sem passar pelo nome interno antigo FINALIZADA");
+}
+{
+  // estado salvo ANTES da padronização (nomes antigos FINALIZADA/
+  // FINALIZADA_RESSALVA) é migrado de forma EXPLÍCITA (Store.migrarMontagemStatusLegado,
+  // mapeamento determinístico de 2 valores literais — nenhuma inferência) ao
+  // carregar — mesmo padrão de teste de migração usado no restante da suíte
+  // (localStorage pré-semeado + carga real de js/store.js).
+  const appMigracaoStatus = contextoBase();
+  const estadoAntesDoAjuste = {
+    obras: [{
+      id:"obra-legado-status", cliente:"Cliente Legado Status", numeroOS:"OS 2",
+      ambientes:[
+        {id:"amb-legado-finalizado", nome:"Ambiente Finalizado Legado", moveis:[], montagemStatus:"FINALIZADA", finalizadoPor:"Teste", finalizadoEm:"2026-01-01"},
+        {id:"amb-legado-ressalva", nome:"Ambiente Ressalva Legado", moveis:[], montagemStatus:"FINALIZADA_RESSALVA", montagemRessalva:{motivo:"legado", autorizadoPor:"Teste"}},
+        {id:"amb-legado-pronto", nome:"Ambiente Pronto Legado", moveis:[], montagemStatus:"PRONTO_PARA_FINALIZAR"},
+      ],
+    }],
+    usuarioAtual: "Paulo Henrique",
+  };
+  appMigracaoStatus.localStorage.setItem("moodo_producao_state_v1", JSON.stringify(estadoAntesDoAjuste));
+  executar(appMigracaoStatus, "js/data.js");
+  executar(appMigracaoStatus, "js/calc.js");
+  executar(appMigracaoStatus, "js/store.js");
+  const obraMigrada = appMigracaoStatus.M.Store.state.obras.find(o=>o.id==="obra-legado-status");
+  const [finLegado, ressLegado, prontoLegado] = obraMigrada.ambientes;
+  assert.equal(finLegado.montagemStatus, "FINALIZADO", "FINALIZADA (nome antigo) migra pra FINALIZADO (canônico) no boot, sem migração manual obra por obra");
+  assert.equal(ressLegado.montagemStatus, "FINALIZADO_COM_RESSALVA", "FINALIZADA_RESSALVA (nome antigo) migra pra FINALIZADO_COM_RESSALVA (canônico) no boot");
+  assert.equal(prontoLegado.montagemStatus, "PRONTO_PARA_FINALIZAR", "PRONTO_PARA_FINALIZAR não muda de nome — não precisa e não deve ser tocado pela migração");
+  assert.equal(appMigracaoStatus.M.Calc.situacaoAmbiente(finLegado).key, "FINALIZADO", "leitura via situacaoAmbiente() confirma o estado migrado, sem nenhuma tradução de nome antigo no caminho de leitura");
+  assert.equal(appMigracaoStatus.M.Calc.situacaoAmbiente(ressLegado).key, "FINALIZADO_COM_RESSALVA");
+}
+
+// ==================================================================
+// ÚLTIMOS AJUSTES ANTES DO PUSH — item 3: checklist continua obrigatório
+// pra EM_MONTAGEM → PRONTO_PARA_FINALIZAR; PRONTO_PARA_FINALIZAR →
+// FINALIZADO não reexige checklist, mas rejeita se surgiu um bloqueio novo
+// depois de marcar pronto.
+// ==================================================================
+{
+  // checklist incompleto continua bloqueando marcarProntoAmbiente (regra já
+  // aprovada, sem mudança — só confirmando que continua valendo).
+  const o = obraFixture5(); appFase5.M.Store.state.obras.push(o);
+  const a = o.ambientes[0];
+  const checklistIncompleto = checklistCompleto();
+  const primeiroItem = Object.keys(checklistIncompleto)[0];
+  checklistIncompleto[primeiroItem] = false;
+  const rIncompleto = comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.marcarProntoAmbiente(a.id, {checklist: checklistIncompleto}));
+  assert.equal(rIncompleto.ok, false, "checklist incompleto continua impedindo marcar pronto");
+  assert.equal(rIncompleto.motivo, "PENDENTE");
+  assert.ok(rIncompleto.itensChecklistFaltando.includes(primeiroItem));
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(a).key, "EM_MONTAGEM", "ambiente continua EM_MONTAGEM enquanto o checklist não está completo");
+}
+{
+  // PRONTO_PARA_FINALIZAR → FINALIZADO: NÃO reexige checklist (aprovar não
+  // recebe nem olha pra opts.checklist) — mas um bloqueio NOVO (pendência
+  // aberta com impacto de bloqueio, surgida DEPOIS de marcar pronto) impede
+  // a aprovação, mesmo com o campo bruto ainda "PRONTO_PARA_FINALIZAR".
+  const o = obraFixture5(); appFase5.M.Store.state.obras.push(o);
+  const a = o.ambientes[0];
+  const rPronto = comoUsuarioFase5(MONTADOR5, ()=> appFase5.M.Store.marcarProntoAmbiente(a.id, {checklist: checklistCompleto()}));
+  assert.equal(rPronto.ok, true);
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(a).key, "PRONTO_PARA_FINALIZAR");
+
+  // aprovarFinalizacaoAmbiente não recebe opts nenhum — confirma que a
+  // assinatura da função não tem como reexigir checklist (só ambienteId).
+  assert.equal(appFase5.M.Store.aprovarFinalizacaoAmbiente.length, 1, "aprovarFinalizacaoAmbiente só recebe ambienteId — não há como reexigir checklist por aqui");
+
+  // bloqueio novo surge DEPOIS de marcar pronto (pendência aberta com
+  // impacto que bloqueia fechamento) — a.montagemStatus continua
+  // "PRONTO_PARA_FINALIZAR" (nada nessa ação mexe nesse campo), mas
+  // situacaoAmbiente() já daria prioridade a TRAVADO.
+  appFase5.M.Store.state.pendencias.push({id:"fx5-pnd-pos-pronto", obraId:o.id, ambienteId:a.id, status:"ABERTA",
+    categoria:"Teste", impacto:"BLOQUEIA_AMBIENTE", descricao:"Bloqueio surgido depois de marcar pronto", abertura:appFase5.M.todayISO()});
+  assert.equal(a.montagemStatus, "PRONTO_PARA_FINALIZAR", "campo bruto não muda só por causa da pendência nova (bloqueio é sempre derivado, nunca gravado no campo)");
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(a).key, "TRAVADO", "situacaoAmbiente já reflete o bloqueio novo, mesmo com o campo bruto intacto");
+
+  const rAprovarBloqueado = comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.aprovarFinalizacaoAmbiente(a.id));
+  assert.equal(rAprovarBloqueado.ok, false, "aprovação é recusada quando surgiu um bloqueio novo depois de marcar pronto");
+  assert.equal(rAprovarBloqueado.motivo, "BLOQUEIO_SURGIU_APOS_PRONTO");
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(a).key, "TRAVADO", "ambiente continua TRAVADO — não foi finalizado por cima do bloqueio");
+
+  // resolvendo a pendência, a aprovação volta a funcionar normalmente — sem
+  // precisar refazer o checklist (não foi pedido de novo em opts nenhuma vez).
+  comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.resolverPendencia("fx5-pnd-pos-pronto", {}));
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(a).key, "PRONTO_PARA_FINALIZAR", "com a pendência resolvida, volta a PRONTO_PARA_FINALIZAR");
+  const rAprovarDepois = comoUsuarioFase5(APROVADOR5, ()=> appFase5.M.Store.aprovarFinalizacaoAmbiente(a.id));
+  assert.equal(rAprovarDepois.ok, true, "depois de resolver o bloqueio novo, aprovar funciona normalmente, sem reexigir checklist");
+  assert.equal(appFase5.M.Calc.situacaoAmbiente(a).key, "FINALIZADO");
+}
+
+// ---- smoke: a página Montagem V2 renderiza sem lançar, pro Admin ----
+{
+  comoUsuarioFase5(APROVADOR5, ()=>{
+    const resultado = appFase5.M.Pages.montagem();
+    assert.ok(resultado && typeof resultado.html === "string" && resultado.html.length>0, "M.Pages.montagem() renderiza HTML sem lançar exceção");
+  });
+}
+
+console.log("Fase 5 (Montagem V2): OK");
+
+// ==================================================================
 // HOTFIX 3.1 — persistSupabase() não pode chamar Supa.salvarEstado() com
 // cliente nulo; precisa esperar M.Supa.ready; precisa coalescer gravações
 // concorrentes (fila de tamanho 1 — só a mais recente sobrevive, nunca uma

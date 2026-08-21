@@ -212,39 +212,121 @@
     return Object.assign({}, r, {tone: tonePorNivel[r.nivel]||"neutral", label: labelPorNivel[r.nivel]||r.nivel});
   }
 
-  // ---------- situação de ambiente / Montagem (Fase 4 — handoff) ----------
-  // 6 estados, todos DERIVADOS — nenhum é campo manual próprio do ambiente.
-  // "Travado (sempre com motivo)" deriva do mesmo M.bloqueiaFechamento(impacto)
-  // já usado pra bloqueio de móvel (Fase 2) — o motivo É a descrição da
-  // pendência que causou o impacto, não um campo novo. "Finalizado"/"Finalizado
-  // com ressalva" vêm de a.montagemStatus, setado só por Store.finalizarAmbiente
-  // (ação explícita do usuário, com checklist e — se com ressalva — motivo
-  // obrigatório + permissão, ver Store).
+  // ---------- situação de ambiente / Montagem V2 (Fase 5 — "ESTADOS
+  // APROVADOS") ----------
+  // 6 estados: NAO_INICIADO, EM_MONTAGEM, TRAVADO, PRONTO_PARA_FINALIZAR,
+  // FINALIZADO, FINALIZADO_COM_RESSALVA. Fluxo principal: NAO_INICIADO →
+  // EM_MONTAGEM → PRONTO_PARA_FINALIZAR → (aprovação) → FINALIZADO. TRAVADO
+  // pode acontecer durante a execução; FINALIZADO_COM_RESSALVA é exceção
+  // autorizada (ver Store.finalizarAmbiente).
+  //
+  // TODOS os estados continuam DERIVADOS daqui — nenhum é lido de um campo
+  // "estado" solto no ambiente. O que MUDOU na Fase 5 em relação à Fase 4
+  // (handoff) é que dois desses estados agora têm um SINALIZADOR persistido
+  // por trás (a.montagemStatus:"PRONTO_PARA_FINALIZAR", só setado por
+  // Store.finalizarAmbiente/aprovarFinalizacaoAmbiente) em vez de serem
+  // 100% calculados a partir do progresso físico — porque a Fase 5 pediu uma
+  // aprovação de verdade antes de virar "pronto" contar como qualquer coisa
+  // perto de fechado (ver princípio no handoff: "PRONTO_PARA_FINALIZAR ainda
+  // NÃO conta como ambiente fechado").
+  //
+  // "Travado" tem DUAS origens possíveis, nunca misturadas sob o mesmo
+  // motivo genérico:
+  //   1) pendência aberta com impacto que bloqueia fechamento (mesmo
+  //      M.bloqueiaFechamento(impacto) de sempre — Store.bloqueiosAmbiente).
+  //   2) travamento MANUAL (a.travamentoManual, Fase 5 — Store.
+  //      marcarAmbienteTravado/destravarAmbiente) pra motivo operacional que
+  //      não é uma pendência formal (ex.: "aguardando liberação do síndico",
+  //      "equipe remanejada") — só existe pra cobrir a exceção real que
+  //      "pendência" não cobre, não é uma categoria nova inventada: é a
+  //      mesma ideia de TRAVADO, só que a ORIGEM do motivo é outra.
+  //   Pendência SEMPRE tem prioridade de exibição sobre o manual quando as
+  //   duas coexistem (é a fonte "oficial"/rastreável em Pendências V2).
   function situacaoAmbiente(a){
-    if(a.montagemStatus==="FINALIZADA_RESSALVA"){
-      return {key:"FINALIZADO_RESSALVA", label:"Finalizado com ressalva", tone:"warning",
+    // AJUSTE (últimos ajustes antes do push, item 2): a.montagemStatus usa a
+    // MESMA nomenclatura canônica do `key` retornado aqui — FINALIZADO /
+    // FINALIZADO_COM_RESSALVA — desde a padronização desta rodada (antes,
+    // o campo persistido usava FINALIZADA/FINALIZADA_RESSALVA, e só esta
+    // função "traduzia" pro nome canônico). Estado salvo ANTES dessa
+    // padronização é migrado de forma explícita e única em
+    // Store.migrarMontagemStatusLegado() (chamado no boot e após sincronizar
+    // com o Supabase) — não há, e não deve haver, nenhuma tradução/inferência
+    // de nome legado aqui ou em qualquer outro lugar de leitura.
+    if(a.montagemStatus==="FINALIZADO_COM_RESSALVA"){
+      return {key:"FINALIZADO_COM_RESSALVA", label:"Finalizado com ressalva", tone:"warning",
         motivo: a.montagemRessalva && a.montagemRessalva.motivo};
     }
-    if(a.montagemStatus==="FINALIZADA"){
+    if(a.montagemStatus==="FINALIZADO"){
       return {key:"FINALIZADO", label:"Finalizado", tone:"good"};
     }
     const bloqueios = M.Store.bloqueiosAmbiente(a.id);
     if(bloqueios.length){
-      return {key:"TRAVADO", label:"Travado", tone:"blocked", motivo: bloqueios[0].descricao||bloqueios[0].categoria};
+      return {key:"TRAVADO", label:"Travado", tone:"blocked", motivo: bloqueios[0].descricao||bloqueios[0].categoria, origem:"PENDENCIA", pendenciaId: bloqueios[0].id};
+    }
+    if(a.travamentoManual){
+      return {key:"TRAVADO", label:"Travado", tone:"blocked", motivo: a.travamentoManual.motivo, origem:"MANUAL"};
+    }
+    if(a.montagemStatus==="PRONTO_PARA_FINALIZAR"){
+      // AJUSTE VISUAL (rodada de ajustes, §7.4/§7.5): tone dedicado "pronto"
+      // (preenchimento cheio, não pálido) — precisa ficar MUITO mais
+      // evidente que EM_MONTAGEM, porque PRONTO ≠ FINALIZADO e alguém
+      // precisa agir (aprovar).
+      return {key:"PRONTO_PARA_FINALIZAR", label:"Pronto para finalizar", tone:"pronto", aguardandoAprovacao:true};
     }
     const prog = progressoAmbiente(a);
     if(!prog.total) return {key:"NAO_INICIADO", label:"Não iniciado", tone:"neutral"};
-    if(prog.pct>=100) return {key:"PRONTO", label:"Pronto para finalizar", tone:"info"};
-    const iniciou = a.moveis.some(m=> pos(m.etapa) >= pos("ENTREGA"));
-    if(!iniciou) return {key:"NAO_INICIADO", label:"Não iniciado", tone:"neutral"};
-    return {key:"EM_MONTAGEM", label:"Em montagem", tone:"neutral"};
+    // "fisicamente pronto" (100% dos móveis, sem bloqueio) é só um SINAL —
+    // não vira estado PRONTO_PARA_FINALIZAR sozinho; alguém com
+    // montagem.marcarPronto precisa confirmar (Store.marcarProntoAmbiente),
+    // porque o handoff pediu explicitamente que essa transição
+    // não seja automática ("Montador pode... quando permitido por
+    // montagem.marcarPronto" — é uma ação, não um cálculo).
+    const prontoParaMarcar = prog.pct>=100 && !bloqueios.length && !a.travamentoManual;
+    const iniciou = !!a.montagemInicioReal || a.moveis.some(m=> pos(m.etapa) >= pos("ENTREGA"));
+    if(!iniciou) return {key:"NAO_INICIADO", label:"Não iniciado", tone:"neutral", prontoParaMarcar};
+    // AJUSTE VISUAL: tone "info" (azul discreto) em vez de "neutral" —
+    // §7.4 pede "azul/grafite discreto, sem grande bloco colorido" pra
+    // diferenciar visualmente de NAO_INICIADO sem virar um bloco chamativo.
+    return {key:"EM_MONTAGEM", label:"Em montagem", tone:"info", prontoParaMarcar};
+  }
+
+  // "Fim real da montagem" (Fase 5, §9): NÃO é quando todos estão
+  // PRONTO_PARA_FINALIZAR — só quando todo ambiente está FINALIZADO ou
+  // FINALIZADO_COM_RESSALVA (aprovação já concluída pra cada um). Sem
+  // conceito de "ambiente opcional" no modelo hoje, então "obrigatórios" =
+  // todos os ambientes da obra.
+  function montagemFinalizadaObra(o){
+    if(!o.ambientes.length) return {finalizada:false, abertos:[]};
+    const abertos = o.ambientes.filter(a=>{
+      const k = situacaoAmbiente(a).key;
+      return k!=="FINALIZADO" && k!=="FINALIZADO_COM_RESSALVA";
+    });
+    return {finalizada: abertos.length===0, abertos: abertos.map(a=>a.nome)};
+  }
+
+  // Contadores operacionais (Fase 5, §8: "preferir contagens operacionais" a
+  // gap de pontos) — pra UMA obra ou uma carteira, sempre os mesmos 6 baldes.
+  function contadoresMontagem(obras){
+    const c = {naoIniciados:0, emMontagem:0, travados:0, prontosParaFinalizar:0, finalizados:0, finalizadosComRessalva:0, total:0};
+    obras.forEach(o=> o.ambientes.forEach(a=>{
+      c.total++;
+      const k = situacaoAmbiente(a).key;
+      if(k==="NAO_INICIADO") c.naoIniciados++;
+      else if(k==="EM_MONTAGEM") c.emMontagem++;
+      else if(k==="TRAVADO") c.travados++;
+      else if(k==="PRONTO_PARA_FINALIZAR") c.prontosParaFinalizar++;
+      else if(k==="FINALIZADO") c.finalizados++;
+      else if(k==="FINALIZADO_COM_RESSALVA") c.finalizadosComRessalva++;
+    }));
+    return c;
   }
 
   // "Progresso físico" × "taxa de fechamento" — SEMPRE dois números, nunca
   // somados (handoff: "a diferença entre os dois é o esforço espalhado").
   // Físico = fração dos MÓVEIS que já chegaram fisicamente na etapa Montagem
   // ou além (quanto já foi produzido/instalado). Fechamento = fração dos
-  // AMBIENTES formalmente finalizados (Store.finalizarAmbiente) — auditado,
+  // AMBIENTES formalmente finalizados (Store.marcarProntoAmbiente +
+  // Store.aprovarFinalizacaoAmbiente) — auditado,
   // não autodeclarado (handoff: "o montador solicita, o líder confirma").
   function progressoFisicoMontagem(o){
     const allM = o.ambientes.flatMap(a=>a.moveis);
@@ -254,7 +336,7 @@
   }
   function taxaFechamento(o){
     if(!o.ambientes.length) return 0;
-    const finalizados = o.ambientes.filter(a=> a.montagemStatus==="FINALIZADA"||a.montagemStatus==="FINALIZADA_RESSALVA").length;
+    const finalizados = o.ambientes.filter(a=> a.montagemStatus==="FINALIZADO"||a.montagemStatus==="FINALIZADO_COM_RESSALVA").length;
     return Math.round(100*finalizados/o.ambientes.length);
   }
   // agrega físico × fechamento pra uma CARTEIRA de obras (tela de Montagem,
@@ -265,7 +347,7 @@
     const posMontagem = pos("MONTAGEM");
     obras.forEach(o=> o.ambientes.forEach(a=>{
       totalA++;
-      if(a.montagemStatus==="FINALIZADA"||a.montagemStatus==="FINALIZADA_RESSALVA") finalizados++;
+      if(a.montagemStatus==="FINALIZADO"||a.montagemStatus==="FINALIZADO_COM_RESSALVA") finalizados++;
       if(situacaoAmbiente(a).key!=="NAO_INICIADO") iniciados++;
       a.moveis.forEach(m=>{ totalM++; if(pos(m.etapa)>=posMontagem) montados++; });
     }));
@@ -287,7 +369,7 @@
       const gruposFalta = paraFinalizar(o);
       o.ambientes.forEach(a=>{
         const sit = situacaoAmbiente(a);
-        if(sit.key==="NAO_INICIADO" || sit.key==="FINALIZADO" || sit.key==="FINALIZADO_RESSALVA") return;
+        if(sit.key==="NAO_INICIADO" || sit.key==="FINALIZADO" || sit.key==="FINALIZADO_COM_RESSALVA") return;
         const grupo = gruposFalta.find(g=>g.ambienteNome===a.nome);
         const itensFaltando = grupo ? grupo.itens.length : 0;
         if(itensFaltando>=3) return; // não é candidato hoje
@@ -647,6 +729,7 @@
     movelConcluido, progressoGrupo, progressoObra, progressoAmbiente,
     itemCriticoGrupo, pendenciasAbertasDe, pendenciasBloqueantesDe, riscoObra, obraParada, diasParada, situacaoMovel, situacaoObra, wipPorEtapa, indicadores,
     situacaoAmbiente, progressoFisicoMontagem, taxaFechamento, agregarMontagem, prioridadeParaFinalizar,
+    montagemFinalizadaObra, contadoresMontagem,
     parseHora, duracaoHoras, valorProcessadoTarefa, desempenhoColaborador,
     paraFinalizar, paraFinalizarTotal, alertasGlobais,
     indiceDesempenho, pendenciasDoColaborador, rankingColaboradores,

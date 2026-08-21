@@ -63,6 +63,38 @@
     return comp;
   }
 
+  // ---------- Montagem V2 (Fase 5) — helpers privados de planejamento ----------
+  // "Fim real" capturado automaticamente quando o ÚLTIMO ambiente obrigatório
+  // fecha (Finalizado/Finalizado com ressalva) — reusa M.Calc.
+  // montagemFinalizadaObra (mesma leitura que o resto do app usa pra saber
+  // se a obra "realmente" encerrou a montagem, ver §9). Idempotente — só
+  // grava se ainda não tinha sido gravado, e só se existir início real
+  // registrado (senão não dá pra calcular duração real com sentido).
+  function marcarFimRealSeObraFechou(o){
+    if(!M.Calc || !M.Calc.montagemFinalizadaObra) return; // Calc pode não estar carregado em contexto de teste isolado
+    const r = M.Calc.montagemFinalizadaObra(o);
+    if(!r.finalizada) return;
+    o.planejamentoMontagem = o.planejamentoMontagem || {};
+    if(o.planejamentoMontagem.fimReal) return;
+    o.planejamentoMontagem.fimReal = M.todayISO();
+    if(o.planejamentoMontagem.inicioReal){
+      const a = new Date(o.planejamentoMontagem.inicioReal+"T00:00:00"), b = new Date(o.planejamentoMontagem.fimReal+"T00:00:00");
+      o.planejamentoMontagem.duracaoRealDias = Math.max(0, Math.round((b-a)/86400000));
+    }
+  }
+  // Estimativa simples de fim previsto — nunca autoritativa, só um cálculo de
+  // apoio (§10: "sem KPI sofisticado"). dias_uteis aproxima 5/7; semanas usa
+  // 7 dias corridos por semana; dias_corridos soma direto.
+  function calcularFimPrevisto(planejamento){
+    if(!planejamento.inicioPrevisto || !planejamento.duracaoEstimadaValor) return null;
+    const dias = planejamento.duracaoEstimadaUnidade==="semanas" ? planejamento.duracaoEstimadaValor*7
+      : planejamento.duracaoEstimadaUnidade==="dias_uteis" ? Math.ceil(planejamento.duracaoEstimadaValor*7/5)
+      : planejamento.duracaoEstimadaValor;
+    const d = new Date(planejamento.inicioPrevisto+"T00:00:00");
+    d.setDate(d.getDate()+dias);
+    return d.toISOString().slice(0,10);
+  }
+
   // ---------- semente de etapas / requisitos / tarefas padrão com ids/ordem ----------
   function seedEtapas(){ return deepClone(M.ETAPAS_SEED); }
   // FASE 3 — catálogo de fases macro da obra (distinto das etapas de móvel
@@ -276,6 +308,37 @@
     });
   }
 
+  // ---------- migração: nomenclatura canônica de a.montagemStatus (últimos
+  // ajustes antes do push, item 2) ----------
+  // Antes desta rodada, a.montagemStatus usava os nomes internos FINALIZADA /
+  // FINALIZADA_RESSALVA, enquanto M.Calc.situacaoAmbiente() já expunha pra
+  // tela os nomes canônicos FINALIZADO / FINALIZADO_COM_RESSALVA (traduzindo
+  // um pro outro toda vez que alguém lia a situação do ambiente). Isso foi
+  // unificado: agora a.montagemStatus grava DIRETO o nome canônico — sem
+  // tradução nenhuma no caminho de leitura (nem aqui, nem em Calc, nem em
+  // lugar nenhum: só esta função sabe que o nome antigo um dia existiu).
+  //
+  // Esta é a ÚNICA função do app que ainda conhece FINALIZADA/
+  // FINALIZADA_RESSALVA — mapeamento explícito e determinístico de exatamente
+  // dois valores literais antigos pros dois novos, nunca inferência (não
+  // adivinha nada a partir de outro campo; só troca a string se o valor
+  // salvo for EXATAMENTE um dos dois nomes antigos). PRONTO_PARA_FINALIZAR,
+  // TRAVADO (via bloqueio/travamentoManual) e ambiente não iniciado (null)
+  // não mudam de nome nesta rodada, então não precisam de nenhum mapeamento.
+  // Idempotente: se não sobrar nenhum a.montagemStatus com o nome antigo, não
+  // faz nada (não emite, não grava de novo).
+  const MONTAGEM_STATUS_LEGADO = {FINALIZADA:"FINALIZADO", FINALIZADA_RESSALVA:"FINALIZADO_COM_RESSALVA"};
+  function migrarMontagemStatusLegado(){
+    let mudou = false;
+    (state.obras||[]).forEach(o=>{
+      (o.ambientes||[]).forEach(a=>{
+        const novo = MONTAGEM_STATUS_LEGADO[a.montagemStatus];
+        if(novo){ a.montagemStatus = novo; mudou = true; }
+      });
+    });
+    if(mudou) emit();
+  }
+
   function persist(){
     try{ localStorage.setItem(LS_KEY, JSON.stringify(state)); }catch(e){ /* quota etc: ignora */ }
   }
@@ -398,6 +461,9 @@
     // e emitir aqui, a gravação de volta pro Supabase agora tem chance real
     // de vingar, em vez de o checklist antigo "renascer" a cada sincronização.
     migrarChecklistLegado();
+    // mesma lógica: se o remoto ainda tiver montagemStatus com nome antigo
+    // (FINALIZADA/FINALIZADA_RESSALVA), reaplica a migração explícita aqui.
+    migrarMontagemStatusLegado();
     persist();
     listeners.forEach(fn=>fn());
   }
@@ -1416,55 +1482,204 @@
       const feito = a.montagemChecklist || {};
       return M.CHECKLIST_ENCERRAMENTO_AMBIENTE.map(item=>({item, feito: !!feito[item]}));
     },
-    finalizarAmbiente(ambienteId, opts){
-      opts = opts || {};
-      const f = Store.findAmbiente(ambienteId); if(!f) return {ok:false};
+    // ---------- Montagem V2 (Fase 5, rodada de ajustes) — máquina de estados por ambiente ----------
+    // AJUSTE OBRIGATÓRIO (pós-relatório): cada ação tem sua própria chave de
+    // permissão — nenhum perfil hardcoded, nenhuma ação decidindo "se tem
+    // permissão A faz uma coisa, se tem B faz outra". iniciar/travar/destravar
+    // usam montagem.iniciar/montagem.travar/montagem.destravar (chaves
+    // próprias — ver M.PERFIS em data.js). marcarPronto e aprovarFinalizacao
+    // continuam com suas permissões já existentes, mas agora como
+    // ENTRY-POINTS SEPARADOS (Store.marcarProntoAmbiente / Store.aprovarFinalizacaoAmbiente)
+    // — nenhum dos dois pula estado, mesmo que quem chame tenha as duas
+    // permissões ao mesmo tempo (ex.: ADMIN). O único jeito de fechar um
+    // ambiente sem passar por PRONTO_PARA_FINALIZAR é a exceção explícita
+    // (Store.finalizarComRessalva), que exige motivo e permissão própria.
+    iniciarMontagemAmbiente(ambienteId){
+      if(!Store.pode("montagem.iniciar")) return {ok:false, motivo:"SEM_PERMISSAO"};
+      const f = Store.findAmbiente(ambienteId); if(!f) return {ok:false, motivo:"NAO_ENCONTRADO"};
       const {o,a} = f;
-      const bloqueios = Store.bloqueiosAmbiente(ambienteId);
-      // usa o checklist recém-marcado no formulário (opts.checklist), não o
-      // que já estava salvo antes — senão marcar tudo agora e enviar nunca
-      // seria suficiente pra fechar sem ressalva (o "salvo" só é atualizado
-      // depois deste próprio cálculo, mais abaixo).
-      const checklistState = opts.checklist || a.montagemChecklist || {};
+      if(a.montagemInicioReal) return {ok:true, jaIniciado:true};
+      a.montagemInicioReal = new Date().toISOString();
+      // captura "início real" da MONTAGEM DA OBRA também, na primeira vez que
+      // qualquer ambiente dela é iniciado (planejamento §10 — início real/fim
+      // real/duração real) — não exige que alguém tenha preenchido o
+      // planejamento antes; o campo nasce sozinho no primeiro ambiente.
+      o.planejamentoMontagem = o.planejamentoMontagem || {};
+      if(!o.planejamentoMontagem.inicioReal) o.planejamentoMontagem.inicioReal = M.todayISO();
+      Store.log(o.id, "AMBIENTE_MONTAGEM_INICIADA", `${a.nome}: montagem iniciada.`);
+      emit();
+      return {ok:true};
+    },
+    // Travamento MANUAL — distinto do travamento por pendência (que continua
+    // 100% automático via M.bloqueiaFechamento). Motivo é sempre obrigatório
+    // (handoff §7: "TRAVADO precisa sempre mostrar motivo" / "não permitir
+    // ressalva silenciosa" — mesmo princípio aplicado aqui pro travamento).
+    marcarAmbienteTravado(ambienteId, motivo){
+      if(!Store.pode("montagem.travar")) return {ok:false, motivo:"SEM_PERMISSAO"};
+      if(!motivo || !motivo.trim()) return {ok:false, motivo:"MOTIVO_OBRIGATORIO"};
+      const f = Store.findAmbiente(ambienteId); if(!f) return {ok:false, motivo:"NAO_ENCONTRADO"};
+      const {o,a} = f;
+      if(a.montagemStatus==="FINALIZADO" || a.montagemStatus==="FINALIZADO_COM_RESSALVA") return {ok:false, motivo:"JA_FINALIZADO"};
+      a.travamentoManual = {motivo: motivo.trim(), autor: state.usuarioAtual, data: new Date().toISOString()};
+      Store.log(o.id, "AMBIENTE_TRAVADO_MANUAL", `${a.nome}: travado — ${motivo.trim()}`);
+      emit();
+      return {ok:true};
+    },
+    // "Destravar" só se aplica ao travamento MANUAL. Se o ambiente está
+    // travado por pendência aberta, a única forma real de destravar é
+    // resolver a pendência (Pendências V2, Fase 4) — não existe um botão
+    // que "force" isso aqui, senão o motivo mostrado deixaria de ser
+    // verdade (o ambiente continuaria travado de fato).
+    destravarAmbiente(ambienteId){
+      if(!Store.pode("montagem.destravar")) return {ok:false, motivo:"SEM_PERMISSAO"};
+      const f = Store.findAmbiente(ambienteId); if(!f) return {ok:false, motivo:"NAO_ENCONTRADO"};
+      const {o,a} = f;
+      if(Store.bloqueiosAmbiente(ambienteId).length) return {ok:false, motivo:"TRAVADO_POR_PENDENCIA"};
+      if(!a.travamentoManual) return {ok:false, motivo:"NAO_ESTA_TRAVADO"};
+      a.travamentoManual = null;
+      Store.log(o.id, "AMBIENTE_DESTRAVADO", `${a.nome}: destravado.`);
+      emit();
+      return {ok:true};
+    },
+    // helper privado — checklist + móveis não montados, usado por
+    // marcarProntoAmbiente e finalizarComRessalva (as duas únicas ações que
+    // olham pro checklist de encerramento).
+    _checklistInfoAmbiente(a, checklistOverride){
+      const checklistState = checklistOverride || a.montagemChecklist || {};
       const checklist = M.CHECKLIST_ENCERRAMENTO_AMBIENTE.map(item=>({item, feito: !!checklistState[item]}));
       const itensChecklistFaltando = checklist.filter(c=>!c.feito).map(c=>c.item);
       const naoMontados = a.moveis.filter(m=> Store.posicaoEtapa(m.etapa) < Store.posicaoEtapa("MONTAGEM")).length;
-      const pendente = bloqueios.length>0 || itensChecklistFaltando.length>0 || naoMontados>0;
-      if(pendente && !opts.ressalva){
-        return {ok:false, motivo:"PENDENTE", bloqueios, itensChecklistFaltando, naoMontados};
+      return {checklistState, itensChecklistFaltando, naoMontados};
+    },
+    // Primeiro passo do fluxo oficial: EM_MONTAGEM → PRONTO_PARA_FINALIZAR.
+    // Só funciona a partir de EM_MONTAGEM — mesmo quem também tem
+    // montagem.aprovarFinalizacao (ex.: ADMIN) não pula pra FINALIZADO por
+    // aqui. Fechar puxando ressalva é outra ação (finalizarComRessalva),
+    // não um bypass escondido dentro desta.
+    marcarProntoAmbiente(ambienteId, opts){
+      opts = opts || {};
+      if(!Store.pode("montagem.marcarPronto")) return {ok:false, motivo:"SEM_PERMISSAO"};
+      const f = Store.findAmbiente(ambienteId); if(!f) return {ok:false, motivo:"NAO_ENCONTRADO"};
+      const {o,a} = f;
+      const situacao = M.Calc && M.Calc.situacaoAmbiente ? M.Calc.situacaoAmbiente(a) : null;
+      if(situacao && situacao.key==="PRONTO_PARA_FINALIZAR"){
+        return {ok:true, status:"PRONTO_PARA_FINALIZAR", aguardandoAprovacao:true, jaEstavaPronto:true};
       }
-      if(opts.ressalva){
-        // FASE 1 (V2): aceita a permissão antiga (liberarExcecao) OU a nova
-        // ("montagem.finalizarComRessalva", que hoje espelha liberarExcecao
-        // pra cada perfil — ver M.PERFIS) — aditivo, não tira acesso de
-        // ninguém que já podia fazer isso antes.
-        if(!Store.pode("liberarExcecao") && !Store.pode("montagem.finalizarComRessalva")) return {ok:false, motivo:"SEM_PERMISSAO"};
-        if(!opts.motivo) return {ok:false, motivo:"MOTIVO_OBRIGATORIO"};
+      if(!situacao || situacao.key!=="EM_MONTAGEM"){
+        return {ok:false, motivo:"TRANSICAO_INVALIDA", estadoAtual: situacao? situacao.key : null};
+      }
+      const {checklistState, itensChecklistFaltando, naoMontados} = Store._checklistInfoAmbiente(a, opts.checklist);
+      if(itensChecklistFaltando.length>0 || naoMontados>0){
+        return {ok:false, motivo:"PENDENTE", itensChecklistFaltando, naoMontados};
       }
       a.montagemChecklist = checklistState;
-      a.montagemStatus = opts.ressalva ? "FINALIZADA_RESSALVA" : "FINALIZADA";
+      a.montagemStatus = "PRONTO_PARA_FINALIZAR";
+      Store.log(o.id, "AMBIENTE_PRONTO_PARA_FINALIZAR", `${a.nome}: marcado como pronto para finalizar, aguardando aprovação.`);
+      emit();
+      return {ok:true, status:"PRONTO_PARA_FINALIZAR", aguardandoAprovacao:true};
+    },
+    // Segundo passo do fluxo oficial: PRONTO_PARA_FINALIZAR → FINALIZADO.
+    // Não aceita nenhum outro estado de origem — quem chama com o ambiente
+    // ainda EM_MONTAGEM recebe erro de transição, mesmo tendo a permissão.
+    aprovarFinalizacaoAmbiente(ambienteId){
+      if(!Store.pode("montagem.aprovarFinalizacao")) return {ok:false, motivo:"SEM_PERMISSAO"};
+      const f = Store.findAmbiente(ambienteId); if(!f) return {ok:false, motivo:"NAO_ENCONTRADO"};
+      const {o,a} = f;
+      if(a.montagemStatus!=="PRONTO_PARA_FINALIZAR"){
+        const situacao = M.Calc && M.Calc.situacaoAmbiente ? M.Calc.situacaoAmbiente(a) : null;
+        return {ok:false, motivo:"TRANSICAO_INVALIDA", estadoAtual: situacao? situacao.key : null};
+      }
+      // AJUSTE (últimos ajustes antes do push, item 3): não reexige checklist
+      // (já validado em marcarProntoAmbiente) — mas o campo bruto
+      // a.montagemStatus continua "PRONTO_PARA_FINALIZAR" mesmo se um bloqueio
+      // NOVO surgiu depois (pendência aberta com impacto de bloqueio, ou
+      // travamento manual), porque nenhuma dessas duas coisas mexe nesse
+      // campo. situacaoAmbiente() já dá prioridade a TRAVADO sobre
+      // PRONTO_PARA_FINALIZAR quando há bloqueio — aqui a aprovação usa a
+      // mesma prioridade explicitamente, pra não fechar por cima de um
+      // bloqueio incompatível que apareceu depois de marcar pronto.
+      const bloqueios = Store.bloqueiosAmbiente(ambienteId);
+      if(bloqueios.length || a.travamentoManual){
+        return {ok:false, motivo:"BLOQUEIO_SURGIU_APOS_PRONTO", estadoAtual:"TRAVADO"};
+      }
+      a.montagemStatus = "FINALIZADO";
       a.finalizadoPor = state.usuarioAtual || null;
       a.finalizadoEm = M.todayISO();
-      if(opts.ressalva){
-        a.montagemRessalva = {motivo:opts.motivo, autorizadoPor: state.usuarioAtual, pendenciaVinculada: opts.pendenciaVinculada||null, data:M.todayISO()};
-        Store.log(o.id, "AMBIENTE_FINALIZADO_RESSALVA", `${a.nome} finalizado com ressalva: ${opts.motivo}`);
-        Store.audit({categoria:"GOVERNANCA", tipo:"AVANCO_COM_RESSALVA", obraId:o.id, ambienteId:a.id,
-          descricao:`${a.nome} finalizado com ressalva — ${opts.motivo}`, motivo:opts.motivo});
-      } else {
-        a.montagemRessalva = null;
-        Store.log(o.id, "AMBIENTE_FINALIZADO", `${a.nome} finalizado.`);
-      }
+      Store.log(o.id, "AMBIENTE_FINALIZADO_APROVADO", `${a.nome}: finalização aprovada.`);
+      marcarFimRealSeObraFechou(o);
       emit();
-      return {ok:true, ressalva: !!opts.ressalva};
+      return {ok:true};
+    },
+    // Exceção explícita e única saída que NÃO passa por PRONTO_PARA_FINALIZAR
+    // → APROVAÇÃO. Só a partir de EM_MONTAGEM / TRAVADO / PRONTO_PARA_FINALIZAR
+    // — nunca a partir de NAO_INICIADO (não existe "ressalva" pra um ambiente
+    // que nem começou) nem de um ambiente já finalizado. Se o travamento vier
+    // de pendência (bloqueio automático), a pendência é registrada no
+    // histórico mesmo que quem chamou não a tenha informado explicitamente.
+    // AJUSTE (últimos ajustes antes do push, item 1): permissão ÚNICA e
+    // exclusiva — só montagem.finalizarComRessalva autoriza esta transição.
+    // liberarExcecao NÃO é mais aceito aqui como alternativa (era um bypass
+    // indesejado); liberarExcecao continua valendo normalmente nos fluxos
+    // legados onde já era usado (garantia CORTESIA, travar pendência em
+    // pages/pendencias.js) — só deixou de valer para fechar com ressalva
+    // na Montagem V2.
+    finalizarComRessalva(ambienteId, opts){
+      opts = opts || {};
+      if(!Store.pode("montagem.finalizarComRessalva")) return {ok:false, motivo:"SEM_PERMISSAO"};
+      const f = Store.findAmbiente(ambienteId); if(!f) return {ok:false, motivo:"NAO_ENCONTRADO"};
+      const {o,a} = f;
+      const situacao = M.Calc && M.Calc.situacaoAmbiente ? M.Calc.situacaoAmbiente(a) : null;
+      const ORIGENS_PERMITIDAS = ["EM_MONTAGEM","TRAVADO","PRONTO_PARA_FINALIZAR"];
+      if(!situacao || !ORIGENS_PERMITIDAS.includes(situacao.key)){
+        return {ok:false, motivo:"TRANSICAO_INVALIDA", estadoAtual: situacao? situacao.key : null};
+      }
+      if(!opts.motivo || !String(opts.motivo).trim()) return {ok:false, motivo:"MOTIVO_OBRIGATORIO"};
+      const bloqueios = Store.bloqueiosAmbiente(ambienteId);
+      const pendenciaVinculada = opts.pendenciaVinculada || (bloqueios.length? bloqueios[0].id : null);
+      const {checklistState} = Store._checklistInfoAmbiente(a, opts.checklist);
+      a.montagemChecklist = checklistState;
+      a.montagemStatus = "FINALIZADO_COM_RESSALVA";
+      a.travamentoManual = null;
+      a.finalizadoPor = state.usuarioAtual || null;
+      a.finalizadoEm = M.todayISO();
+      a.montagemRessalva = {motivo:opts.motivo, autorizadoPor: state.usuarioAtual, pendenciaVinculada, data:M.todayISO()};
+      const viaPendencia = bloqueios.length? ` — travamento vinculado à pendência "${bloqueios[0].descricao||bloqueios[0].categoria}"` : "";
+      Store.log(o.id, "AMBIENTE_FINALIZADO_RESSALVA", `${a.nome} finalizado com ressalva: ${opts.motivo}${viaPendencia}`);
+      Store.audit({categoria:"GOVERNANCA", tipo:"AVANCO_COM_RESSALVA", obraId:o.id, ambienteId:a.id,
+        descricao:`${a.nome} finalizado com ressalva — ${opts.motivo}${viaPendencia}`, motivo:opts.motivo});
+      marcarFimRealSeObraFechou(o);
+      emit();
+      return {ok:true, ressalva:true, status:"FINALIZADO_COM_RESSALVA", pendenciaVinculada};
     },
     reabrirAmbiente(ambienteId){
       const f = Store.findAmbiente(ambienteId); if(!f) return;
-      const eraRessalva = f.a.montagemStatus==="FINALIZADA_RESSALVA";
+      const eraRessalva = f.a.montagemStatus==="FINALIZADO_COM_RESSALVA";
       f.a.montagemStatus = null;
       Store.log(f.o.id, "AMBIENTE_REABERTO", `${f.a.nome} reaberto${eraRessalva?" (estava finalizado com ressalva)":""}.`);
       Store.audit({categoria:"QUALIDADE", tipo:"PENDENCIA_REABERTA", obraId:f.o.id, ambienteId:f.a.id,
         descricao:`${f.a.nome} reaberto depois de finalizado.`});
+      if(f.o.planejamentoMontagem) f.o.planejamentoMontagem.fimReal = null;
       emit();
+    },
+    // ---------- planejamento de montagem (Fase 5, §10) ----------
+    // Vive na OBRA (não no ambiente) — "início/fim previsto" é um
+    // compromisso de obra inteira, não por cômodo. Gatilho: obra.editar
+    // (já existente — PCP/Líder/Gestor/Admin; não Montador/Produção) —
+    // planejar é decisão de quem edita a obra, não de quem executa.
+    setPlanejamentoMontagem(obraId, dados){
+      if(!Store.pode("obra.editar")) return {ok:false, motivo:"SEM_PERMISSAO"};
+      const o = Store.getObra(obraId); if(!o) return {ok:false, motivo:"NAO_ENCONTRADA"};
+      o.planejamentoMontagem = Object.assign({}, o.planejamentoMontagem, {
+        inicioPrevisto: dados.inicioPrevisto||null,
+        duracaoEstimadaValor: dados.duracaoEstimadaValor? Number(dados.duracaoEstimadaValor) : null,
+        duracaoEstimadaUnidade: dados.duracaoEstimadaUnidade || "dias_uteis",
+        equipePlanejada: dados.equipePlanejada || "",
+        observacoes: dados.observacoes || "",
+      });
+      o.planejamentoMontagem.fimPrevistoCalculado = calcularFimPrevisto(o.planejamentoMontagem);
+      Store.log(o.id, "OBRA_PLANEJAMENTO_MONTAGEM_DEFINIDO", `Planejamento de montagem atualizado (início previsto ${o.planejamentoMontagem.inicioPrevisto||"—"}).`);
+      emit();
+      return {ok:true};
     },
 
     // ---------- configurações ----------
@@ -1487,6 +1702,7 @@
   // depois que Store existe (usa Store.criarTarefaDeChecklist).
   migrarChecklistLegado();
   migrarPendenciasParaModeloHandoff();
+  migrarMontagemStatusLegado();
   // primeira gravação (local — instantânea)
   persist();
   // SUPABASE: dispara a sincronização em segundo plano (não bloqueia o boot)
