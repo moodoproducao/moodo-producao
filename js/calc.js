@@ -723,9 +723,49 @@
     return pa-pb; // prazo da obra mais próximo primeiro
   }
 
+  // REFINO VISUAL V2 (ajustes finais): fonte única de verdade para "pendência
+  // crítica" no resumo operacional (KPI de Pendências + Exceções críticas de
+  // Hoje). Critério é IMPACTO REAL, nunca prioridade — prioridade é um campo
+  // editável por pessoa e não pode, sozinho, colocar uma pendência
+  // INFORMATIVO/NAO_IMPEDE como "crítica". Prioridade continua servindo só
+  // para ordenar/desempatar dentro do grupo já filtrado por esta função
+  // (isso já acontece hoje porque as listas de origem já vêm ordenadas por
+  // compararPrioridadePendencia).
+  //
+  // CAMPO DE ANTIGUIDADE (última verificação antes do push, §1): usa
+  // `p.abertura`, DE PROPÓSITO — é o mesmo campo que TODA a antiguidade da
+  // pendência já usa no app inteiro, inclusive o critério 4 do handoff
+  // aprovado (compararPrioridadePendencia, algumas linhas acima) e todo
+  // display de "aberta há Nd" (Pendências, Hoje). `criadoEm` é um campo
+  // DIFERENTE, de uma camada de rastreabilidade adicionada depois (Fase 2 —
+  // ver novaPendenciaObj/js/store.js): é o timestamp de quando o REGISTRO foi
+  // criado no sistema, enquanto `abertura` é quando o PROBLEMA de fato se
+  // abriu — na migração de dado legado (js/store.js,
+  // migrarPendenciasParaModeloHandoff) `criadoEm` é literalmente BACKFILLED a
+  // partir de `abertura` pra pendência antiga (`if(p.criadoEm===undefined)
+  // p.criadoEm = p.abertura || null`), nunca o contrário — ou seja,
+  // `abertura` é o campo mais antigo/canônico dos dois, presente em toda
+  // pendência (seed antigo, migrada ou criada via Store.criarPendencia/
+  // novaPendenciaObj, que sempre grava `abertura:agora` por padrão). Usar
+  // `criadoEm` aqui divergiria do critério 4 do handoff e de todo o resto da
+  // tela — não é o campo certo pra "antiguidade" neste app. Guard explícito
+  // em `p.abertura` abaixo (em vez de confiar em diasDesde(undefined) virar
+  // NaN e falhar "por acaso") — timestamp ausente/inválido nunca vira
+  // crítica.
+  function pendenciaCritica(p){
+    if(p.status==="RESOLVIDA") return false;
+    if(p.impacto==="BLOQUEIA_OBRA" || p.impacto==="BLOQUEIA_AMBIENTE") return true;
+    if(p.impacto==="IMPEDE_FINALIZAR"){
+      const prazoVencido = !!(p.prazo && diasAte(p.prazo)<=0);
+      const envelhecida = !!(p.abertura && diasDesde(p.abertura)>=5);
+      return prazoVencido || envelhecida;
+    }
+    return false; // INFORMATIVO/NAO_IMPEDE nunca são "crítica" no resumo operacional
+  }
+
   M.Calc = {
     fmtBRL, fmtBRLk, fmtDate, fmtPct, daysBetween, diasDesde, diasAte,
-    compararPrioridadePendencia,
+    compararPrioridadePendencia, pendenciaCritica,
     movelConcluido, progressoGrupo, progressoObra, progressoAmbiente,
     itemCriticoGrupo, pendenciasAbertasDe, pendenciasBloqueantesDe, riscoObra, obraParada, diasParada, situacaoMovel, situacaoObra, wipPorEtapa, indicadores,
     situacaoAmbiente, progressoFisicoMontagem, taxaFechamento, agregarMontagem, prioridadeParaFinalizar,

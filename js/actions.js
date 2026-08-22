@@ -41,6 +41,14 @@
     // perfil não cabe em 375/360px sem cortar item (hoje só o Admin, 7
     // itens — ver comentário completo em js/main.js navHtml()).
     mobileMaisAberto: false,
+    // REFINO VISUAL V2 (§8/§9 — "Ver todos"/expansão sob demanda): estado
+    // genérico e reusável entre páginas — cada seção "top N com Ver todos"
+    // (Montagem Opção A, grupos de Pendências) usa uma chave própria
+    // ("montagem:TRAVADO", "pend:CRITICAS", ...), sem precisar de um campo
+    // de UIState dedicado por página/seção. Nada disto é persistido
+    // (localStorage/Supabase) — é só estado efêmero de navegação, do mesmo
+    // jeito que pendExpandido/producaoExpandidas já são hoje.
+    expandSections: new Set(),
   };
 
   // ---------- upload de arquivos/fotos (Supabase Storage) ----------
@@ -359,6 +367,14 @@
     },
     setPendFiltro(campo, val){ M.UIState.pendFiltro[campo]=val; Act.rerender(); },
     limparPendFiltros(){ M.UIState.pendFiltro = {status:"", impacto:"", obraId:"", responsavel:"", busca:""}; Act.rerender(); },
+    // REFINO VISUAL V2 — toggle genérico de "Ver todos" (§8/§9). Usado por
+    // UI.secaoComVerTodos (js/ui.js) — não referenciar diretamente o Set,
+    // pra manter um único ponto de entrada.
+    toggleExpand(key){
+      const s = M.UIState.expandSections;
+      if(s.has(key)) s.delete(key); else s.add(key);
+      Act.rerender();
+    },
     setPendView(v){ M.UIState.pendView = v; Act.rerender(); },
     // FASE 4 (§7 handoff): toggle real Minhas/Todas — antes era fixo por perfil.
     // FASE 4 (AJUSTE): Produção não pode "Todas" nem manipulando estado —

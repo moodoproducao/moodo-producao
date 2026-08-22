@@ -19,12 +19,9 @@
   ];
 
   // ---------- cartão de ambiente (unidade central da fila — §12) ----------
-  // Mostra sempre: obra · ambiente · estado · responsável/equipe · travamento
-  // (se houver) · pendências relevantes · UM próximo passo claro. Nunca um
-  // número solto sem ação atrás.
-  function equipeDoAmbiente(a){
-    return Array.from(new Set(a.moveis.map(m=>m.responsavel).filter(Boolean)));
-  }
+  // Mostra sempre: obra · ambiente · estado · travamento (se houver) ·
+  // pendências relevantes · UM próximo passo claro. Nunca um número solto
+  // sem ação atrás.
   function proximoPassoHtml(o, a, sit){
     // AJUSTE (rodada de ajustes) — permissões granulares, uma por ação.
     // iniciar/travar/destravar não reaproveitam mais montagem.marcarPronto
@@ -65,49 +62,120 @@
     }
     return `${podeTravar? `<button class="btn sm ghost" onclick="Act.abrirMarcarTravado('${a.id}')">${UI.icon('lock',12)} Marcar travado</button>`:""}${btnPend || `<span class="small muted">Em andamento</span>`}`;
   }
-  function cardAmbiente(o, a){
+  // REFINO VISUAL V2 (§2 — Montagem Opção A): versão COMPACTA do card de
+  // ambiente, usada nas 3 colunas do corpo prioritário. Mostra o essencial
+  // (ambiente · estado · obra · % · motivo do travamento · 1 ação
+  // principal) numa linha densa — a versão completa com todos os detalhes
+  // continua acessível abrindo a obra (a própria linha já navega pra lá).
+  // Mantém 100% a mesma leitura de estado (M.Calc.situacaoAmbiente) e as
+  // mesmas ações/permissões de antes (proximoPassoHtml, não duplicado).
+  function cardAmbienteCompacto(o, a){
     const sit = C.situacaoAmbiente(a);
     const prog = C.progressoAmbiente(a);
-    const equipe = equipeDoAmbiente(a);
     const pendRelevantes = M.Store.state.pendencias.filter(p=>p.ambienteId===a.id && p.status!=="RESOLVIDA");
-    return `<div class="card pad" style="margin-bottom:8px;">
-      <div class="flex-between" style="flex-wrap:wrap;gap:6px;">
-        <div>
-          <div class="flex-gap" style="align-items:center;"><b>${UI.esc(a.nome)}</b>${UI.situacaoAmbienteChip(sit)}</div>
-          <div class="small muted" style="margin-top:2px;">${UI.esc(o.cliente)} · ${o.numeroOS}${equipe.length? " · equipe: "+equipe.map(UI.esc).join(", ") : ""}</div>
-          ${sit.motivo? `<div class="small" style="margin-top:2px;color:var(--critical);">${UI.icon('lock',10)} ${UI.esc(sit.motivo)}</div>` : ""}
-          ${pendRelevantes.length? `<div class="small muted" style="margin-top:2px;">${pendRelevantes.length} pendência(s) vinculada(s) a este ambiente</div>` : ""}
-        </div>
-        <div style="text-align:right;"><b>${prog.pct}%</b></div>
+    return `<div class="compact-row" onclick="Act.irParaObra('${o.id}','${a.id}')">
+      <div class="cr-main">
+        <div class="cr-top"><span class="cr-title">${UI.esc(a.nome)}</span>${UI.situacaoAmbienteChip(sit)}</div>
+        <div class="cr-sub">${UI.esc(o.cliente)} · ${o.numeroOS} · ${prog.pct}%${pendRelevantes.length? ` · ${pendRelevantes.length} pend.`:""}</div>
+        ${sit.motivo? `<div class="cr-motivo">${UI.icon('lock',9)} ${UI.esc(sit.motivo)}</div>` : ""}
       </div>
-      ${UI.progressBar(prog.pct, sit.key==="TRAVADO"?"blocked":(prog.pct>=100?"good":""))}
-      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
-        ${proximoPassoHtml(o,a,sit)}
-        <a class="btn sm ghost" href="#/obra/${o.id}">Abrir obra</a>
-      </div>
+      <div class="cr-action" onclick="event.stopPropagation()">${proximoPassoHtml(o,a,sit)}</div>
     </div>`;
   }
 
-  function secaoAmbientes(titulo, icon, tone, itens){
-    if(!itens.length) return "";
-    return `<div class="card-title" style="margin:18px 0 8px;"><span style="flex:1;">${UI.icon(icon,14)} ${titulo}</span><span class="chip ${tone}">${itens.length}</span></div>
-      ${itens.map(({o,a})=>cardAmbiente(o,a)).join("")}`;
+  // uma coluna do corpo prioritário — cabeçalho (título + contador) + até
+  // "limite" linhas compactas + "Ver todos" quando sobra item (§8: macro
+  // por padrão, micro por exceção — nunca lista tudo de cara).
+  function colunaMontagem(o){
+    if(!o.itens.length){
+      return `<div class="col-group">
+        ${UI.secHead({titulo:o.titulo, icon:o.icon, count:0, tone:"neutral"})}
+        <div class="group-empty">${UI.esc(o.vazio)}</div>
+      </div>`;
+    }
+    const itensHtml = o.itens.map(({o:obra,a})=> cardAmbienteCompacto(obra,a));
+    const {itensHtml:html, toggleHtml} = UI.secaoComVerTodos({key:o.key, itens:itensHtml, limite:o.limite||6});
+    return `<div class="col-group">
+      ${UI.secHead({titulo:o.titulo, icon:o.icon, count:o.itens.length, tone:o.tone})}
+      ${html}
+      ${toggleHtml}
+    </div>`;
   }
 
-  function planejamentoObraHtml(o){
+  // REFINO VISUAL V2 (§2): "planejamento por obra em formato compacto" —
+  // era um card cheio por obra (fácil de estourar a dobra com muitas
+  // obras); agora uma tabela densa, uma linha por obra, mesma informação.
+  function planejamentoRowHtml(o){
     const p = o.planejamentoMontagem || {};
     const podeEditar = M.Store.pode("obra.editar");
-    return `<div class="card pad" style="margin-bottom:8px;">
-      <div class="flex-between" style="flex-wrap:wrap;gap:6px;">
-        <div><b>${UI.esc(o.cliente)}</b> <span class="small muted">${o.numeroOS}</span></div>
-        ${podeEditar? `<button class="btn sm ghost" onclick="Act.abrirPlanejamentoMontagem('${o.id}')">${UI.icon('calendar',12)} ${p.inicioPrevisto?'Editar planejamento':'Planejar montagem'}</button>`:""}
+    const duracaoTxt = p.duracaoEstimadaValor? `${p.duracaoEstimadaValor} ${p.duracaoEstimadaUnidade==="dias_uteis"?"d.úteis":p.duracaoEstimadaUnidade==="semanas"?"sem.":"d.corridos"}` : "";
+    return `<tr>
+      <td><b>${UI.esc(o.cliente)}</b><div class="small muted">${o.numeroOS}</div></td>
+      <td class="small">${p.inicioPrevisto?C.fmtDate(p.inicioPrevisto):"—"} → ${p.fimPrevistoCalculado?C.fmtDate(p.fimPrevistoCalculado):"—"}${duracaoTxt?` (${duracaoTxt})`:""}</td>
+      <td class="small">${p.inicioReal?C.fmtDate(p.inicioReal):"—"} → ${p.fimReal?C.fmtDate(p.fimReal):"—"}${p.duracaoRealDias!=null?` (${p.duracaoRealDias}d)`:""}</td>
+      <td class="small muted">${UI.esc(p.equipePlanejada||"—")}</td>
+      <td>${podeEditar? `<button class="btn sm ghost" onclick="Act.abrirPlanejamentoMontagem('${o.id}')">${UI.icon('calendar',12)} ${p.inicioPrevisto?'Editar':'Planejar'}</button>`:""}</td>
+    </tr>`;
+  }
+
+  // REFINO VISUAL V2 (ajustes finais, §2): versão em cartão da mesma linha de
+  // planejamento, só pro mobile (≤880px, via .mobile-only) — mesmos dados de
+  // planejamentoRowHtml, sem tentar caber todas as colunas. Só: obra;
+  // previsto; realizado; equipe; próximo marco/status. O "status" é um
+  // RÓTULO DERIVADO (não um campo novo/persistido) puramente a partir de
+  // inicioReal/fimReal/inicioPrevisto — mesmos campos já usados na linha
+  // desktop, nenhuma regra de negócio nova.
+  function statusPlanejamentoLabel(p){
+    if(p.fimReal) return {label:"Concluída", tone:"good"};
+    if(p.inicioReal) return {label:"Em andamento", tone:"info"};
+    if(p.inicioPrevisto) return {label:"Planejada", tone:"neutral"};
+    return {label:"Sem planejamento", tone:"neutral"};
+  }
+  function planejamentoCardMobileHtml(o){
+    const p = o.planejamentoMontagem || {};
+    const podeEditar = M.Store.pode("obra.editar");
+    const duracaoTxt = p.duracaoEstimadaValor? `${p.duracaoEstimadaValor} ${p.duracaoEstimadaUnidade==="dias_uteis"?"d.úteis":p.duracaoEstimadaUnidade==="semanas"?"sem.":"d.corridos"}` : "";
+    const st = statusPlanejamentoLabel(p);
+    return `<div class="mcard">
+      <div class="mcard-top">
+        <div><div class="mcard-title">${UI.esc(o.cliente)}</div><div class="small muted">${o.numeroOS}</div></div>
+        <span class="chip ${st.tone}">${st.label}</span>
       </div>
-      <div class="small muted" style="margin-top:6px;display:flex;gap:18px;flex-wrap:wrap;">
-        <span><b>Previsto:</b> ${p.inicioPrevisto?C.fmtDate(p.inicioPrevisto):"—"} → ${p.fimPrevistoCalculado?C.fmtDate(p.fimPrevistoCalculado):"—"}${p.duracaoEstimadaValor?` (${p.duracaoEstimadaValor} ${p.duracaoEstimadaUnidade==="dias_uteis"?"dias úteis":p.duracaoEstimadaUnidade==="semanas"?"semana(s)":"dias corridos"})`:""}</span>
-        <span><b>Real:</b> ${p.inicioReal?C.fmtDate(p.inicioReal):"—"} → ${p.fimReal?C.fmtDate(p.fimReal):"—"}${p.duracaoRealDias!=null?` (${p.duracaoRealDias}d)`:""}</span>
+      <div class="mcard-rows">
+        <div class="mcard-row"><span class="mcard-k">Previsto</span><span class="mcard-v">${p.inicioPrevisto?C.fmtDate(p.inicioPrevisto):"—"} → ${p.fimPrevistoCalculado?C.fmtDate(p.fimPrevistoCalculado):"—"}${duracaoTxt?` (${duracaoTxt})`:""}</span></div>
+        <div class="mcard-row"><span class="mcard-k">Realizado</span><span class="mcard-v">${p.inicioReal?C.fmtDate(p.inicioReal):"—"} → ${p.fimReal?C.fmtDate(p.fimReal):"—"}${p.duracaoRealDias!=null?` (${p.duracaoRealDias}d)`:""}</span></div>
+        <div class="mcard-row"><span class="mcard-k">Equipe</span><span class="mcard-v">${UI.esc(p.equipePlanejada||"—")}</span></div>
       </div>
-      ${p.equipePlanejada? `<div class="small muted" style="margin-top:4px;">Equipe planejada: ${UI.esc(p.equipePlanejada)}</div>`:""}
-      ${p.observacoes? `<div class="small muted" style="margin-top:4px;">${UI.esc(p.observacoes)}</div>`:""}
+      ${podeEditar? `<div style="margin-top:8px;"><button class="btn sm ghost" onclick="Act.abrirPlanejamentoMontagem('${o.id}')">${UI.icon('calendar',12)} ${p.inicioPrevisto?'Editar':'Planejar'}</button></div>`:""}
+    </div>`;
+  }
+
+  // REFINO VISUAL V2 (última verificação antes do push, §2): versão em
+  // cartão da linha de "Móveis em entrega/montagem", só pro mobile (≤880px,
+  // via .mobile-only) — Montador é mobile-first, essa era a última tabela
+  // ainda comprimindo. MESMOS dados/ações da linha desktop (checarRequisitos,
+  // Abrir/Encerrar/Avançar/+Pendência) — nenhuma ação nova, nenhuma regra
+  // nova. Só não repete TODAS as colunas: nome do móvel, obra, ambiente,
+  // etapa, requisito/liberação, entrega prevista, responsável (só quando
+  // tem), e as mesmas ações essenciais da tabela.
+  function movelCardMobileHtml({o,a,m}, posMontagem){
+    const check = M.Store.checarRequisitos(m);
+    return `<div class="mcard">
+      <div class="mcard-top">
+        <div><div class="mcard-title">${UI.esc(m.nome)}</div><div class="small muted">${UI.esc(a.nome)} · ${UI.esc(o.cliente)}</div></div>
+        <span class="chip brand">${UI.esc(M.Store.etapaById(m.etapa).nome)}</span>
+      </div>
+      <div class="mcard-rows">
+        <div class="mcard-row"><span class="mcard-k">Requisitos</span><span class="mcard-v">${check.liberado? `<span class="chip good">liberado</span>` : `<span class="chip critical">${check.faltando.length} pendente(s)</span>`}</span></div>
+        <div class="mcard-row"><span class="mcard-k">Entrega prevista</span><span class="mcard-v">${C.fmtDate(o.dataEntregaPrevista)}</span></div>
+        ${m.responsavel? `<div class="mcard-row"><span class="mcard-k">Responsável</span><span class="mcard-v">${UI.person(m.responsavel)}</span></div>` : ""}
+      </div>
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+        <button class="btn sm" onclick="Act.openMovel('${m.id}')">Abrir</button>
+        ${m.etapa==="MONTAGEM"? `<button class="btn sm primary" onclick="Act.abrirEncerramentoMontagem('${m.id}')">${UI.icon('check-circle',12)} Encerrar</button>`
+          : M.Store.posicaoEtapa(m.etapa)<posMontagem? `<button class="btn sm primary" onclick="Act.moveStageBtn('${m.id}',1)">Avançar</button>`:""}
+        ${M.Store.pode("pendencia.criar")? `<button class="btn sm ghost" onclick="Act.openPendenciaForm('${o.id}','${a.id}','${m.id}')">${UI.icon('alert',12)} + Pendência</button>` : ""}
+      </div>
     </div>`;
   }
 
@@ -141,46 +209,56 @@
       return p>=posEntrega && p<=posMontagem;
     });
 
+    // REFINO VISUAL V2 (§2 — "Montagem Opção A", aprovada): topo em KPIs
+    // compactos (físico/fechamento + os 4 baldes operacionais), corpo
+    // prioritário em 3 colunas (Travados/Prontos/Em montagem), planejamento
+    // por obra em tabela compacta, móveis em detalhe por exceção por
+    // último. Mesmas regras funcionais da Fase 5, 100% inalteradas — só
+    // reorganização visual de como os mesmos dados já calculados acima
+    // (agregado/contadores/baldes/relevantes) são apresentados.
     const html = `
       ${restrito? `<div class="help-banner">${UI.icon('user',13)} Mostrando só as obras onde você tem tarefa, pendência ou assistência atribuída.</div>`:""}
 
       <div class="help-banner">${UI.icon('wrench',13)} Progresso físico e taxa de fechamento nunca são somados — a diferença entre os dois é o esforço espalhado (itens montados, mas ambiente ainda não finalizado formalmente).</div>
 
-      <div class="stat-row">
-        ${UI.statTile({icon:'wrench', label:'Progresso físico', value:agregado.fisico+'%', sub:`${agregado.ambientesIniciados} ambiente(s) iniciados de ${agregado.ambientesTotal} previstos`})}
-        ${UI.statTile({icon:'check-circle', label:'Taxa de fechamento', value:agregado.fechamento+'%', critical: agregado.fisico-agregado.fechamento>=30, sub:`${agregado.ambientesFinalizados} finalizado(s) · ${agregado.ambientesTotal-agregado.ambientesFinalizados} aguardando fechamento`})}
-      </div>
+      ${UI.kpiRow([
+        UI.kpiTile({icon:'wrench', label:'Progresso físico', value:agregado.fisico+'%', sub:`${agregado.ambientesIniciados}/${agregado.ambientesTotal} iniciados`}),
+        UI.kpiTile({icon:'check-circle', label:'Taxa de fechamento', value:agregado.fechamento+'%', tone: agregado.fisico-agregado.fechamento>=30?'critical':'', sub:`${agregado.ambientesFinalizados} finalizado(s)`}),
+        UI.kpiTile({icon:'lock', label:'Travados', value:contadores.travados, tone: contadores.travados?'blocked':''}),
+        UI.kpiTile({icon:'check-circle', label:'Prontos p/ finalizar', value:contadores.prontosParaFinalizar, tone: contadores.prontosParaFinalizar?'warning':''}),
+        UI.kpiTile({icon:'wrench', label:'Em montagem', value:contadores.emMontagem}),
+        UI.kpiTile({icon:'circle', label:'Não iniciados', value:contadores.naoIniciados}),
+      ])}
 
-      <div class="flex-gap" style="flex-wrap:wrap;margin:14px 0 4px;">
-        <span class="chip blocked">${contadores.travados} travado(s)</span>
-        <span class="chip info">${contadores.prontosParaFinalizar} pronto(s) p/ finalizar</span>
-        <span class="chip neutral">${contadores.emMontagem} em montagem</span>
-        <span class="chip neutral">${contadores.naoIniciados} não iniciado(s)</span>
-        <span class="chip good">${contadores.finalizados+contadores.finalizadosComRessalva} finalizado(s)</span>
+      <div class="cols-3-tight">
+        ${colunaMontagem({key:'montagem:TRAVADO', titulo:'Travados', icon:'lock', tone:'blocked', itens:baldes.TRAVADO, vazio:'Nenhum ambiente travado.'})}
+        ${colunaMontagem({key:'montagem:PRONTO', titulo:'Prontos p/ finalizar', icon:'check-circle', tone:'pronto', itens:baldes.PRONTO_PARA_FINALIZAR, vazio:'Nada aguardando aprovação.'})}
+        ${colunaMontagem({key:'montagem:EM_MONTAGEM', titulo:'Em montagem', icon:'wrench', tone:'info', itens:baldes.EM_MONTAGEM, vazio:'Nenhum ambiente em montagem.'})}
       </div>
-
-      ${secaoAmbientes("Travados — precisam de motivo resolvido", "lock", "blocked", baldes.TRAVADO)}
-      ${secaoAmbientes("Prontos para finalizar / aguardando aprovação", "check-circle", "pronto", baldes.PRONTO_PARA_FINALIZAR)}
-      ${secaoAmbientes("Em montagem", "wrench", "info", baldes.EM_MONTAGEM)}
       ${baldes.NAO_INICIADO.length ? `
-      <div class="card-title" style="margin:18px 0 8px;"><span style="flex:1;">${UI.icon('circle',14)} Não iniciados</span><span class="chip neutral">${baldes.NAO_INICIADO.length}</span></div>
-      <p class="small muted">${baldes.NAO_INICIADO.map(({o,a})=>`${UI.esc(a.nome)} (${UI.esc(o.cliente)})`).join(" · ")}</p>
+      <p class="small muted" style="margin-top:2px;"><b>${baldes.NAO_INICIADO.length} não iniciado(s):</b> ${baldes.NAO_INICIADO.map(({o,a})=>`${UI.esc(a.nome)} (${UI.esc(o.cliente)})`).join(" · ")}</p>
       ` : ""}
       ${!baldes.TRAVADO.length && !baldes.PRONTO_PARA_FINALIZAR.length && !baldes.EM_MONTAGEM.length && !baldes.NAO_INICIADO.length
         ? `<p class="small muted">Nenhum ambiente em aberto — tudo finalizado.</p>` : ""}
 
-      <div class="card-title" style="margin:22px 0 8px;">Planejamento de montagem por obra</div>
-      ${obrasVisiveis.length ? obrasVisiveis.map(planejamentoObraHtml).join("") : `<p class="small muted">Nenhuma obra visível.</p>`}
-
-      <div class="card-title" style="margin:22px 0 8px;">Móveis em entrega / montagem <span class="small muted" style="font-weight:400;">(detalhe por exceção)</span></div>
-      ${relevantes.length ? `
-      <div class="card pad">
+      ${UI.secHead({titulo:'Planejamento de montagem por obra', icon:'calendar'})}
+      ${obrasVisiveis.length ? `
+      <div class="desktop-only card pad">
         <div style="overflow-x:auto;">
         <table class="tbl">
-          <thead><tr><th>Móvel</th><th>Obra</th><th>Etapa</th><th>Requisitos</th><th>Responsável</th><th>Entrega prevista</th><th></th></tr></thead>
-          <tbody>${relevantes.map(({o,a,m})=>{
-            const check = M.Store.checarRequisitos(m);
-            return `<tr>
+          <thead><tr><th>Obra</th><th>Previsto</th><th>Real</th><th>Equipe</th><th></th></tr></thead>
+          <tbody>${obrasVisiveis.map(planejamentoRowHtml).join("")}</tbody>
+        </table>
+        </div>
+      </div>
+      <div class="mobile-only">${obrasVisiveis.map(planejamentoCardMobileHtml).join("")}</div>
+      ` : `<p class="small muted">Nenhuma obra visível.</p>`}
+
+      ${UI.secHead({titulo:'Móveis em entrega / montagem', icon:'wrench', actionHtml:`<span class="small muted">detalhe por exceção</span>`})}
+      ${relevantes.length ? (()=>{
+        const linhas = relevantes.map(({o,a,m})=>{
+          const check = M.Store.checarRequisitos(m);
+          return `<tr>
               <td><b>${UI.esc(m.nome)}</b><div class="small muted">${UI.esc(a.nome)}</div></td>
               <td><a href="#/obra/${o.id}">${UI.esc(o.cliente)}</a></td>
               <td><span class="chip brand">${UI.esc(M.Store.etapaById(m.etapa).nome)}</span></td>
@@ -194,11 +272,28 @@
                 ${M.Store.pode("pendencia.criar")? `<button class="btn sm ghost" onclick="Act.openPendenciaForm('${o.id}','${a.id}','${m.id}')">${UI.icon('alert',12)} + Pendência</button>` : ""}
               </td>
             </tr>`;
-          }).join("")}</tbody>
+        });
+        const cards = relevantes.map(item=> movelCardMobileHtml(item, posMontagem));
+        // REFINO VISUAL V2 (última verificação, §2): mesma chave de "Ver
+        // todos" pras duas apresentações (tabela desktop / cartão mobile) —
+        // um único estado de expansão (M.UIState.expandSections), nunca
+        // dessincroniza entre as duas.
+        const {itensHtml, toggleHtml} = UI.secaoComVerTodos({key:'montagem:MOVEIS', itens:linhas, limite:8});
+        const {itensHtml:cardsHtml, toggleHtml:cardsToggleHtml} = UI.secaoComVerTodos({key:'montagem:MOVEIS', itens:cards, limite:8});
+        return `<div class="desktop-only card pad">
+        <div style="overflow-x:auto;">
+        <table class="tbl">
+          <thead><tr><th>Móvel</th><th>Obra</th><th>Etapa</th><th>Requisitos</th><th>Responsável</th><th>Entrega prevista</th><th></th></tr></thead>
+          <tbody>${itensHtml}</tbody>
         </table>
         </div>
+        ${toggleHtml}
       </div>
-      ` : `<p class="small muted">Nenhum móvel em entrega ou montagem no momento.</p>`}
+      <div class="mobile-only">
+        ${cardsHtml}
+        ${cardsToggleHtml}
+      </div>`;
+      })() : `<p class="small muted">Nenhum móvel em entrega ou montagem no momento.</p>`}
     `;
 
     return {title:"Montagem", crumb:"O que falta finalizar — travados, prontos para finalizar e em montagem, por ambiente", html};

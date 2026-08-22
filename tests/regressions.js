@@ -1043,6 +1043,88 @@ function pendenciaFixture4(obraId, over){
   assert.equal(doisOrdenados[0].id, pAntiga.id, "critério 4 (antiguidade) isolado: mais dias em aberto vem primeiro");
 }
 
+// ---- 4b) M.Calc.pendenciaCritica (REFINO VISUAL V2, ajustes finais §3;
+// campo de antiguidade reconfirmado na "última verificação antes do push"
+// §1) — "Crítica" no resumo operacional (Pendências + Hoje > Exceções
+// críticas) tem que vir do IMPACTO REAL, NUNCA de prioridade sozinha. Uma
+// pendência INFORMATIVO/NAO_IMPEDE não pode virar "crítica" só porque
+// alguém marcou prioridade="Crítica".
+//
+// Estas pendências são criadas pelo caminho REAL de produção
+// (Store.criarPendencia -> novaPendenciaObj), não por um fixture que inventa
+// campo — é o mesmo objeto que a tela realmente usa, com `abertura`,
+// `criadoEm`, `criadoPor` etc. já preenchidos pelo próprio Store. ----
+{
+  const obraQualquer = obraFixture4({dataEntregaPrevista: appFase4.M.dOff(30)});
+  appFase4.M.Store.state.obras.push(obraQualquer);
+
+  function criarPendReal(over){
+    return comoUsuarioFase4("Paulo Henrique", ()=> appFase4.M.Store.criarPendencia(Object.assign({
+      obraId:obraQualquer.id, obraNome:obraQualquer.cliente, categoria:"Outro",
+    }, over))).pendencia;
+  }
+
+  // ---- evidência do campo canônico de antiguidade ----
+  // `Store.criarPendencia` (caminho real, usado pelo formulário "Registrar
+  // pendência") grava `abertura` E `criadoEm` — mas só `abertura` pode ser
+  // retroativa (é o que os seeds de js/data.js fazem pra simular pendência
+  // já aberta há dias, ex. `abertura:dOff(-6)`); `criadoEm` sempre reflete
+  // o instante em que o REGISTRO foi criado no sistema, nunca é retroativo.
+  const pComAberturaRetroativa = criarPendReal({impacto:"IMPEDE_FINALIZAR", abertura: appFase4.M.dOff(-6)});
+  assert.ok(pComAberturaRetroativa.abertura, "toda pendência criada pelo caminho real tem `abertura` preenchida — é o campo canônico, não um alias de fixture");
+  assert.equal(pComAberturaRetroativa.abertura, appFase4.M.dOff(-6), "`abertura` aceita ser retroativa — é o timestamp DE NEGÓCIO (quando o problema realmente se abriu)");
+  assert.equal(pComAberturaRetroativa.criadoEm, appFase4.M.todayISO(), "`criadoEm` é um campo DIFERENTE (rastreabilidade — Fase 2) — sempre é 'agora', nunca retroativo, mesmo quando abertura é");
+  assert.equal(appFase4.M.Calc.pendenciaCritica(pComAberturaRetroativa), true,
+    "com `abertura` retroativa (>=5 dias), IMPEDE_FINALIZAR é crítica — confirma que a função usa `abertura`, não `criadoEm` (que aqui seria 'hoje', 0 dias)");
+
+  const pInformativoPrioridadeCritica = criarPendReal({impacto:"INFORMATIVO", prioridade:"CRITICA"});
+  assert.equal(appFase4.M.Calc.pendenciaCritica(pInformativoPrioridadeCritica), false,
+    "INFORMATIVO com prioridade='Crítica' NÃO pode ser considerada crítica — prioridade nunca sobrepõe impacto");
+
+  const pNaoImpedePrioridadeCritica = criarPendReal({impacto:"NAO_IMPEDE", prioridade:"CRITICA"});
+  assert.equal(appFase4.M.Calc.pendenciaCritica(pNaoImpedePrioridadeCritica), false,
+    "NAO_IMPEDE com prioridade='Crítica' NÃO pode ser considerada crítica — mesma regra");
+
+  const pBloqueiaObraSemPrioridade = criarPendReal({impacto:"BLOQUEIA_OBRA"});
+  assert.equal(appFase4.M.Calc.pendenciaCritica(pBloqueiaObraSemPrioridade), true,
+    "BLOQUEIA_OBRA é sempre crítica, mesmo sem prioridade marcada");
+
+  const pBloqueiaAmbiente = criarPendReal({impacto:"BLOQUEIA_AMBIENTE"});
+  assert.equal(appFase4.M.Calc.pendenciaCritica(pBloqueiaAmbiente), true, "BLOQUEIA_AMBIENTE é sempre crítica");
+
+  const pImpedeFinalizarRecenteSemPrazo = criarPendReal({impacto:"IMPEDE_FINALIZAR"}); // abertura = hoje (default do Store)
+  assert.equal(appFase4.M.Calc.pendenciaCritica(pImpedeFinalizarRecenteSemPrazo), false,
+    "IMPEDE_FINALIZAR recente (aberta hoje) e sem prazo vencido ainda não é crítica");
+
+  const pImpedeFinalizarVencida = criarPendReal({impacto:"IMPEDE_FINALIZAR", prazo: appFase4.M.dOff(-1)});
+  assert.equal(appFase4.M.Calc.pendenciaCritica(pImpedeFinalizarVencida), true,
+    "IMPEDE_FINALIZAR com prazo vencido é crítica, mesmo recente");
+
+  const pImpedeFinalizarEnvelhecida = criarPendReal({impacto:"IMPEDE_FINALIZAR", abertura: appFase4.M.dOff(-6)});
+  assert.equal(appFase4.M.Calc.pendenciaCritica(pImpedeFinalizarEnvelhecida), true,
+    "IMPEDE_FINALIZAR aberta há >=5 dias é crítica, mesmo sem prazo vencido");
+
+  const pResolvidaBloqueiaObra = criarPendReal({impacto:"BLOQUEIA_OBRA", status:"RESOLVIDA"});
+  assert.equal(appFase4.M.Calc.pendenciaCritica(pResolvidaBloqueiaObra), false,
+    "pendência RESOLVIDA nunca é crítica, mesmo com impacto BLOQUEIA_OBRA");
+
+  // ---- timestamp ausente/inválido não pode virar crítica por acidente ----
+  // simula dado corrompido/legado real (não um campo inventado): mesmo
+  // objeto do Store, com `abertura` removida depois — cenário que o guard
+  // explícito em pendenciaCritica precisa cobrir sem estourar nem virar
+  // crítica por coerção de NaN.
+  const pSemAberturaValida = criarPendReal({impacto:"IMPEDE_FINALIZAR"});
+  delete pSemAberturaValida.abertura;
+  assert.doesNotThrow(()=> appFase4.M.Calc.pendenciaCritica(pSemAberturaValida), "abertura ausente não pode quebrar pendenciaCritica");
+  assert.equal(appFase4.M.Calc.pendenciaCritica(pSemAberturaValida), false,
+    "abertura ausente/undefined NÃO pode virar crítica por acidente (sem prazo vencido)");
+
+  const pAberturaInvalida = criarPendReal({impacto:"IMPEDE_FINALIZAR", abertura:"data-invalida"});
+  assert.doesNotThrow(()=> appFase4.M.Calc.pendenciaCritica(pAberturaInvalida), "abertura com valor inválido não pode quebrar pendenciaCritica");
+  assert.equal(appFase4.M.Calc.pendenciaCritica(pAberturaInvalida), false,
+    "abertura com valor inválido (data não parseável) NÃO pode virar crítica por acidente");
+}
+
 // ---- 5) M.Calendario.proximosEventos — reusa a mesma agregação da tela
 // Calendário (sem duplicar lógica), desacoplada do filtro de UI da própria
 // tela via o parâmetro filtrosSet ----
@@ -1158,6 +1240,14 @@ function pendenciaFixture4(obraId, over){
     esc:(s)=> String(s==null?"":s), icon:()=>"", card:(o)=> `[[${o.titulo||""}]]`+(o.body||""),
     riscoChip:()=>"", tipoChip:()=>"", assistenciaStatusChip:()=>"",
     pageSearchInput:()=>"", botaoNovaObraHtml:()=>"", attachQuickSearch:()=>{},
+    // REFINO VISUAL V2 (ajustes finais, §1) — mesmos stubs mínimos já
+    // adicionados a appFase5.M.UI (Montagem), agora necessários aqui porque
+    // js/pages/hoje.js passou a ter faixa de KPI por perfil. Não trunca —
+    // paginação/expansão é validada visualmente (Playwright), não no VM.
+    kpiTile:(o)=> `[kpi:${o.label}=${o.value}]`,
+    kpiRow:(tiles)=> (tiles||[]).join(""),
+    secHead:(o)=> `[[${o.titulo||""}]]`,
+    secaoComVerTodos:(o)=> ({itensHtml:(o.itens||[]).join(""), toggleHtml:"", ocultos:0, total:(o.itens||[]).length}),
   };
   appHoje.M.Pages = {};
   appHoje.M.UIState = {calFiltros: new Set(["PRODUCAO","ENTREGAS","MONTAGENS","PENDENCIAS","FORNECEDORES","ASSISTENCIAS"])};
@@ -1246,6 +1336,15 @@ appFase5.M.UI = {
   esc:(s)=> String(s==null?"":s), icon:()=>"", card:(o)=> `[[${o.title||""}]]`+(o.body||""),
   situacaoAmbienteChip:(sit)=> `[chip:${sit.key}]`, progressBar:()=>"", statTile:()=>"", person:(n)=>n||"",
   valorOuOculto:(v)=>v,
+  // REFINO VISUAL V2 — stubs mínimos dos componentes novos usados por
+  // js/pages/montagem.js (Opção A). secaoComVerTodos aqui NUNCA trunca (sem
+  // "limite" real) — os testes desta fase verificam presença de conteúdo
+  // por texto (assert html.includes(...)), não paginação/expansão visual
+  // (essa é validada no smoke test com Playwright/produção, não no VM).
+  kpiTile:(o)=> `[kpi:${o.label}=${o.value}]`,
+  kpiRow:(tiles)=> (tiles||[]).join(""),
+  secHead:(o)=> `[[${o.titulo||""}]]`,
+  secaoComVerTodos:(o)=> ({itensHtml:(o.itens||[]).join(""), toggleHtml:"", ocultos:0, total:(o.itens||[]).length}),
 };
 appFase5.M.Pages = {};
 appFase5.M.UIState = {calFiltros: new Set(["PRODUCAO","ENTREGAS","MONTAGENS","PENDENCIAS","FORNECEDORES","ASSISTENCIAS"])};

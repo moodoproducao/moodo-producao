@@ -210,6 +210,25 @@
     </div></div>`;
   }
 
+  // REFINO VISUAL V2 (§6 — novo layout de Pendências): linha compacta usada
+  // nos 3 grupos do topo (Críticas/Em tratamento/Resolver hoje) — mais
+  // densa que linhaLista (sem fluxo/histórico/fotos expandidos). Clicar
+  // expande o item na LISTA COMPLETA abaixo (mesmo M.UIState.pendExpandido
+  // que a lista completa já lê — não é um estado paralelo novo).
+  function pendCompactRowHtml(p){
+    const dias = C.diasDesde(p.abertura);
+    const impDef = M.impactoDef(p.impacto);
+    const prazoTxt = p.prazo ? (C.diasAte(p.prazo)<=0 ? "vencida" : "prazo "+C.fmtDate(p.prazo)) : `${dias}d em aberto`;
+    return `<div class="compact-row" onclick="Act.togglePendExpandido('${p.id}')">
+      <div class="impacto-bar ${impDef.tone}" style="align-self:stretch;"></div>
+      <div class="cr-main">
+        <div class="cr-top"><span class="cr-title">${UI.esc(p.descricao||p.categoria)}</span>${UI.statusPendenciaChip(p.status)}</div>
+        <div class="cr-sub">${UI.esc(p.obraNome)}${p.ambienteNome? " · "+UI.esc(p.ambienteNome):""} · ${UI.esc(prazoTxt)}</div>
+      </div>
+      <div class="cr-action">${UI.impactoChip(p.impacto)}</div>
+    </div>`;
+  }
+
   M.Pages.pendencias = function(){
     const f = M.UIState.pendFiltro;
     const view = M.UIState.pendView || "lista";
@@ -234,10 +253,49 @@
     const bloqueiam = filtradas.filter(p=>p.status!=="RESOLVIDA" && M.bloqueiaFechamento(p.impacto)).length;
     const abertas = filtradas.filter(p=>p.status!=="RESOLVIDA").length;
 
+    // REFINO VISUAL V2 (ajustes finais, §3): "Crítica" usa IMPACTO REAL, nunca
+    // prioridade sozinha — fonte única M.Calc.pendenciaCritica (mesma função
+    // usada em Hoje > Exceções críticas), pra uma pendência INFORMATIVO/
+    // NAO_IMPEDE nunca aparecer como "Crítica" só porque prioridade="Crítica"
+    // foi preenchida. Prioridade continua ordenando/desempatando a lista via
+    // compararPrioridadePendencia — não decide mais criticidade.
+    //   Resolver hoje = vencida OU com a mesma antiguidade (5 dias) que já
+    //   é usada como limiar de "crítico"/"obra parada" em outros pontos do
+    //   app (mesma régua, não uma nova).
+    const criticas = filtradas.filter(C.pendenciaCritica);
+    const emTratamento = filtradas.filter(p=> p.status==="EM_TRATAMENTO");
+    const resolverHoje = filtradas.filter(p=> p.status!=="RESOLVIDA" &&
+      ((p.prazo && C.diasAte(p.prazo)<=0) || C.diasDesde(p.abertura)>=5));
+    const vencidas = filtradas.filter(p=> p.status!=="RESOLVIDA" && p.prazo && C.diasAte(p.prazo)<=0).length;
+    const resolvidasHoje = filtradas.filter(p=> p.status==="RESOLVIDA" && p.resolvidoEm===M.todayISO()).length;
+
+    function grupoColuna(key, titulo, icon, tone, itens, vazio){
+      const {itensHtml, toggleHtml} = UI.secaoComVerTodos({key, itens: itens.map(pendCompactRowHtml), limite:5});
+      return `<div class="col-group">
+        ${UI.secHead({titulo, icon, count:itens.length, tone})}
+        ${itens.length? `${itensHtml}${toggleHtml}` : `<div class="group-empty">${UI.esc(vazio)}</div>`}
+      </div>`;
+    }
+
     const html = `
       <div class="help-banner">${UI.icon('alert',13)} Uma pendência não é uma coluna do quadro — ela existe em paralelo à etapa, com impacto próprio (o que ela trava) e um fluxo operacional (ex.: vidro passa por medir → orçar → pedir → receber → instalar). "Bloqueia fechamento" nunca é escolhido à parte — é sempre consequência do impacto.</div>
-      <div class="flex-between" style="flex-wrap:wrap;gap:10px;margin-bottom:4px;">
-        <div class="small muted">${abertas} aberta${abertas===1?"":"s"} · ${bloqueiam} bloqueia${bloqueiam===1?"":"m"} fechamento</div>
+
+      ${UI.kpiRow([
+        UI.kpiTile({icon:'alert', label:'Abertas', value:abertas}),
+        UI.kpiTile({icon:'lock', label:'Críticas', value:criticas.length, tone: criticas.length?'critical':''}),
+        UI.kpiTile({icon:'clock', label:'Em tratamento', value:emTratamento.length, tone: emTratamento.length?'warning':''}),
+        UI.kpiTile({icon:'alert', label:'Vencidas', value:vencidas, tone: vencidas?'critical':''}),
+        UI.kpiTile({icon:'check', label:'Resolvidas hoje', value:resolvidasHoje, tone: resolvidasHoje?'good':''}),
+      ])}
+
+      <div class="cols-3-tight">
+        ${grupoColuna('pend:CRITICAS', 'Críticas', 'alert', 'critical', criticas, 'Nenhuma pendência crítica agora.')}
+        ${grupoColuna('pend:TRATAMENTO', 'Em tratamento', 'clock', 'warning', emTratamento, 'Nada em tratamento agora.')}
+        ${grupoColuna('pend:HOJE', 'Resolver hoje', 'check-circle', 'neutral', resolverHoje, 'Nada vencendo ou envelhecendo hoje.')}
+      </div>
+
+      <div class="flex-between" style="flex-wrap:wrap;gap:10px;margin:22px 0 8px;">
+        <div class="sec-title" style="margin:0;">${UI.icon('alert',12)}<b>Lista completa</b> <span class="chip neutral">${filtradas.length}</span></div>
         <div class="segmented">
           <button class="${view==='lista'?'active':''}" onclick="Act.setPendView('lista')">Lista</button>
           <button class="${view==='kanban'?'active':''}" onclick="Act.setPendView('kanban')">Kanban</button>

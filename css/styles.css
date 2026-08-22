@@ -248,6 +248,14 @@ p{ margin:0; }
      operar parado no chão de fábrica. Só no breakpoint mobile; desktop
      continua compacto. */
   .btn.sm{ padding:9px 13px; font-size:13px; }
+  /* REFINO VISUAL V2 (§10 — "harmonizar: tipografia/cores/chips/botões/
+     espaçamentos", SEM redesenhar mobile como desktop reduzido): os
+     componentes novos (compact-row/kpi-tile) herdam o mesmo ajuste de alvo
+     de toque que .btn.sm já tinha só pra mobile — nenhum layout novo,
+     nenhuma coluna nova, só respiro maior pra dedo em vez de mouse. */
+  .compact-row{ padding:11px 12px; }
+  .kpi-tile{ padding:12px 13px; }
+  .kpi-tile .kpi-value{ font-size:23px; }
 }
 @media (max-width: 480px){
   .topbar{ flex-direction:column; align-items:stretch; }
@@ -721,3 +729,94 @@ body.tv-mode .sidebar, body.tv-mode .mobile-nav, body.tv-mode .topbar-actions .h
 .oneform-section:last-child{ border-bottom:none; }
 .oneform-section .num-badge{ display:inline-flex; align-items:center; justify-content:center; width:24px;height:24px;border-radius:50%; background:var(--brand); color:#fff; font-size:11px; font-weight:800; margin-right:8px;}
 .oneform-section h2{ font-size:15px; display:flex; align-items:center; margin-bottom:14px;}
+
+/* ============================================================
+   REFINO VISUAL V2 (mockups aprovados — Hoje/Produção/Pendências/
+   Montagem Opção A) — componentes reutilizáveis, desktop-first.
+   Linguagem: sidebar grafite já existente + conteúdo branco + marrom só
+   como assinatura + KPIs compactos + alta densidade + "macro por padrão,
+   micro por exceção" (mesmo princípio do design system original, agora
+   aplicado com mais disciplina de densidade/scroll). Nenhum token de cor
+   novo — tudo reaproveita as variáveis do :root já existentes.
+   Mobile NÃO usa nada disto por padrão (ver comentários por componente);
+   os fluxos mobile continuam os componentes já existentes (.mp-*, .card,
+   .attention-item etc.), só com harmonização pontual de espaçamento.
+   ============================================================ */
+
+/* KPI compacto — mais denso que .stat-tile (usado quando uma tela precisa
+   de vários números no topo sem empurrar o conteúdo útil pra baixo do
+   scroll). .stat-tile continua existindo e é usado onde só 2-3 números
+   grandes fazem sentido (ex.: os 2 números centrais de Montagem). */
+.kpi-row{ display:grid; grid-template-columns:repeat(auto-fit,minmax(122px,1fr)); gap:8px; margin-bottom:14px; }
+.kpi-tile{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:10px 12px; }
+.kpi-tile .kpi-label{ font-family:var(--font-mono); font-size:9.5px; color:var(--ink-mute); text-transform:uppercase; letter-spacing:.07em; font-weight:500; display:flex; align-items:center; gap:4px; margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.kpi-tile .kpi-value{ font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:21px; font-weight:500; letter-spacing:-0.01em; line-height:1; color:var(--ink); }
+.kpi-tile .kpi-value.critical{ color:var(--critical); }
+.kpi-tile .kpi-value.warning{ color:var(--warning); }
+.kpi-tile .kpi-value.good{ color:var(--good); }
+.kpi-tile .kpi-value.blocked{ color:var(--blocked); }
+.kpi-tile .kpi-sub{ font-size:10px; color:var(--ink-mute); margin-top:2px; }
+
+/* section header compacto: título + contador + "ver todos"/link de destino
+   — substitui repetição de .card-title com margin inline por página */
+.sec-head{ display:flex; align-items:center; gap:8px; margin:20px 0 8px; }
+.sec-head:first-child{ margin-top:0; }
+.sec-head .sec-title{ display:flex; align-items:center; gap:6px; font-size:12.5px; font-weight:700; color:var(--ink-soft); text-transform:uppercase; letter-spacing:.06em; flex:1; min-width:0; }
+.sec-head .sec-title b{ color:var(--ink); font-weight:700; text-transform:none; letter-spacing:0; font-size:13.5px; }
+
+/* linha compacta — item de lista denso (nome + estado + 1 ação), usado
+   nas colunas da Montagem Opção A e nos grupos de Pendências. Mais leve
+   que .card.pad (sem sombra/padding grande) pra caber "4-6 itens por
+   grupo" sem estourar a dobra. */
+/* CORREÇÃO (verificação visual desta rodada): a 1ª versão colocava
+   cr-main/cr-action lado a lado num flex row — com `flex-shrink:0` no
+   cr-action, um botão de rótulo longo ("Marcar pronto para finalizar")
+   não encolhia nem quebrava linha de verdade (o `flex-wrap` interno do
+   cr-action não limita sua largura preferida quando o pai não força
+   quebra), e o card ficava mais largo que a coluna, invadindo a coluna
+   vizinha. Layout empilhado (conteúdo em cima, ações embaixo, cada bloco
+   ocupando 100% da largura do card) elimina a causa raiz — ação nunca
+   mais precisa disputar largura com o título. */
+.compact-row{ padding:9px 10px; border-radius:var(--radius-sm); border:1px solid var(--border); background:var(--surface); margin-bottom:6px; cursor:pointer; }
+.compact-row:hover{ border-color:var(--border-strong); }
+.compact-row .cr-main{ min-width:0; }
+.compact-row .cr-top{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.compact-row .cr-title{ font-size:12.5px; font-weight:700; color:var(--ink); }
+.compact-row .cr-sub{ font-size:11px; color:var(--ink-mute); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.compact-row .cr-motivo{ font-size:11px; color:var(--critical); margin-top:2px; }
+.compact-row .cr-action{ display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+
+/* 3 colunas desktop (Montagem Opção A · §2) — colapsa pra 1 coluna antes
+   de espremer o conteúdo dos cards compactos (breakpoint próprio, mais alto
+   que o .grid-3 genérico, porque estas colunas carregam mais texto/ação
+   por item do que os usos atuais de .grid-3). */
+.cols-3-tight{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; align-items:start; }
+@media (max-width:1180px){ .cols-3-tight{ grid-template-columns:1fr 1fr; } }
+@media (max-width:880px){ .cols-3-tight{ grid-template-columns:1fr; } }
+.cols-3-tight .col-group{ min-width:0; }
+
+/* "Ver todos" — expansão sob demanda (§8: macro por padrão, micro por
+   exceção) — nunca esconde a existência do restante, só não empurra tudo
+   pra tela de cara. */
+.ver-todos-btn{ background:none; border:none; padding:5px 2px; font-size:11.5px; font-weight:700; color:var(--ink-soft); cursor:pointer; display:inline-flex; align-items:center; gap:3px; width:100%; text-align:left; }
+.ver-todos-btn:hover{ color:var(--brand); }
+.group-empty{ font-size:12px; color:var(--ink-mute); padding:8px 2px 2px; }
+
+/* REFINO VISUAL V2 (ajustes finais, §2): tabela compacta no desktop, cartão
+   empilhado no mobile — mesmo breakpoint já usado por .cols-3-tight/.compact-row
+   (880px), MESMOS dados já calculados (só apresentação muda). Usado pela
+   tabela "Todas as obras" (obras.js) e "Planejamento de montagem por obra"
+   (montagem.js), as duas que a rodada anterior deixou comprimindo no mobile. */
+.desktop-only{ display:block; }
+.mobile-only{ display:none; }
+@media (max-width:880px){
+  .desktop-only{ display:none; }
+  .mobile-only{ display:block; }
+}
+.mcard{ padding:10px 12px; border-radius:var(--radius-sm); border:1px solid var(--border); background:var(--surface); margin-bottom:8px; }
+.mcard .mcard-top{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.mcard .mcard-title{ font-size:13px; font-weight:700; color:var(--ink); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mcard .mcard-rows{ margin-top:6px; display:flex; flex-direction:column; gap:3px; }
+.mcard .mcard-row{ display:flex; align-items:baseline; justify-content:space-between; gap:8px; font-size:11.5px; }
+.mcard .mcard-row .mcard-k{ color:var(--ink-mute); }
+.mcard .mcard-row .mcard-v{ color:var(--ink); font-weight:600; text-align:right; }

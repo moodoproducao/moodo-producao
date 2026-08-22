@@ -210,6 +210,53 @@
     results.addEventListener("click", ()=> { results.classList.remove("open"); input.value=""; });
   }
 
+  // ============================================================
+  // REFINO VISUAL V2 — componentes compactos reutilizáveis (Hoje/Obras/
+  // Pendências/Montagem Opção A). Ver css/styles.css ".kpi-*"/".sec-head"/
+  // ".compact-row"/".cols-3-tight"/".ver-todos-btn" pros estilos.
+  // ============================================================
+  // KPI compacto — mais denso que statTile(); usado nas faixas de topo com
+  // 4+ números (Montagem continua com statTile pros 2 números centrais,
+  // que precisam de mais destaque — ver comentário em pages/montagem.js).
+  function kpiTile(o){
+    o = o||{};
+    const cls = o.tone ? ` ${o.tone}` : "";
+    return `<div class="kpi-tile">
+      <div class="kpi-label">${o.icon? icon(o.icon,11):""}${esc(o.label)}</div>
+      <div class="kpi-value${cls}">${o.value}</div>
+      ${o.sub? `<div class="kpi-sub">${esc(o.sub)}</div>`:""}
+    </div>`;
+  }
+  function kpiRow(tiles){ return `<div class="kpi-row">${tiles.join("")}</div>`; }
+
+  // section header compacto: título + contador + ação/"ver todos" opcional
+  // à direita (link de destino OU botão de expansão — quem chama decide).
+  function secHead(o){
+    o = o||{};
+    return `<div class="sec-head">
+      <div class="sec-title">${o.icon? icon(o.icon,12):""}<b>${esc(o.titulo)}</b>${o.count!=null? ` <span class="chip ${o.tone||'neutral'}" style="margin-left:2px;">${o.count}</span>`:""}</div>
+      ${o.actionHtml||""}
+    </div>`;
+  }
+
+  // "Ver todos" — recorta uma lista de itens HTML já prontos em "top N" +
+  // botão de expansão (estado em M.UIState.expandSections, ver actions.js
+  // Act.toggleExpand). Retorna {itensHtml, toggleHtml, ocultos} — quem
+  // chama decide onde encaixar o toggle (dentro do grupo, abaixo da lista).
+  function secaoComVerTodos(o){
+    o = o||{};
+    const key = o.key;
+    const limite = o.limite || 5;
+    const itens = o.itens || [];
+    const expandido = !!(M.UIState && M.UIState.expandSections && M.UIState.expandSections.has(key));
+    const visiveis = expandido ? itens : itens.slice(0, limite);
+    const ocultos = itens.length - visiveis.length;
+    const toggleHtml = (ocultos>0 || (expandido && itens.length>limite))
+      ? `<button class="ver-todos-btn" onclick="Act.toggleExpand('${key}')">${expandido? `${icon('chevron-right',10)} Ver menos` : `${icon('chevron-right',10)} Ver todos (${itens.length})`}</button>`
+      : "";
+    return {itensHtml: visiveis.join(""), toggleHtml, ocultos, total: itens.length};
+  }
+
   function stageDaysChip(dias){
     const cls = dias>=6 ? "critical" : dias>=3 ? "warning" : "neutral";
     return `<span class="chip ${cls}">${dias}d na etapa</span>`;
@@ -291,6 +338,7 @@
     tarefaStatusChip, resultadoChip, progressBar, stageDaysChip, icon, ICONS,
     assistenciaStatusChip, perfilChip, valorOuOculto, tarefaAcoesHtml, botaoNovaObraHtml,
     statTile, card, progressRow, attentionItem, pageSearchInput, attachQuickSearch,
+    kpiTile, kpiRow, secHead, secaoComVerTodos,
     fotoFieldHtml, fotosGaleriaHtml,
 
     openModal(html, opts){

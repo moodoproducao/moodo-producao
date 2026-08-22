@@ -4,8 +4,16 @@
    "Hoje nunca lista peça nem operação. Ele só reúne o que já existe como
    exceção em Produção, Pendências e Montagem." / "Hoje tinha virado
    dashboard... removi. Hoje abre direto nos itens que exigem ação."
-   (ui-telas-piloto.txt). Por isso esta tela NÃO tem faixa de KPI — quem
-   quiser números de produção/meta do mês encontra em Indicadores.
+   (ui-telas-piloto.txt).
+
+   REFINO VISUAL V2 (ajustes finais, §1) — decisão revista: Hoje passou a ter
+   uma faixa de KPI compacta (UI.kpiRow/UI.kpiTile) no topo de cada grupo de
+   perfil, mas ela responde só "qual a escala do que precisa de mim agora"
+   (contagens de exceção — obras em risco, pendências críticas, ambientes
+   travados etc.), NUNCA indicadores administrativos/de meta do mês — isso
+   continua existindo só em Indicadores. Cada perfil tem seu próprio
+   conjunto de KPIs (nunca os mesmos tiles pra todos), montado só com
+   M.Calc/M.Store já existentes, sem nenhuma regra de contagem nova.
 
    FASE 4 (handoff — §9/§10/§11): "Hoje V2 contextual por perfil". A tela
    deixa de ser uma versão única com só um filtro de "restrito" e passa a
@@ -119,7 +127,7 @@
   function blocoAguardandoAprovacaoMontagem(ctx){
     if(!M.Store.pode("montagem.aprovarFinalizacao")) return "";
     const itens = ctx.obras.flatMap(o=> o.ambientes.filter(a=> C.situacaoAmbiente(a).key==="PRONTO_PARA_FINALIZAR").map(a=>({o,a})));
-    return blocoLista({titulo:"Aguardando aprovação de finalização", icon:"check-circle", total:itens.length, tone: itens.length?"warning":undefined,
+    return blocoLista({titulo:"Aguardando aprovação de finalização", icon:"check-circle", total:itens.length, tone: itens.length?"warning":undefined, href:"#/montagem",
       itens: itens.map(ambientePendenteAprovacaoHtml), vazio:"Nenhum ambiente aguardando aprovação agora."});
   }
 
@@ -140,10 +148,17 @@
     // wrapper genérico — título + contador + lista de itens já em HTML,
     // ou uma mensagem "vazio" quando não há nada (nunca esconde o bloco
     // inteiro: mostrar "nada aqui" também é informação).
+    // REFINO VISUAL V2 (§8/§9 — "Ver todos"): quando o bloco tem um destino
+    // natural (Pendências/Montagem/Assistências, já filtráveis lá por
+    // conta própria), `href` mostra o link — mesmo padrão que "Obras em
+    // risco"/"Assistência" já usavam antes desta rodada, agora disponível
+    // pra todo blocoLista sem repetir o <a> em cada grupo.
+    const verTodos = o.href? `<a href="${o.href}" class="btn ghost sm">ver todos</a>` : "";
+    const right = (o.total || verTodos) ? `<span class="flex-gap" style="gap:6px;">${o.total? `<span class="chip ${o.tone||'critical'}">${o.total}</span>` : ""}${verTodos}</span>` : "";
     return UI.card({
       title: o.titulo,
       icon: o.icon,
-      right: o.total? `<span class="chip ${o.tone||'critical'}">${o.total}</span>` : "",
+      right,
       body: o.itens.length ? o.itens.join("") : `<p class="small muted">${esc(o.vazio||"Nada aqui agora.")}</p>`,
     });
   }
@@ -161,25 +176,42 @@
   // a diferença entre os dois perfis já é decidida em outro lugar (menu/
   // rotas — Fase 2), não aqui dentro do Hoje.
   function grupoAdminGestor(ctx){
-    const excecoes = ctx.pendAbertas
-      .filter(p=> p.impacto==="BLOQUEIA_OBRA" || p.impacto==="BLOQUEIA_AMBIENTE")
-      .sort(C.compararPrioridadePendencia).slice(0,6);
+    // REFINO VISUAL V2 (ajustes finais, §3): "Exceções críticas" usa a mesma
+    // fonte única M.Calc.pendenciaCritica de Pendências — nunca mais uma
+    // regra própria aqui (antes só olhava BLOQUEIA_OBRA/BLOQUEIA_AMBIENTE,
+    // deixando de fora IMPEDE_FINALIZAR vencido/envelhecido; a função
+    // compartilhada já cobre os dois casos).
+    const excecoes = ctx.pendAbertas.filter(C.pendenciaCritica).sort(C.compararPrioridadePendencia);
     const assistCriticas = M.Store.state.assistencias.filter(a=> a.status!=="CONCLUIDA" &&
       ((a.prazo && C.diasAte(a.prazo)<0) || (a.visitas&&a.visitas.length && a.visitas[a.visitas.length-1].desfecho==="RETORNO_NECESSARIO")));
 
+    // REFINO VISUAL V2 (ajustes finais, §1): faixa de KPI — responde "qual a
+    // escala do que precisa de mim agora", nunca um dashboard administrativo.
+    // Todo número abaixo reusa cálculo já existente, nada novo.
+    const agregadoMontagem = C.agregarMontagem(ctx.obras);
+    const entregas7d = ctx.obras.filter(o=> C.diasAte(o.dataEntregaPrevista)>=0 && C.diasAte(o.dataEntregaPrevista)<=7).length;
+    const kpis = UI.kpiRow([
+      UI.kpiTile({icon:'alert', label:'Obras em risco', value:ctx.riscoRows.length, tone: ctx.riscoRows.length?'critical':''}),
+      UI.kpiTile({icon:'lock', label:'Pendências críticas', value:excecoes.length, tone: excecoes.length?'critical':''}),
+      UI.kpiTile({icon:'lock', label:'Ambientes travados', value:ctx.ambientesTravados.length, tone: ctx.ambientesTravados.length?'warning':''}),
+      UI.kpiTile({icon:'wrench', label:'Montagem / Fechamento', value:`${agregadoMontagem.fisico}% / ${agregadoMontagem.fechamento}%`}),
+      UI.kpiTile({icon:'calendar', label:'Próximas entregas (7d)', value:entregas7d, tone: entregas7d?'warning':''}),
+    ]);
+
     return `
+      ${kpis}
       <div class="grid-2">
-        ${blocoLista({titulo:"Exceções críticas", icon:"alert", total:excecoes.length,
-          itens:excecoes.map(itemAtencaoHtml), vazio:"Nenhuma pendência bloqueando obra/ambiente agora."})}
+        ${blocoLista({titulo:"Exceções críticas", icon:"alert", total:excecoes.length, href:"#/pendencias",
+          itens:excecoes.slice(0,6).map(itemAtencaoHtml), vazio:"Nenhuma pendência bloqueando obra/ambiente agora."})}
         <div class="card pad">
           <div class="card-title"><span style="flex:1;">Obras em risco</span><a href="#/producao" class="btn ghost sm">ver produção</a></div>
-          ${ctx.riscoRows.length ? ctx.riscoRows.map(riscoCardHtml).join("") : `<p class="small muted">Nenhuma obra em risco agora.</p>`}
+          ${ctx.riscoRows.length ? ctx.riscoRows.slice(0,6).map(riscoCardHtml).join("") : `<p class="small muted">Nenhuma obra em risco agora.</p>`}
         </div>
       </div>
       <div class="hr"></div>
       <div class="grid-2">
-        ${blocoLista({titulo:"Montagem travada", icon:"lock", total:ctx.ambientesTravados.length,
-          itens:ctx.ambientesTravados.map(ambienteTravadoHtml), vazio:"Nenhum ambiente travado agora."})}
+        ${blocoLista({titulo:"Montagem travada", icon:"lock", total:ctx.ambientesTravados.length, href:"#/montagem",
+          itens:ctx.ambientesTravados.slice(0,6).map(ambienteTravadoHtml), vazio:"Nenhum ambiente travado agora."})}
         ${blocoLista({titulo:"Assistência crítica", icon:"alert", total:assistCriticas.length, tone:"warning",
           itens:assistCriticas.slice(0,6).map(a=>`<div class="alert-item" style="cursor:pointer;" onclick="Act.go('#/assistencias')">
             <div><div>${esc(a.categoria)} — ${esc(a.obraNome||a.cliente||"")}</div>
@@ -189,7 +221,7 @@
       ${(()=>{ const b=blocoAguardandoAprovacaoMontagem(ctx); return b? `<div class="hr"></div>${b}` : ""; })()}
       <div class="hr"></div>
       ${blocoLista({titulo:"Próximos compromissos", icon:"calendar", tone:"neutral",
-        itens:ctx.compromissos.map(compromissoHtml), vazio:"Nada nos próximos 7 dias."})}
+        itens:ctx.compromissos.slice(0,6).map(compromissoHtml), vazio:"Nada nos próximos 7 dias."})}
     `;
   }
 
@@ -200,7 +232,7 @@
   // mostrar a mesma pendência duas vezes em duas seções diferentes.
   function grupoPCP(ctx){
     const preProducao = ctx.pendAbertas.filter(p=> p.tipo==="Material" || p.tipo==="Projeto")
-      .sort(C.compararPrioridadePendencia).slice(0,8);
+      .sort(C.compararPrioridadePendencia);
     // AJUSTE (pós-revisão): "obras entrando em produção" usa faseMacro (Fase
     // 3), não mais progresso físico como proxy — faseMacro responde ONDE a
     // obra está; progresso físico não substitui fase operacional. Leitura
@@ -209,32 +241,46 @@
     // pra obra sem faseMacro, SEM inferir nada — então obra legada
     // simplesmente não entra em nenhum dos dois blocos abaixo, de propósito.
     const liberadas = ctx.obras.filter(o=> M.Store.faseMacroDeObra(o).key==="LIBERADA_PARA_PRODUCAO")
-      .sort((a,b)=> C.diasAte(a.dataEntregaPrevista)-C.diasAte(b.dataEntregaPrevista)).slice(0,6);
+      .sort((a,b)=> C.diasAte(a.dataEntregaPrevista)-C.diasAte(b.dataEntregaPrevista));
     // "PCP_PLANO_DE_CORTE" mostrado separado, nunca junto de LIBERADA_PARA_PRODUCAO
     // — são situações diferentes (uma já pode ir pra fábrica, a outra ainda
     // está sendo preparada), não misturar as duas sob um único corte.
     const emPreparacao = ctx.obras.filter(o=> M.Store.faseMacroDeObra(o).key==="PCP_PLANO_DE_CORTE")
-      .sort((a,b)=> C.diasAte(a.dataEntregaPrevista)-C.diasAte(b.dataEntregaPrevista)).slice(0,6);
+      .sort((a,b)=> C.diasAte(a.dataEntregaPrevista)-C.diasAte(b.dataEntregaPrevista));
     function obraFaseItemHtml(o){
       return `<div class="alert-item" style="cursor:pointer;" onclick="Act.go('#/obra/${o.id}')">
         <div><div><b>${esc(o.cliente)}</b></div><div class="alert-sub">${o.numeroOS} · entrega ${C.fmtDate(o.dataEntregaPrevista)}</div></div>
       </div>`;
     }
+    const prazosProximos = ctx.compromissos.filter(e=>["obra","movel"].includes(e.tipo)||e.tab==="pendencias");
+    // REFINO VISUAL V2 (ajustes finais, §1): "bloqueios relevantes de
+    // projeto/material" = dentre a pré-produção já calculada acima, os que
+    // também bloqueiam fechamento (M.bloqueiaFechamento — mesma função usada
+    // em Pendências/Obras, nenhuma regra nova).
+    const bloqueiosProjetoMaterial = preProducao.filter(p=> M.bloqueiaFechamento(p.impacto)).length;
+    const kpis = UI.kpiRow([
+      UI.kpiTile({icon:'alert', label:'Pendências de pré-produção', value:preProducao.length, tone: preProducao.length?'warning':''}),
+      UI.kpiTile({icon:'clock', label:'Em plano de corte', value:emPreparacao.length}),
+      UI.kpiTile({icon:'check-circle', label:'Liberadas p/ produção', value:liberadas.length}),
+      UI.kpiTile({icon:'calendar', label:'Prazos próximos', value:prazosProximos.length, tone: prazosProximos.length?'warning':''}),
+      UI.kpiTile({icon:'lock', label:'Bloqueios proj./material', value:bloqueiosProjetoMaterial, tone: bloqueiosProjetoMaterial?'critical':''}),
+    ]);
 
     return `
-      ${blocoLista({titulo:"Pendências de pré-produção", icon:"alert", total:preProducao.length,
-        itens:preProducao.map(itemAtencaoHtml), vazio:"Nenhuma pendência de Material/Projeto em aberto."})}
+      ${kpis}
+      ${blocoLista({titulo:"Pendências de pré-produção", icon:"alert", total:preProducao.length, href:"#/pendencias",
+        itens:preProducao.slice(0,8).map(itemAtencaoHtml), vazio:"Nenhuma pendência de Material/Projeto em aberto."})}
       <div class="hr"></div>
       <div class="grid-2">
         ${blocoLista({titulo:"Obras liberadas para produção", icon:"check-circle", tone:"neutral",
-          itens:liberadas.map(obraFaseItemHtml), vazio:"Nenhuma obra liberada para produção agora."})}
+          itens:liberadas.slice(0,6).map(obraFaseItemHtml), vazio:"Nenhuma obra liberada para produção agora."})}
         ${blocoLista({titulo:"Em preparação para liberação", icon:"clock", tone:"neutral",
-          itens:emPreparacao.map(obraFaseItemHtml), vazio:"Nenhuma obra em plano de corte agora."})}
+          itens:emPreparacao.slice(0,6).map(obraFaseItemHtml), vazio:"Nenhuma obra em plano de corte agora."})}
       </div>
       ${(()=>{ const b=blocoAguardandoAprovacaoMontagem(ctx); return b? `<div class="hr"></div>${b}` : ""; })()}
       <div class="hr"></div>
       ${blocoLista({titulo:"Prazos próximos", icon:"calendar", tone:"neutral",
-        itens:ctx.compromissos.filter(e=>["obra","movel"].includes(e.tipo)||e.tab==="pendencias").slice(0,6).map(compromissoHtml),
+        itens:prazosProximos.slice(0,6).map(compromissoHtml),
         vazio:"Nada nos próximos 7 dias."})}
     `;
   }
@@ -243,17 +289,25 @@
   // são o mesmo tipo de item (pendência aberta pedindo ação) — um bloco só,
   // priorizado (§8), evita duplicar a mesma lista sob dois títulos.
   function grupoLider(ctx){
-    const destravar = ctx.pendAbertas.slice().sort(C.compararPrioridadePendencia).slice(0,8);
+    const destravar = ctx.pendAbertas.slice().sort(C.compararPrioridadePendencia);
+    const contadores = C.contadoresMontagem(ctx.obras);
+    const kpis = UI.kpiRow([
+      UI.kpiTile({icon:'lock', label:'Ambientes travados', value:ctx.ambientesTravados.length, tone: ctx.ambientesTravados.length?'critical':''}),
+      UI.kpiTile({icon:'check-circle', label:'Prontos p/ finalizar', value:contadores.prontosParaFinalizar, tone: contadores.prontosParaFinalizar?'warning':''}),
+      UI.kpiTile({icon:'alert', label:'Pendências operacionais', value:destravar.length, tone: destravar.length?'warning':''}),
+      UI.kpiTile({icon:'wrench', label:'Obras perto do fechamento', value:ctx.prioridadeFechamento.length}),
+    ]);
     return `
-      ${blocoLista({titulo:"Precisa destravar hoje", icon:"alert", total:destravar.length,
-        itens:destravar.map(itemAtencaoHtml), vazio:"Nada pedindo ação agora."})}
+      ${kpis}
+      ${blocoLista({titulo:"Precisa destravar hoje", icon:"alert", total:destravar.length, href:"#/pendencias",
+        itens:destravar.slice(0,8).map(itemAtencaoHtml), vazio:"Nada pedindo ação agora."})}
       <div class="hr"></div>
       <div class="grid-2">
         ${blocoLista({titulo:"Ambientes travados", icon:"lock", total:ctx.ambientesTravados.length,
-          itens:ctx.ambientesTravados.map(ambienteTravadoHtml), vazio:"Nenhum ambiente travado agora."})}
+          itens:ctx.ambientesTravados.slice(0,6).map(ambienteTravadoHtml), vazio:"Nenhum ambiente travado agora."})}
         <div class="card pad">
           <div class="card-title"><span style="flex:1;">Obras próximas do fechamento</span><a href="#/montagem" class="btn ghost sm">ver montagem</a></div>
-          ${ctx.prioridadeFechamento.length ? ctx.prioridadeFechamento.map(l=>`
+          ${ctx.prioridadeFechamento.length ? ctx.prioridadeFechamento.slice(0,6).map(l=>`
             <div class="alert-item" style="cursor:pointer;" onclick="Act.irParaObra('${l.o.id}','${l.a.id}')">
               <div><div><b>${esc(l.a.nome)}</b> — ${l.pct}%</div>
               <div class="alert-sub">${esc(l.o.cliente)} · ${l.itensFaltando? `falta ${l.itensFaltando} item(ns)` : "pronta para finalizar"}</div></div>
@@ -286,13 +340,24 @@
       !p.responsavel && p.movelId &&
       M.Store.state.tarefas.some(t=> t.movelId===p.movelId &&
         (t.responsavelPlanejado===ctx.nome || t.executadoPor===ctx.nome))
-    ).sort(C.compararPrioridadePendencia).slice(0,6);
+    ).sort(C.compararPrioridadePendencia);
+    // REFINO VISUAL V2 (ajustes finais, §1): Produção é o único perfil com
+    // KPI deliberadamente mínimo (2-3 tiles) — nada administrativo/global,
+    // só a escala do que é dela agora. O 3º (obras/contextos ativos) só
+    // entra quando já é derivável sem nova consulta (obraIdsDoColaborador
+    // já existe, usado em "restrito" acima).
+    const kpis = UI.kpiRow([
+      UI.kpiTile({icon:'alert', label:'Minhas pendências', value:minhas.length, tone: minhas.length?'warning':''}),
+      UI.kpiTile({icon:'clock', label:'Exigem ação agora', value:acionaveisSemResponsavel.length, tone: acionaveisSemResponsavel.length?'critical':''}),
+      UI.kpiTile({icon:'check-circle', label:'Obras ativas', value:M.Store.obraIdsDoColaborador(ctx.nome).size}),
+    ]);
     return `
-      ${blocoLista({titulo:"Minhas pendências", icon:"alert", total:minhas.length,
+      ${kpis}
+      ${blocoLista({titulo:"Minhas pendências", icon:"alert", total:minhas.length, href:"#/pendencias",
         itens:minhas.map(alertItemPendenciaHtml), vazio:"Nenhuma pendência sob sua responsabilidade."})}
       <div class="hr"></div>
       ${blocoLista({titulo:"Itens que precisam de ação agora", icon:"clock", tone:"warning",
-        itens:acionaveisSemResponsavel.map(alertItemPendenciaHtml), vazio:"Nada mais pedindo ação nas suas obras agora."})}
+        itens:acionaveisSemResponsavel.slice(0,6).map(alertItemPendenciaHtml), vazio:"Nada mais pedindo ação nas suas obras agora."})}
     `;
   }
 
@@ -329,7 +394,18 @@
       const k = C.situacaoAmbiente(a).key;
       return k!=="FINALIZADO" && k!=="FINALIZADO_COM_RESSALVA";
     }));
+    // REFINO VISUAL V2 (ajustes finais, §1): os 3 últimos tiles vêm de UMA
+    // chamada a C.contadoresMontagem (mesma função da faixa de KPI de
+    // Montagem) — nenhuma contagem nova/duplicada.
+    const contadores = C.contadoresMontagem(ctx.obras);
+    const kpis = UI.kpiRow([
+      UI.kpiTile({icon:'calendar', label:'Obras do dia', value:obrasDoDia.length}),
+      UI.kpiTile({icon:'lock', label:'Ambientes travados', value:contadores.travados, tone: contadores.travados?'critical':''}),
+      UI.kpiTile({icon:'check-circle', label:'Prontos p/ finalizar', value:contadores.prontosParaFinalizar, tone: contadores.prontosParaFinalizar?'warning':''}),
+      UI.kpiTile({icon:'wrench', label:'Em montagem', value:contadores.emMontagem}),
+    ]);
     return `
+      ${kpis}
       ${obrasDoDia.length ? obrasDoDia.map(o=>{
         const ambientesAbertos = o.ambientes.filter(a=>{
           const k = C.situacaoAmbiente(a).key;
@@ -371,7 +447,15 @@
     const retornos = M.Store.state.assistencias.filter(a=> a.status!=="CONCLUIDA" && a.visitas && a.visitas.length
       && a.visitas[a.visitas.length-1].desfecho==="RETORNO_NECESSARIO" && (!ctx.restrito || a.responsavel===ctx.nome));
 
+    const kpis = UI.kpiRow([
+      UI.kpiTile({icon:'calendar', label:'Atendimentos do dia', value:meusAtendimentos.length}),
+      UI.kpiTile({icon:'alert', label:'Pendências dos atendimentos', value:pendAtendimentos.length, tone: pendAtendimentos.length?'warning':''}),
+      UI.kpiTile({icon:'clock', label:'Retornos necessários', value:retornos.length, tone: retornos.length?'critical':''}),
+      UI.kpiTile({icon:'calendar', label:'Próximos compromissos', value:ctx.compromissosAssistencia.length}),
+    ]);
+
     return `
+      ${kpis}
       <div class="card pad">
         <div class="card-title"><span style="flex:1;">Atendimentos do dia</span><a href="#/assistencias" class="btn ghost sm">ver todos</a></div>
         ${meusAtendimentos.length ? meusAtendimentos.slice(0,6).map(a=>`
@@ -383,8 +467,8 @@
       </div>
       <div class="hr"></div>
       <div class="grid-2">
-        ${blocoLista({titulo:"Pendências dos atendimentos", icon:"alert", total:pendAtendimentos.length,
-          itens:pendAtendimentos.map(alertItemPendenciaHtml), vazio:"Nenhuma pendência de assistência em aberto."})}
+        ${blocoLista({titulo:"Pendências dos atendimentos", icon:"alert", total:pendAtendimentos.length, href:"#/pendencias",
+          itens:pendAtendimentos.slice(0,6).map(alertItemPendenciaHtml), vazio:"Nenhuma pendência de assistência em aberto."})}
         ${blocoLista({titulo:"Retornos necessários", icon:"clock", tone:"warning", total:retornos.length,
           itens:retornos.slice(0,6).map(a=>`<div class="alert-item" style="cursor:pointer;" onclick="Act.go('#/assistencias')">
             <div><div>${esc(a.categoria)} — ${esc(a.obraNome||a.cliente||"")}</div>
@@ -393,7 +477,7 @@
       </div>
       <div class="hr"></div>
       ${blocoLista({titulo:"Próximos compromissos", icon:"calendar", tone:"neutral",
-        itens:ctx.compromissosAssistencia.map(compromissoHtml), vazio:"Nada nos próximos 7 dias."})}
+        itens:ctx.compromissosAssistencia.slice(0,6).map(compromissoHtml), vazio:"Nada nos próximos 7 dias."})}
     `;
   }
 
@@ -410,19 +494,24 @@
     const pendAbertas = M.Store.state.pendencias.filter(p=> p.status!=="RESOLVIDA" && (!restrito || meuObraIds.has(p.obraId)));
 
     // ---------- dados comuns entre grupos (calculados uma vez) ----------
+    // REFINO VISUAL V2 (ajustes finais, §1/§2): estas listas ficam INTEIRAS
+    // aqui (sem .slice de exibição) — cada grupo aplica o corte só na hora
+    // de renderizar a lista. Isso é o que permite os KPIs de topo mostrarem
+    // a contagem REAL (ex.: "Obras em risco: 9"), não o tamanho já cortado
+    // pra exibição (que antes deixava o número preso em 6). Nenhuma regra
+    // de negócio muda aqui — só onde o corte é aplicado.
     const riscoRows = obras.map(o=>({o, sit:C.situacaoObra(o), parada:C.obraParada(o)}))
       .filter(r=> r.sit.nivel==="ALTO" || r.sit.nivel==="MEDIO")
-      .sort((a,b)=> ({ALTO:0,MEDIO:1,BAIXO:2,"N/A":3}[a.sit.nivel]) - ({ALTO:0,MEDIO:1,BAIXO:2,"N/A":3}[b.sit.nivel]) || a.sit.diasEntrega - b.sit.diasEntrega)
-      .slice(0,6);
+      .sort((a,b)=> ({ALTO:0,MEDIO:1,BAIXO:2,"N/A":3}[a.sit.nivel]) - ({ALTO:0,MEDIO:1,BAIXO:2,"N/A":3}[b.sit.nivel]) || a.sit.diasEntrega - b.sit.diasEntrega);
     // ambientes travados — mesma definição de M.Calc.situacaoAmbiente usada
     // em Montagem/Obra (§13/reuso), não uma nova regra de "travado".
     const ambientesTravados = obras.flatMap(o=> o.ambientes.map(a=>({o,a,sit:C.situacaoAmbiente(a)})))
-      .filter(x=> x.sit.key==="TRAVADO").slice(0,6);
-    const prioridadeFechamento = C.prioridadeParaFinalizar(obras).slice(0,6);
+      .filter(x=> x.sit.key==="TRAVADO");
+    const prioridadeFechamento = C.prioridadeParaFinalizar(obras);
     // próximos compromissos (7 dias) — vem do M.Calendario, respeitando a
     // mesma restrição de "minhas obras" que o resto da tela já aplica.
-    const compromissos = M.Calendario.proximosEventos(7).slice(0,6);
-    const compromissosAssistencia = M.Calendario.proximosEventos(7, ["ASSISTENCIAS"]).slice(0,6);
+    const compromissos = M.Calendario.proximosEventos(7);
+    const compromissosAssistencia = M.Calendario.proximosEventos(7, ["ASSISTENCIAS"]);
 
     const ctx = {nome, restrito, meuObraIds, obras, pendAbertas, riscoRows, ambientesTravados, prioridadeFechamento, compromissos, compromissosAssistencia};
 
