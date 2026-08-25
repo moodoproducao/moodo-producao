@@ -522,7 +522,7 @@
             <option value="">Todo status</option>
             ${M.STATUS_EVENTO_AGENDA.map(s=>`<option value="${s.key}" ${S.agendaFiltros.status===s.key?'selected':''}>${s.label}</option>`).join("")}
           </select>
-          <input type="text" placeholder="Equipe/responsável" value="${esc(S.agendaFiltros.equipe)}" oninput="Act.setAgendaFiltro('equipe', this.value)" style="max-width:190px;">
+          <input type="text" id="agendaFiltroEquipe" placeholder="Equipe/responsável" value="${esc(S.agendaFiltros.equipe)}" oninput="Act.setAgendaFiltro('equipe', this.value)" style="max-width:190px;">
         </div>
       </div>
     `;

@@ -5,7 +5,7 @@
   "use strict";
   const M = window.M;
   const UI = M.UI;
-  const APP_VERSION = "3.13.1";
+  const APP_VERSION = "3.13.2";
 
   function usuarioAtualColab(){
     return M.colabByNome(M.Store.state.usuarioAtual) || M.COLABORADORES[9];
@@ -121,6 +121,35 @@
   // realmente mudou (navegação de verdade); re-render por mudança de estado
   // na mesma página mantém a posição de rolagem.
   let ultimoHashRenderizado = null;
+  // HOTFIX 3.13.2: qualquer <input>/<textarea> com `id` que dispare um
+  // rerender completo a cada oninput (app.innerHTML = ...) perdia foco E
+  // cursor a cada tecla digitada — só sobrava o último caractere (achado no
+  // smoke test de produção da Fase 6: filtro "Equipe/responsável" da
+  // Agenda). Mesmo princípio já documentado em Act.editarPassoFluxo
+  // ("digitar não pode reabrir/re-renderizar, perderia o foco") — aqui é
+  // genérico, direto no render(), pra cobrir qualquer campo assim (atual
+  // ou futuro), sem precisar de um afterRender por página. Só reage se o
+  // elemento focado no instante do render tiver id (assim dá pra
+  // reencontrá-lo depois do innerHTML novo) — não afeta cliques em botão,
+  // <select>, nem nada sem id.
+  function capturarFocoParaRestaurar(){
+    const el = document.activeElement;
+    if(!el || !el.id) return null;
+    if(el.tagName!=="INPUT" && el.tagName!=="TEXTAREA") return null;
+    let selStart=null, selEnd=null;
+    try{ selStart = el.selectionStart; selEnd = el.selectionEnd; }catch(e){ /* alguns tipos de <input> (ex.: number) não suportam seleção */ }
+    return {id: el.id, selStart, selEnd};
+  }
+  function restaurarFoco(captura){
+    if(!captura) return;
+    const el = document.getElementById(captura.id);
+    if(!el) return;
+    el.focus();
+    if(captura.selStart!=null && typeof el.setSelectionRange==="function"){
+      try{ el.setSelectionRange(captura.selStart, captura.selEnd); }catch(e){ /* idem */ }
+    }
+  }
+
   function render(){
     const hashAtual = location.hash;
     const navegou = hashAtual !== ultimoHashRenderizado;
@@ -163,7 +192,9 @@
         html:`<div class="card pad"><p>${key==="obra" ? msgObra : msgPadrao}</p></div>`};
       document.body.classList.toggle("tv-mode", false);
       const appRestrito = document.getElementById("app");
+      const focoRestritoAntes = capturarFocoParaRestaurar();
       appRestrito.innerHTML = shell(key, page);
+      restaurarFoco(focoRestritoAntes);
       if(navegou) window.scrollTo(0,0);
       renderPwaBanner();
       return;
@@ -176,11 +207,13 @@
     }
     document.body.classList.toggle("tv-mode", key==="chao-de-fabrica" || key==="tv");
     const app = document.getElementById("app");
+    const focoAntes = capturarFocoParaRestaurar();
     if(key==="chao-de-fabrica" || key==="tv"){
       app.innerHTML = page.html;
     }else{
       app.innerHTML = shell(key, page);
     }
+    restaurarFoco(focoAntes);
     if(typeof page.afterRender === "function") page.afterRender();
     if(navegou) window.scrollTo(0,0);
     renderPwaBanner();
