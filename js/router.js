@@ -38,8 +38,11 @@
     // final de Assistência V2/mobile (isso é fase própria, ainda não
     // iniciada). Ver aviso completo em js/pages/assistencias.js.
     atendimentos: {label:"Atendimentos", icon:"lifebuoy", route:"#/atendimentos", perm:"assistencia.ver"},
-    // "Agenda": mesmo Calendário de sempre, só com o rótulo novo pedido pra
-    // esta fase — a tela nova da Agenda é a Fase 6, não reescrita aqui.
+    // "Agenda": Fase 6 — Agenda V2 de verdade (M.Pages.agenda, js/pages/
+    // agenda.js), mesma permissão de sempre (agenda.ver, nenhuma nova). O
+    // Calendário antigo (M.Pages.calendario) continua existindo só como
+    // alias de rota legado ("#/calendario", ver ROUTES abaixo) — não some
+    // do repo, só sai de todo menu/link novo.
     agenda:       {label:"Agenda",       icon:"calendar", route:"#/agenda",       perm:"agenda.ver"},
     // "Admin": entrada única no menu (hub temporário — js/pages/adminHub.js).
     // Array = OR (mesma semântica já usada em ROUTE_PERMS["obra"]): aparece
@@ -155,7 +158,10 @@
     // js/pages/*.js — nenhuma tabela nem tela nova foi criada):
     "minhas-obras": ()=> M.Pages.obras(true),
     "atendimentos": ()=> M.Pages.assistencias(true),
-    "agenda": ()=> M.Pages.calendario(),
+    // FASE 6 — Agenda V2 (M.Pages.agenda). "calendario" continua respondendo
+    // por compatibilidade de link antigo, agora apontando pro mesmo
+    // M.Pages.calendario() de sempre (nada mudou nele nesta fase).
+    "agenda": ()=> M.Pages.agenda(),
     "admin": ()=> M.Pages.adminHub(),
   };
 

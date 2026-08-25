@@ -133,6 +133,16 @@
       tarefas: deepClone(M.TAREFAS),
       lotes: deepClone(M.LOTES),
       assistencias: deepClone(M.ASSISTENCIAS),
+      // FASE 6 (Agenda V2, §4) — só os eventos MANUAIS (RETORNO/VISITA/
+      // MEDICAO/OUTRO) viram registro próprio aqui. MONTAGEM e ASSISTENCIA
+      // nunca entram nesta lista — são computados ao vivo a partir de
+      // obra.planejamentoMontagem e state.assistencias (ver M.Agenda em
+      // js/pages/agenda.js), pra não duplicar a fonte de verdade da data.
+      // Nenhum dado de exemplo semeado aqui de propósito (§25 — "não fazer
+      // migração manual de eventos antigos"; o app nasce sem compromisso
+      // manual nenhum, exatamente como nasceu sem assistência antes de
+      // alguém abrir uma).
+      eventos: [],
       etapas: seedEtapas(),
       // FASE 3 — catálogo de fases macro (config, não dado de obra). Obras
       // existentes NÃO ganham faseMacro automaticamente aqui — isso é só o
@@ -196,6 +206,11 @@
           const fresh = seedState();
           const migrado = Object.assign({}, fresh, parsed, {
             assistencias: parsed.assistencias || fresh.assistencias,
+            // FASE 6 (Agenda V2) — estado salvo de antes desta fase não tem
+            // `eventos` nenhum: usa lista vazia (fresh.eventos), nunca
+            // undefined — o resto do código (Store.criarEvento etc.) sempre
+            // assume array.
+            eventos: parsed.eventos || fresh.eventos,
             auditoria: parsed.auditoria || fresh.auditoria,
             tarefasPadrao: parsed.tarefasPadrao || fresh.tarefasPadrao,
             fluxosPadrao: parsed.fluxosPadrao || fresh.fluxosPadrao,
@@ -1354,6 +1369,78 @@
         descricao:`Garantia de "${a.descricao}" definida como ${M.garantiaDef(garantia).label}`, motivo: anterior!==garantia? `Era: ${M.garantiaDef(anterior).label}`:undefined});
       emit();
       return {ok:true};
+    },
+
+    // ---------- agenda (Fase 6 — Agenda V2) ----------
+    // §2/§4: a Agenda CONSOME informação dos módulos de origem. Só os 4
+    // tipos sem módulo dono (RETORNO/VISITA/MEDICAO/OUTRO) podem virar
+    // registro MANUAL aqui — MONTAGEM e ASSISTENCIA são sempre recusados
+    // (TIPO_NAO_MANUAL): eles nunca são gravados como entidade própria,
+    // são computados ao vivo a partir de obra.planejamentoMontagem e
+    // state.assistencias (ver M.Agenda.todosEventosRaw, js/pages/agenda.js)
+    // — assim não existem duas fontes de verdade pra mesma data.
+    criarEvento(dados){
+      if(!Store.pode("agenda.criar")) return {ok:false, motivo:"SEM_PERMISSAO"};
+      dados = dados || {};
+      if(!dados.tipo || !dados.data) return {ok:false, motivo:"DADOS_OBRIGATORIOS"};
+      if(!M.tipoEventoDef(dados.tipo).manual) return {ok:false, motivo:"TIPO_NAO_MANUAL"};
+      const agora = M.todayISO();
+      const usuario = state.usuarioAtual || null;
+      const obra = dados.obraId ? Store.getObra(dados.obraId) : null;
+      const item = {
+        id: M.uid("evt"), tipo: dados.tipo,
+        titulo: dados.titulo || M.tipoEventoDef(dados.tipo).label,
+        obraId: dados.obraId || null,
+        obraNome: obra ? obra.cliente : (dados.obraNome || null),
+        cliente: obra ? obra.cliente : (dados.cliente || null),
+        endereco: dados.endereco || (obra ? obra.endereco : "") || "",
+        data: dados.data, horaInicio: dados.horaInicio || null, horaFim: dados.horaFim || null,
+        equipe: dados.equipe || "", observacao: dados.observacao || "",
+        origem: "MANUAL", origemRefId: null,
+        status: dados.status || "AGENDADO",
+        criadoPor: usuario, criadoEm: agora, atualizadoPor: usuario, atualizadoEm: agora,
+      };
+      state.eventos.push(item);
+      // §23: "registrar criação/edição/cancelamento no histórico/auditoria
+      // já existente" — Store.log é o mesmo histórico central usado por
+      // toda ação do app, nenhum sistema paralelo.
+      Store.log(item.obraId, "AGENDA_EVENTO_CRIADO", `Compromisso criado na Agenda — ${M.tipoEventoDef(item.tipo).label}: ${item.titulo}`, {eventoId:item.id});
+      emit();
+      return {ok:true, evento:item};
+    },
+    // Evento derivado (origem MONTAGEM/ASSISTENCIA) nunca chega aqui como
+    // edição de verdade — §15: "não editar dados principais diretamente na
+    // Agenda... a ação de editar deve levar ao contexto de origem." A
+    // própria tela (js/pages/agenda.js) não oferece "Editar" pra evento
+    // derivado, mas o guard abaixo também nega no Store, pra nenhum caminho
+    // (nem um onclick esquecido) conseguir gravar por cima de um evento que
+    // não é dono do seu próprio dado.
+    atualizarEvento(id, patch){
+      if(!Store.pode("agenda.editar")) return {ok:false, motivo:"SEM_PERMISSAO"};
+      const e = state.eventos.find(x=>x.id===id); if(!e) return {ok:false, motivo:"NAO_ENCONTRADA"};
+      if(e.origem!=="MANUAL") return {ok:false, motivo:"ORIGEM_NAO_EDITAVEL"};
+      patch = patch || {};
+      const obraMudou = Object.prototype.hasOwnProperty.call(patch, "obraId");
+      const obra = obraMudou ? (patch.obraId ? Store.getObra(patch.obraId) : null) : null;
+      Object.assign(e, patch);
+      if(obraMudou){
+        e.obraNome = obra ? obra.cliente : (patch.obraNome || null);
+        if(obra && !patch.endereco) e.endereco = obra.endereco || e.endereco;
+      }
+      e.atualizadoPor = state.usuarioAtual || null; e.atualizadoEm = M.todayISO();
+      Store.log(e.obraId, "AGENDA_EVENTO_EDITADO", `Compromisso da Agenda editado — ${e.titulo}`, {eventoId:e.id});
+      emit();
+      return {ok:true, evento:e};
+    },
+    cancelarEvento(id){
+      if(!Store.pode("agenda.editar")) return {ok:false, motivo:"SEM_PERMISSAO"};
+      const e = state.eventos.find(x=>x.id===id); if(!e) return {ok:false, motivo:"NAO_ENCONTRADA"};
+      if(e.origem!=="MANUAL") return {ok:false, motivo:"ORIGEM_NAO_EDITAVEL"};
+      e.status = "CANCELADO";
+      e.atualizadoPor = state.usuarioAtual || null; e.atualizadoEm = M.todayISO();
+      Store.log(e.obraId, "AGENDA_EVENTO_CANCELADO", `Compromisso da Agenda cancelado — ${e.titulo}`, {eventoId:e.id});
+      emit();
+      return {ok:true, evento:e};
     },
 
     // ---------- usuário / permissões ----------

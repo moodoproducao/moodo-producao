@@ -300,6 +300,17 @@
     const p = M.perfilDef ? M.perfilDef(key) : null;
     return `<span class="chip brand">${esc(p?p.label:key)}</span>`;
   }
+  // FASE 6 (Agenda V2) — chips de tipo/status de evento, mesmo padrão de
+  // garantiaChip/assistenciaStatusChip (catálogo M.TIPOS_EVENTO_AGENDA/
+  // M.STATUS_EVENTO_AGENDA em js/data.js, nunca um mapeamento duplicado aqui).
+  function tipoEventoChip(tipo){
+    const def = M.tipoEventoDef(tipo);
+    return `<span class="chip ${def.tone}">${esc(def.label)}</span>`;
+  }
+  function statusEventoChip(status){
+    const def = M.statusEventoDef(status);
+    return `<span class="chip ${def.tone}">${esc(def.label)}</span>`;
+  }
   // item 10: mascara um valor financeiro já formatado quando o perfil atual
   // não tem "verValores" — usar em todo lugar que hoje mostra R$ de obra/
   // ambiente/móvel fora das telas já bloqueadas inteiras (Indicadores/Config).
@@ -336,7 +347,7 @@
   const UI = {
     esc, initials, avatar, person, riscoChip, statusPendenciaChip, prioridadeChip, impactoChip, tipoChip, situacaoAmbienteChip, garantiaChip,
     tarefaStatusChip, resultadoChip, progressBar, stageDaysChip, icon, ICONS,
-    assistenciaStatusChip, perfilChip, valorOuOculto, tarefaAcoesHtml, botaoNovaObraHtml,
+    assistenciaStatusChip, perfilChip, tipoEventoChip, statusEventoChip, valorOuOculto, tarefaAcoesHtml, botaoNovaObraHtml,
     statTile, card, progressRow, attentionItem, pageSearchInput, attachQuickSearch,
     kpiTile, kpiRow, secHead, secaoComVerTodos,
     fotoFieldHtml, fotosGaleriaHtml,

@@ -763,9 +763,118 @@
     return false; // INFORMATIVO/NAO_IMPEDE nunca são "crítica" no resumo operacional
   }
 
+  // ---------- Agenda V2 (Fase 6 — último ajuste antes do push, §1/§2) ----------
+  // Unidade de duração do planejamento de montagem (obra.planejamentoMontagem.
+  // duracaoEstimadaUnidade: dias_uteis | semanas | dias_corridos) — decide
+  // quais dias do período viram OCUPAÇÃO na Agenda. Único lugar do sistema
+  // que decide isso; M.Agenda.ocorrenciasDeEventoBase consulta esta função,
+  // não reimplementa day-of-week por conta própria — item 5 do pedido é
+  // "a mesma regra em toda view", e a forma de garantir isso é ter só ESTA
+  // função decidindo.
+  // NÃO modela feriado (§1 do pedido é explícito: "não implementar feriados
+  // nesta fase") — só fim de semana civil (sábado/domingo).
+  // A estimativa de fim (Store.calcularFimPrevisto, Fase 5) já é só uma
+  // aproximação de apoio — nunca autoritativa, documentada como tal desde a
+  // Fase 5 — e continua sendo a MESMA fonte de fimPrevistoCalculado que a
+  // Agenda usa (nenhuma duplicação aí). O que não existia até agora era uma
+  // forma de decidir, DIA A DIA, se uma data específica dentro do período
+  // é operacional ou não — é isso que esta função resolve, pela primeira
+  // vez no sistema (antes, ninguém enumerava dia a dia; só se calculava um
+  // fim aproximado).
+  function ehFimDeSemanaISO(iso){
+    const dow = new Date(iso+"T00:00:00").getDay(); // 0=domingo, 6=sábado
+    return dow===0 || dow===6;
+  }
+  function ocupaAgendaNoDia(iso, unidadeDuracao){
+    if(unidadeDuracao==="dias_corridos") return true; // todo dia do período, inclusive fim de semana
+    return !ehFimDeSemanaISO(iso); // dias_uteis e semanas: só segunda a sexta (semana tratada como período operacional de dias úteis, sem ocupação automática de fim de semana)
+  }
+
+  // ---------- Agenda V2 (Fase 6, §12) — conflito simples de agenda ----------
+  // "Detectar conflito simples quando: mesma pessoa/equipe; horários
+  // sobrepostos; mesmo dia." "Não criar motor sofisticado de otimização."
+  // "Conflito deve ser alerta, não bloqueio automático" — por isso esta
+  // função só DEVOLVE os pares em conflito; quem chama decide o que fazer
+  // com isso (pintar um chip/ícone), nunca impede salvar (ver
+  // Store.criarEvento/atualizarEvento, que não checam conflito nenhum).
+  //
+  // "Pessoa/equipe" é lida do campo de texto livre `equipe` — o MESMO
+  // formato já usado em obra.planejamentoMontagem.equipePlanejada ("Roberto
+  // Diniz, Fernanda Costa"), nenhum campo estruturado novo. Evento sem hora
+  // (dia inteiro — é o caso dos dois tipos derivados, Montagem e
+  // Assistência, que só carregam data) conflita com qualquer outro do mesmo
+  // dia/pessoa, porque um compromisso "o dia inteiro" sobrepõe qualquer
+  // horário específico marcado no mesmo dia para a mesma pessoa.
+  //
+  // AJUSTE (Fase 6 — ajustes antes do push, §5): a comparação de pessoa
+  // NUNCA foi um `equipe.includes(nome)` cru — já comparava elemento a
+  // elemento de um array separado por vírgula/" e " (nada de substring de
+  // string inteira). O que faltava era normalizar espaço/caixa: "Roberto
+  // Diniz" e "roberto  diniz" (digitado diferente) não batiam antes.
+  // Normaliza só espaço duplicado e caixa — não faz fold de acento, porque
+  // isso não é um padrão já usado com segurança em nenhum outro lugar do
+  // sistema, e o pedido foi explícito em só normalizar o que já é seguro.
+  // Continua comparando ELEMENTOS INTEIROS do array, nunca fatia de string:
+  // "Ana" e "Mariana" continuam pessoas diferentes; "João" e "João Pedro"
+  // também.
+  function normalizarNomePessoa(s){
+    return String(s||"").trim().replace(/\s+/g," ").toLowerCase();
+  }
+  function pessoasDoEvento(e){
+    return (e.equipe||"").split(/,| e /i).map(s=> s.trim().replace(/\s+/g," ")).filter(Boolean);
+  }
+  // "esta pessoa está neste evento?" — mesma normalização usada no
+  // conflito, reaproveitada no escopo por perfil (M.Agenda.aplicarEscopo)
+  // pra não duplicar a regra de comparação em dois lugares.
+  function pessoaNoEvento(e, nome){
+    if(!nome) return false;
+    const alvo = normalizarNomePessoa(nome);
+    return pessoasDoEvento(e).some(p=> normalizarNomePessoa(p)===alvo);
+  }
+  function horariosAgendaSobrepoem(a,b){
+    if(!a.horaInicio || !b.horaInicio) return true;
+    const af = a.horaFim||a.horaInicio, bf = b.horaFim||b.horaInicio;
+    return a.horaInicio < bf && b.horaInicio < af;
+  }
+  function conflitosAgenda(eventos){
+    const porDia = {};
+    (eventos||[]).forEach(e=>{
+      if(!e || !e.data || e.status==="CANCELADO") return;
+      (porDia[e.data] = porDia[e.data]||[]).push(e);
+    });
+    const conflitos = [];
+    Object.keys(porDia).forEach(dia=>{
+      const lista = porDia[dia];
+      for(let i=0;i<lista.length;i++){
+        for(let j=i+1;j<lista.length;j++){
+          const a=lista[i], b=lista[j];
+          if(a.id===b.id) continue;
+          const pessoasA = pessoasDoEvento(a), pessoasB = pessoasDoEvento(b);
+          if(!pessoasA.length || !pessoasB.length) continue;
+          const normB = pessoasB.map(normalizarNomePessoa);
+          const comuns = pessoasA.filter(p=> normB.indexOf(normalizarNomePessoa(p))!==-1);
+          if(!comuns.length) continue;
+          if(!horariosAgendaSobrepoem(a,b)) continue;
+          comuns.forEach(pessoa=> conflitos.push({data:dia, pessoa, eventoAId:a.id, eventoBId:b.id}));
+        }
+      }
+    });
+    return conflitos;
+  }
+  // leitura rápida "este evento está em algum conflito?" sem recalcular pares
+  // toda vez que uma lista/célula precisa pintar o alerta — computa os pares
+  // uma vez, devolve só o Set de ids envolvidos.
+  function idsEmConflitoAgenda(eventos){
+    const ids = new Set();
+    conflitosAgenda(eventos).forEach(c=>{ ids.add(c.eventoAId); ids.add(c.eventoBId); });
+    return ids;
+  }
+
   M.Calc = {
     fmtBRL, fmtBRLk, fmtDate, fmtPct, daysBetween, diasDesde, diasAte,
     compararPrioridadePendencia, pendenciaCritica,
+    ehFimDeSemanaISO, ocupaAgendaNoDia,
+    pessoasDoEvento, pessoaNoEvento, normalizarNomePessoa, conflitosAgenda, idsEmConflitoAgenda,
     movelConcluido, progressoGrupo, progressoObra, progressoAmbiente,
     itemCriticoGrupo, pendenciasAbertasDe, pendenciasBloqueantesDe, riscoObra, obraParada, diasParada, situacaoMovel, situacaoObra, wipPorEtapa, indicadores,
     situacaoAmbiente, progressoFisicoMontagem, taxaFechamento, agregarMontagem, prioridadeParaFinalizar,

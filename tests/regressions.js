@@ -1254,6 +1254,10 @@ function pendenciaFixture4(obraId, over){
   executar(appHoje, "js/store.js");
   executar(appHoje, "js/calc.js");
   executar(appHoje, "js/pages/calendario.js");
+  // FASE 6 (Agenda V2, §21) — Hoje agora consome M.Agenda.proximosEventos
+  // pros blocos "Próximos compromissos"; precisa estar carregado antes de
+  // M.Pages.hoje() poder renderizar.
+  executar(appHoje, "js/pages/agenda.js");
   executar(appHoje, "js/pages/hoje.js");
 
   // fixtures próprias, isoladas (sem compartilhar ambientes/moveis com as
@@ -1888,6 +1892,650 @@ const MONTADOR5 = "Roberto Diniz", APROVADOR5 = "Paulo Henrique", SEM_PERM5 = "W
 }
 
 console.log("Fase 5 (Montagem V2): OK");
+
+// ==================================================================
+// FASE 6 — Agenda V2. Contexto isolado com fixtures próprias (mesmo padrão
+// das fases anteriores). Cobre: Store.criarEvento/atualizarEvento/
+// cancelarEvento (CRUD manual + guards de permissão/origem), M.Agenda
+// (derivação MONTAGEM/ASSISTENCIA sem duplicar fonte, escopo por perfil,
+// filtros) e M.Calc.conflitosAgenda/idsEmConflitoAgenda (§26 do pedido).
+// Não testa aqui o HTML de agenda.js (mesma convenção da Fase 4/5 — esse
+// arquivo testa Store/Calc/M.Agenda direto); a tela foi validada
+// visualmente via Playwright (screenshots no relatório de entrega). Um
+// smoke test mínimo de renderização (como a Fase 5 já faz com Montagem)
+// fecha a lacuna de "explode ao renderizar" sem precisar de M.UI real.
+// ==================================================================
+const appFase6 = contextoBase();
+executar(appFase6, "js/data.js");
+appFase6.M.UI = {
+  esc:(s)=> String(s==null?"":s), icon:()=>"",
+  tipoEventoChip:(t)=> `[tipo:${t}]`, statusEventoChip:(s)=> `[status:${s}]`,
+};
+appFase6.M.Pages = {};
+appFase6.M.UIState = {
+  agendaView:"SEMANA", agendaAno: null, agendaMes: null, agendaSemanaInicio: null, agendaDia: null,
+  agendaFiltros: {tipo:"", equipe:"", obraId:"", status:""}, agendaEventoSelId:null, agendaMobileTab:"HOJE",
+};
+executar(appFase6, "js/store.js");
+executar(appFase6, "js/calc.js");
+executar(appFase6, "js/pages/agenda.js");
+// TODAY não existe ainda no momento em que M.UIState foi literal-montado
+// acima (mesma pegadinha resolvida em js/pages/agenda.js com inicialização
+// preguiçosa) — completa os campos de data agora que data.js já rodou.
+appFase6.M.UIState.agendaAno = appFase6.M.TODAY.getFullYear();
+appFase6.M.UIState.agendaMes = appFase6.M.TODAY.getMonth();
+appFase6.M.UIState.agendaDia = appFase6.M.todayISO();
+appFase6.M.UIState.agendaSemanaInicio = appFase6.M.Agenda.segundaFeiraDe(appFase6.M.todayISO());
+
+function comoUsuarioFase6(nome, fn){
+  const original = appFase6.M.Store.state.usuarioAtual;
+  appFase6.M.Store.setUsuarioAtual(nome);
+  try{ return fn(); } finally { appFase6.M.Store.setUsuarioAtual(original); }
+}
+let _fx6Seq = 0;
+function obraFixture6(over){
+  _fx6Seq++;
+  return Object.assign({
+    id:"fx6-obra-"+_fx6Seq, numeroOS:"OS FIXTURE6/"+_fx6Seq, cliente:"Cliente Fixture 6 #"+_fx6Seq,
+    endereco:"Rua Fixture 6, "+_fx6Seq, telefone:"(11) 90000-00"+String(_fx6Seq).padStart(2,"0"),
+    dataOS:appFase6.M.todayISO(), criadaEm:appFase6.M.todayISO(),
+    dataEntregaPrevista:appFase6.M.dOff(30), dataEntregaReal:null,
+    valorBruto:1000, valorLiquido:1000, status:"EM_PRODUCAO", responsavel:"Teste",
+    ambientes:[],
+  }, over);
+}
+// perfis reais do seed: Paulo Henrique (ADMIN — agenda.criar/editar=true),
+// Beatriz Nogueira (PCP — agenda.criar/editar=true), Roberto Diniz
+// (MONTADOR — agenda.ver=true, criar/editar=false), Willian Souza
+// (OPERADOR/Produção — agenda.ver=false, o perfil que NÃO deveria ganhar
+// Agenda nesta fase, §22).
+const ADMIN6="Paulo Henrique", PCP6="Beatriz Nogueira", MONTADOR6="Roberto Diniz", PRODUCAO6="Willian Souza";
+
+// ---- 1) criação de evento manual — só os 4 tipos manuais; tipo/data
+// obrigatórios; guarda origem/status/auditoria default corretos ----
+{
+  const antes = appFase6.M.Store.state.eventos.length;
+  const semTipo = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({data: appFase6.M.todayISO()}));
+  assert.equal(semTipo.ok, false); assert.equal(semTipo.motivo, "DADOS_OBRIGATORIOS");
+  const semData = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({tipo:"VISITA"}));
+  assert.equal(semData.ok, false); assert.equal(semData.motivo, "DADOS_OBRIGATORIOS");
+
+  const montagemRecusada = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({tipo:"MONTAGEM", data:appFase6.M.todayISO()}));
+  assert.equal(montagemRecusada.ok, false, "MONTAGEM nunca pode virar registro manual — só é derivado do planejamento");
+  assert.equal(montagemRecusada.motivo, "TIPO_NAO_MANUAL");
+  const assistRecusada = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({tipo:"ASSISTENCIA", data:appFase6.M.todayISO()}));
+  assert.equal(assistRecusada.ok, false, "ASSISTENCIA nunca pode virar registro manual — só é derivado de state.assistencias");
+  assert.equal(assistRecusada.motivo, "TIPO_NAO_MANUAL");
+  assert.equal(appFase6.M.Store.state.eventos.length, antes, "nenhuma das tentativas recusadas pode ter empurrado item em state.eventos");
+
+  const o = obraFixture6();
+  appFase6.M.Store.state.obras.push(o);
+  const r = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({
+    tipo:"VISITA", titulo:"Visita técnica", obraId:o.id, data:appFase6.M.todayISO(),
+    horaInicio:"09:00", horaFim:"10:00", equipe:"Roberto Diniz", observacao:"teste",
+  }));
+  assert.equal(r.ok, true);
+  assert.equal(appFase6.M.Store.state.eventos.length, antes+1);
+  assert.equal(r.evento.origem, "MANUAL");
+  assert.equal(r.evento.status, "AGENDADO");
+  assert.equal(r.evento.obraNome, o.cliente, "obraNome precisa ser denormalizado da obra selecionada");
+  assert.equal(r.evento.criadoPor, ADMIN6);
+  assert.ok(r.evento.id && r.evento.criadoEm);
+  const hist = appFase6.M.Store.state.historico.find(h=>h.tipo==="AGENDA_EVENTO_CRIADO" && h.eventoId===r.evento.id);
+  assert.ok(hist, "§23 — criação de evento manual precisa deixar rastro no histórico central, sem sistema de auditoria paralelo");
+}
+
+// ---- 4) permissão agenda.criar — Produção (agenda.ver=false) e Montador
+// (agenda.criar=false) não podem criar; PCP (agenda.criar=true) pode ----
+{
+  const antes = appFase6.M.Store.state.eventos.length;
+  const negadoProducao = comoUsuarioFase6(PRODUCAO6, ()=> appFase6.M.Store.criarEvento({tipo:"OUTRO", data:appFase6.M.todayISO()}));
+  assert.equal(negadoProducao.ok, false); assert.equal(negadoProducao.motivo, "SEM_PERMISSAO");
+  const negadoMontador = comoUsuarioFase6(MONTADOR6, ()=> appFase6.M.Store.criarEvento({tipo:"OUTRO", data:appFase6.M.todayISO()}));
+  assert.equal(negadoMontador.ok, false); assert.equal(negadoMontador.motivo, "SEM_PERMISSAO");
+  assert.equal(appFase6.M.Store.state.eventos.length, antes, "§26 — evento sem permissão não pode alterar state");
+
+  const okPcp = comoUsuarioFase6(PCP6, ()=> appFase6.M.Store.criarEvento({tipo:"MEDICAO", data:appFase6.M.todayISO()}));
+  assert.equal(okPcp.ok, true, "PCP tem agenda.criar=true na matriz — precisa conseguir criar");
+}
+
+// ---- 2/5/6) edição de evento manual — agenda.editar; evento derivado
+// nunca é editável (mesmo se, hipoteticamente, aparecesse em state.eventos);
+// tentativa negada não altera nada ----
+{
+  const o = obraFixture6();
+  appFase6.M.Store.state.obras.push(o);
+  const criado = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({tipo:"OUTRO", titulo:"Original", data:appFase6.M.todayISO(), equipe:"Fernanda Costa"})).evento;
+
+  const negado = comoUsuarioFase6(MONTADOR6, ()=> appFase6.M.Store.atualizarEvento(criado.id, {titulo:"Hackeado"}));
+  assert.equal(negado.ok, false); assert.equal(negado.motivo, "SEM_PERMISSAO");
+  assert.equal(criado.titulo, "Original", "tentativa sem agenda.editar não pode ter mudado o título");
+
+  const ok = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.atualizarEvento(criado.id, {titulo:"Editado", obraId:o.id}));
+  assert.equal(ok.ok, true);
+  assert.equal(criado.titulo, "Editado");
+  assert.equal(criado.obraNome, o.cliente, "trocar obraId precisa redenormalizar obraNome");
+  assert.ok(criado.atualizadoEm && criado.atualizadoPor===ADMIN6);
+  const histEdit = appFase6.M.Store.state.historico.find(h=>h.tipo==="AGENDA_EVENTO_EDITADO" && h.eventoId===criado.id);
+  assert.ok(histEdit, "edição precisa deixar rastro no histórico");
+
+  // defesa em profundidade: se um objeto de origem MONTAGEM/ASSISTENCIA
+  // aparecesse em state.eventos (nunca deveria — Store.criarEvento recusa),
+  // atualizarEvento ainda assim tem que recusar editar, §15.
+  const fakeDerivado = {id:"evt-fake-derivado", tipo:"MONTAGEM", origem:"MONTAGEM", titulo:"Não deveria editar", status:"AGENDADO"};
+  appFase6.M.Store.state.eventos.push(fakeDerivado);
+  const negadoOrigem = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.atualizarEvento("evt-fake-derivado", {titulo:"Tentativa"}));
+  assert.equal(negadoOrigem.ok, false); assert.equal(negadoOrigem.motivo, "ORIGEM_NAO_EDITAVEL");
+  assert.equal(fakeDerivado.titulo, "Não deveria editar");
+  appFase6.M.Store.state.eventos.pop(); // limpa o fixture defensivo
+}
+
+// ---- 3) cancelamento — muda status, mantém rastro; evento derivado
+// (mesma defesa acima) também não pode ser cancelado direto ----
+{
+  const criado = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({tipo:"RETORNO", titulo:"A cancelar", data:appFase6.M.todayISO()})).evento;
+  const negado = comoUsuarioFase6(MONTADOR6, ()=> appFase6.M.Store.cancelarEvento(criado.id));
+  assert.equal(negado.ok, false); assert.equal(negado.motivo, "SEM_PERMISSAO");
+  assert.equal(criado.status, "AGENDADO");
+
+  const ok = comoUsuarioFase6(PCP6, ()=> appFase6.M.Store.cancelarEvento(criado.id));
+  assert.equal(ok.ok, true);
+  assert.equal(criado.status, "CANCELADO");
+  const histCancel = appFase6.M.Store.state.historico.find(h=>h.tipo==="AGENDA_EVENTO_CANCELADO" && h.eventoId===criado.id);
+  assert.ok(histCancel, "cancelamento precisa deixar rastro no histórico");
+  // cancelado nunca aparece em proximosEventos (não é mais compromisso ativo)
+  assert.ok(!appFase6.M.Agenda.proximosEventos(365).some(e=>e.id===criado.id), "evento cancelado não pode aparecer em proximosEventos");
+}
+
+// ---- 7/8/9) evento de MONTAGEM deriva do planejamento, ao vivo, sem
+// duplicar fonte — nunca é gravado em state.eventos ----
+{
+  const o = obraFixture6();
+  appFase6.M.Store.state.obras.push(o);
+  assert.equal(appFase6.M.Agenda.eventoMontagemDeObra(o), null, "obra sem planejamento não gera compromisso nenhum (nada inventado)");
+
+  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.setPlanejamentoMontagem(o.id, {
+    inicioPrevisto: appFase6.M.dOff(5), duracaoEstimadaValor:10, duracaoEstimadaUnidade:"dias_uteis",
+    equipePlanejada:"Roberto Diniz, Fernanda Costa", observacoes:"planejamento de teste",
+  }));
+  const evtMont = appFase6.M.Agenda.eventoMontagemDeObra(o);
+  assert.ok(evtMont, "com planejamento.inicioPrevisto definido, o compromisso de Montagem precisa existir");
+  assert.equal(evtMont.tipo, "MONTAGEM");
+  assert.equal(evtMont.origem, "MONTAGEM");
+  assert.equal(evtMont.data, o.planejamentoMontagem.inicioPrevisto, "data do compromisso é a MESMA data de obra.planejamentoMontagem.inicioPrevisto — fonte única");
+  assert.equal(evtMont.equipe, "Roberto Diniz, Fernanda Costa");
+  assert.ok(!appFase6.M.Store.state.eventos.some(e=>e.origemRefId===o.id || e.obraId===o.id), "§13/§2 — Montagem NUNCA vira registro próprio em state.eventos, mesmo depois de ter planejamento");
+
+  // §13 — "se o planejamento mudar, a Agenda reflete sem edição duplicada"
+  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.setPlanejamentoMontagem(o.id, {inicioPrevisto: appFase6.M.dOff(9)}));
+  const evtMontAtualizado = appFase6.M.Agenda.eventoMontagemDeObra(o);
+  assert.equal(evtMontAtualizado.data, appFase6.M.dOff(9), "mudar o planejamento na Montagem reflete na próxima leitura da Agenda, sem tocar em nenhum evento");
+
+  assert.ok(appFase6.M.Agenda.todosEventosRaw(["MONTAGEM"]).some(e=>e.obraId===o.id && e.data===appFase6.M.dOff(9)), "todosEventosRaw precisa incluir o compromisso de Montagem derivado");
+}
+
+// ---- assistência deriva de state.assistencias (mesma regra do Calendário
+// legado: não concluída + prazo definido), nunca duplicada ----
+{
+  const o = obraFixture6();
+  appFase6.M.Store.state.obras.push(o);
+  const assist = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarAssistencia({
+    obraId:o.id, obraNome:o.cliente, descricao:"teste assistência agenda", categoria:"Porta",
+    responsavel:"Fernanda Costa", prazo: appFase6.M.dOff(3), prioridade:"MEDIA",
+  })).assistencia;
+  const evtAsst = appFase6.M.Agenda.eventoDeAssistencia(assist);
+  assert.ok(evtAsst, "assistência não concluída com prazo precisa gerar compromisso na Agenda");
+  assert.equal(evtAsst.origem, "ASSISTENCIA");
+  assert.equal(evtAsst.data, assist.prazo);
+  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.atualizarAssistencia(assist.id, {status:"CONCLUIDA"}));
+  assert.equal(appFase6.M.Agenda.eventoDeAssistencia(assist), null, "assistência concluída não é mais compromisso ativo na Agenda");
+}
+
+// ---- 10/11) conflito simples por sobreposição — mesma pessoa, mesmo dia,
+// horário sobreposto; NUNCA bloqueia o salvamento ----
+{
+  const dia = appFase6.M.dOff(20);
+  const e1 = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({tipo:"VISITA", titulo:"Visita A", data:dia, horaInicio:"09:00", horaFim:"10:00", equipe:"Carlos Nunes"})).evento;
+  const e2 = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({tipo:"MEDICAO", titulo:"Medição B", data:dia, horaInicio:"09:30", horaFim:"10:30", equipe:"Carlos Nunes"}));
+  assert.equal(e2.ok, true, "criar um evento em conflito precisa continuar permitido — conflito é alerta, nunca bloqueio (§12)");
+  const conflitos = appFase6.M.Calc.conflitosAgenda([e1, e2.evento]);
+  assert.equal(conflitos.length, 1);
+  assert.equal(conflitos[0].pessoa, "Carlos Nunes");
+  const ids = appFase6.M.Calc.idsEmConflitoAgenda([e1, e2.evento]);
+  assert.ok(ids.has(e1.id) && ids.has(e2.evento.id));
+
+  // pessoas diferentes, mesmo horário — sem conflito
+  const e3 = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({tipo:"VISITA", titulo:"Visita C", data:dia, horaInicio:"09:00", horaFim:"10:00", equipe:"Ana Ferreira"})).evento;
+  assert.equal(appFase6.M.Calc.conflitosAgenda([e1, e3]).length, 0, "mesmo horário/dia, pessoas diferentes — sem conflito");
+
+  // mesma pessoa, mesmo dia, horários que não se sobrepõem — sem conflito
+  const e4 = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({tipo:"VISITA", titulo:"Visita D", data:dia, horaInicio:"11:00", horaFim:"12:00", equipe:"Carlos Nunes"})).evento;
+  assert.equal(appFase6.M.Calc.conflitosAgenda([e1, e4]).length, 0, "mesma pessoa, mesmo dia, sem sobreposição de horário — sem conflito");
+
+  // evento cancelado nunca conta como conflito
+  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.cancelarEvento(e2.evento.id));
+  assert.equal(appFase6.M.Calc.conflitosAgenda([e1, e2.evento]).length, 0, "evento cancelado não gera conflito");
+}
+
+// ---- 12) filtros Tipo/Equipe/Obra/Status ----
+{
+  const o = obraFixture6();
+  appFase6.M.Store.state.obras.push(o);
+  const a = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({tipo:"VISITA", data:appFase6.M.todayISO(), equipe:"Marcos Lima", obraId:o.id})).evento;
+  const b = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({tipo:"MEDICAO", data:appFase6.M.todayISO(), equipe:"Pedro Rocha"})).evento;
+  const lista = [a,b];
+  assert.deepEqual(appFase6.M.Agenda.aplicarFiltrosUI(lista, {tipo:"VISITA"}).map(e=>e.id), [a.id]);
+  assert.deepEqual(appFase6.M.Agenda.aplicarFiltrosUI(lista, {equipe:"marcos"}).map(e=>e.id), [a.id], "filtro de equipe é case-insensitive, substring");
+  assert.deepEqual(appFase6.M.Agenda.aplicarFiltrosUI(lista, {obraId:o.id}).map(e=>e.id), [a.id]);
+  assert.deepEqual(appFase6.M.Agenda.aplicarFiltrosUI(lista, {status:"AGENDADO"}).map(e=>e.id).sort(), [a.id,b.id].sort());
+  assert.deepEqual(appFase6.M.Agenda.aplicarFiltrosUI(lista, {status:"CANCELADO"}), []);
+}
+
+// ---- 13) escopo de Montador — só vê compromisso da própria obra/equipe
+// (§22), nunca de obra alheia sem vínculo ----
+{
+  const obraDoMontador = obraFixture6();
+  const obraAlheia = obraFixture6();
+  appFase6.M.Store.state.obras.push(obraDoMontador, obraAlheia);
+  // vínculo real via tarefa (mesmo mecanismo de obraIdsDoColaborador que o
+  // resto do app já usa — nenhum vínculo novo inventado aqui)
+  appFase6.M.Store.state.tarefas.push({id:"fx6-tsk-1", obraId:obraDoMontador.id, titulo:"Tarefa", status:"PLANEJADA", responsavelPlanejado:MONTADOR6});
+
+  const evtObraDoMontador = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({tipo:"OUTRO", data:appFase6.M.todayISO(), obraId:obraDoMontador.id})).evento;
+  const evtObraAlheia = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({tipo:"OUTRO", data:appFase6.M.todayISO(), obraId:obraAlheia.id})).evento;
+  const evtAvulsoComEquipe = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({tipo:"OUTRO", data:appFase6.M.todayISO(), equipe:MONTADOR6})).evento;
+  const evtAvulsoSemVinculo = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({tipo:"OUTRO", data:appFase6.M.todayISO(), equipe:"Pedro Rocha"})).evento;
+
+  const visiveis = comoUsuarioFase6(MONTADOR6, ()=> appFase6.M.Agenda.todosEventosRaw());
+  const idsVisiveis = visiveis.map(e=>e.id);
+  assert.ok(idsVisiveis.includes(evtObraDoMontador.id), "Montador precisa ver compromisso da obra onde tem tarefa atribuída");
+  assert.ok(idsVisiveis.includes(evtAvulsoComEquipe.id), "Montador precisa ver compromisso avulso onde seu nome está na equipe");
+  assert.ok(!idsVisiveis.includes(evtObraAlheia.id), "Montador NÃO pode ver compromisso de obra sem nenhum vínculo — §22 não amplia acesso");
+  assert.ok(!idsVisiveis.includes(evtAvulsoSemVinculo.id), "Montador NÃO pode ver compromisso avulso de outra pessoa sem vínculo");
+
+  // Admin (verTodasObras) continua vendo tudo — escopo restrito é só pra
+  // quem NÃO tem verTodasObras, ninguém perdeu visão que já tinha.
+  const visiveisAdmin = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Agenda.todosEventosRaw()).map(e=>e.id);
+  assert.ok(visiveisAdmin.includes(evtObraAlheia.id) && visiveisAdmin.includes(evtAvulsoSemVinculo.id));
+}
+
+// ---- 14) escopo de Assistência — só vê atendimento/compromisso do próprio
+// contexto, mesmo raciocínio de escopo do Montador acima (§22) ----
+{
+  // reatribui um colaborador OPERADOR existente pro perfil ASSISTENCIA por
+  // um instante — mesmo truque já usado nas fases anteriores pra testar um
+  // perfil sem colaborador dedicado no seed.
+  const alvo = appFase6.M.COLABORADORES.find(c=>c.nome==="Ana Ferreira");
+  const perfilOriginal = alvo.perfil;
+  alvo.perfil = "ASSISTENCIA";
+  try{
+    const obraPropria = obraFixture6(), obraAlheia = obraFixture6();
+    appFase6.M.Store.state.obras.push(obraPropria, obraAlheia);
+    appFase6.M.Store.state.assistencias.push({id:"fx6-asst-propria", obraId:obraPropria.id, obraNome:obraPropria.cliente,
+      status:"ABERTA", descricao:"minha", categoria:"Porta", responsavel:"Ana Ferreira", prazo: appFase6.M.dOff(2), garantia:"EM_ANALISE", visitas:[]});
+    appFase6.M.Store.state.assistencias.push({id:"fx6-asst-alheia", obraId:obraAlheia.id, obraNome:obraAlheia.cliente,
+      status:"ABERTA", descricao:"de outra pessoa", categoria:"Porta", responsavel:"Fernanda Costa", prazo: appFase6.M.dOff(2), garantia:"EM_ANALISE", visitas:[]});
+
+    const visiveis = comoUsuarioFase6("Ana Ferreira", ()=> appFase6.M.Agenda.todosEventosRaw(["ASSISTENCIA"])).map(e=>e.origemRefId);
+    assert.ok(visiveis.includes("fx6-asst-propria"), "Assistência vê o próprio atendimento");
+    assert.ok(!visiveis.includes("fx6-asst-alheia"), "Assistência NÃO vê atendimento de outra pessoa sem vínculo — §22");
+  } finally { alvo.perfil = perfilOriginal; }
+}
+
+// ---- smoke: a página Agenda renderiza sem lançar, nas 4 views desktop,
+// pro Admin (mesmo padrão da Fase 5 com Montagem) ----
+{
+  comoUsuarioFase6(ADMIN6, ()=>{
+    ["MES","SEMANA","DIA","EQUIPES"].forEach(v=>{
+      appFase6.M.UIState.agendaView = v;
+      const resultado = appFase6.M.Pages.agenda();
+      assert.ok(resultado && typeof resultado.html === "string" && resultado.html.length>0, `M.Pages.agenda() renderiza HTML sem lançar exceção na view ${v}`);
+    });
+    appFase6.M.UIState.agendaView = "SEMANA";
+    const form = appFase6.M.Pages.eventoFormHtml(null);
+    assert.ok(typeof form === "string" && form.length>0, "M.Pages.eventoFormHtml() renderiza sem lançar");
+  });
+}
+
+// ==================================================================
+// FASE 6 — AJUSTES ANTES DO PUSH. Cobre os 3 pontos operacionais pedidos:
+// (1) Montagem precisa ocupar o período previsto inteiro (ocorrências
+//     virtuais por dia, nunca persistidas); (2) conflito precisa considerar
+//     essa ocupação derivada; (3) comparação de pessoa no conflito não pode
+//     ser substring ingênua.
+// ==================================================================
+
+// ---- A) montagem multidia — ocorre em TODOS os dias do período, nunca só
+// no primeiro; alteração do planejamento muda o intervalo imediatamente;
+// nenhuma ocorrência derivada entra em state.eventos ----
+{
+  const o = obraFixture6();
+  appFase6.M.Store.state.obras.push(o);
+  const inicio = appFase6.M.dOff(30); // período de 5 dias
+  // dias_corridos aqui de propósito: este bloco testa a MECÂNICA da
+  // expansão multidia (contagem, ids, período, não-persistência) — a
+  // semântica de dias_uteis/semanas pulando fim de semana tem seção própria
+  // logo abaixo, com dias fixos (segunda a segunda) pra não depender de em
+  // qual dia da semana cai "hoje" no momento em que o teste roda.
+  // AJUSTE (verificação final de integração): duracaoEstimadaValor agora
+  // controla a contagem DIRETO (fluxo real) — nada de forçar
+  // fimPrevistoCalculado à mão; esse campo não é mais usado pra decidir
+  // quantos dias a Montagem ocupa (ver comentário em ocorrenciasDeEventoBase).
+  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.setPlanejamentoMontagem(o.id, {
+    inicioPrevisto: inicio, duracaoEstimadaValor:5, duracaoEstimadaUnidade:"dias_corridos",
+    equipePlanejada:"Roberto Diniz",
+  }));
+
+  const base = appFase6.M.Agenda.eventoMontagemDeObra(o);
+  assert.equal(base.data, inicio); assert.equal(base.duracaoEstimadaValor, 5);
+
+  const ocorrencias = appFase6.M.Agenda.ocorrenciasDeEventoBase(base);
+  assert.equal(ocorrencias.length, 5, "duracaoEstimadaValor:5 dias_corridos — exatamente 5 ocorrências, uma por dia");
+  const diasEsperados = [0,1,2,3,4].map(n=>appFase6.M.dOff(30+n));
+  // Array.from (não .map direto): `ocorrencias` é um array construído
+  // dentro do contexto vm da fixture — .map nele herdaria o Array daquele
+  // realm, e assert/strict compara identidade de protótipo, não só
+  // conteúdo. Array.from aqui roda no realm do teste (host), produzindo um
+  // array comparável de verdade — não é diferença de comportamento real do
+  // app, só um detalhe do harness de teste isolado em vm.
+  assert.deepEqual(Array.from(ocorrencias, oc=>oc.data), diasEsperados, "montagem precisa aparecer em TODOS os dias do período, não só no primeiro");
+  ocorrencias.forEach(oc=>{
+    assert.equal(oc.periodoInicio, inicio); assert.equal(oc.periodoFim, diasEsperados[4]);
+    assert.equal(oc.origemRefId, o.id); assert.equal(oc.origem, "MONTAGEM");
+  });
+  // ids determinísticos e distintos por dia (nunca M.uid) — mantém seleção
+  // estável no drawer entre renders.
+  assert.equal(new Set(ocorrencias.map(oc=>oc.id)).size, 5);
+
+  // todosEventosRaw precisa refletir isso pra QUALQUER dia do meio do
+  // período, não só o início — é o que a view Dia/Semana/Equipes/mobile
+  // consultam.
+  const diaIntermediario = appFase6.M.dOff(32);
+  assert.ok(appFase6.M.Agenda.eventosDoDia(diaIntermediario, ["MONTAGEM"]).some(e=>e.obraId===o.id),
+    "view Dia num dia INTERMEDIÁRIO do período precisa mostrar a montagem");
+  const diaAntesDoInicio = appFase6.M.dOff(29), diaDepoisDoFim = appFase6.M.dOff(35);
+  assert.ok(!appFase6.M.Agenda.eventosDoDia(diaAntesDoInicio, ["MONTAGEM"]).some(e=>e.obraId===o.id),
+    "view Dia FORA do período (antes) não pode mostrar a montagem");
+  assert.ok(!appFase6.M.Agenda.eventosDoDia(diaDepoisDoFim, ["MONTAGEM"]).some(e=>e.obraId===o.id),
+    "view Dia FORA do período (depois) não pode mostrar a montagem");
+
+  // nenhuma ocorrência derivada é gravada — state.eventos continua só com o
+  // que foi criado manualmente (nenhuma entrada com origemRefId===o.id).
+  assert.ok(!appFase6.M.Store.state.eventos.some(e=>e.origemRefId===o.id),
+    "§1 — nenhuma ocorrência derivada do período pode ser gravada em state.eventos");
+
+  // alterar o planejamento muda o intervalo imediatamente, sem edição
+  // duplicada — mesmo princípio do §13 original, agora valendo pro período
+  // inteiro.
+  const novoInicio = appFase6.M.dOff(40);
+  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.setPlanejamentoMontagem(o.id, {inicioPrevisto: novoInicio, duracaoEstimadaValor:2, duracaoEstimadaUnidade:"dias_corridos"}));
+  const baseAtualizada = appFase6.M.Agenda.eventoMontagemDeObra(o);
+  const ocorrenciasAtualizadas = appFase6.M.Agenda.ocorrenciasDeEventoBase(baseAtualizada);
+  assert.equal(ocorrenciasAtualizadas.length, 2);
+  assert.deepEqual(Array.from(ocorrenciasAtualizadas, oc=>oc.data), [novoInicio, appFase6.M.dOff(41)]);
+  assert.ok(!appFase6.M.Agenda.eventosDoDia(diaIntermediario, ["MONTAGEM"]).some(e=>e.obraId===o.id),
+    "período antigo precisa sumir assim que o planejamento muda — sem ocorrência fantasma");
+}
+
+// ---- B) "próximos compromissos" (Hoje) não duplica uma linha por dia de
+// montagem multidia — mostra o compromisso UMA vez ----
+{
+  const o = obraFixture6();
+  appFase6.M.Store.state.obras.push(o);
+  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.setPlanejamentoMontagem(o.id, {
+    inicioPrevisto: appFase6.M.todayISO(), duracaoEstimadaValor:5, duracaoEstimadaUnidade:"dias_uteis",
+    equipePlanejada:"Fernanda Costa",
+  }));
+  const proximos = appFase6.M.Agenda.proximosEventos(7, ["MONTAGEM"]).filter(e=>e.obraId===o.id);
+  assert.equal(proximos.length, 1, "montagem de 5 dias dentro da janela de 7 dias precisa aparecer só 1 vez em proximosEventos, não 5");
+}
+
+// ---- C) conflito considera a ocupação derivada do período — montagem
+// multidia × evento manual no meio do período, mesma pessoa ----
+{
+  const o = obraFixture6();
+  appFase6.M.Store.state.obras.push(o);
+  const inicio = appFase6.M.dOff(50);
+  // dias_corridos aqui de propósito, pelo mesmo motivo do bloco A: este
+  // teste é sobre a MECÂNICA de conflito num período multidia — não deve
+  // depender de em que dia da semana "hoje" cai quando a suíte roda. A
+  // distinção dias_uteis × dias_corridos no conflito tem teste dedicado
+  // logo abaixo, com datas fixas (segunda a segunda), não relativas a hoje.
+  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.setPlanejamentoMontagem(o.id, {
+    inicioPrevisto: inicio, duracaoEstimadaValor:5, duracaoEstimadaUnidade:"dias_corridos",
+    equipePlanejada:"Roberto Diniz",
+  }));
+
+  const diaDoMeio = appFase6.M.dOff(52); // dentro do período 50-54
+  const visita = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({
+    tipo:"VISITA", titulo:"Visita no meio da montagem", data:diaDoMeio, horaInicio:"14:00", horaFim:"15:00", equipe:"Roberto Diniz",
+  })).evento;
+
+  const todos = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Agenda.todosEventosRaw());
+  const idsConflito = appFase6.M.Calc.idsEmConflitoAgenda(todos);
+  assert.ok(idsConflito.has(visita.id), "visita no meio do período da montagem, mesma pessoa, precisa ser detectada em conflito (§3)");
+  const ocorrenciaDoDia = todos.find(e=>e.tipo==="MONTAGEM" && e.obraId===o.id && e.data===diaDoMeio);
+  assert.ok(ocorrenciaDoDia, "a ocorrência da montagem no dia do meio precisa existir na lista");
+  assert.ok(idsConflito.has(ocorrenciaDoDia.id), "a ocorrência específica daquele dia precisa estar marcada em conflito");
+
+  // não bloqueia — criarEvento já retornou ok:true acima; confirma de novo
+  // explicitamente por clareza do teste.
+  assert.ok(!!visita.id, "criar o evento em conflito com a montagem continua permitido — conflito nunca bloqueia salvamento (§3)");
+}
+
+// ---- D) conflito não usa substring ingênua — "Ana" ≠ "Mariana", "João" ≠
+// "João Pedro" (colaboradores distintos), e normaliza espaço/caixa (§5) ----
+{
+  const dia = appFase6.M.dOff(60);
+  const ana = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({tipo:"VISITA", data:dia, horaInicio:"09:00", horaFim:"10:00", equipe:"Ana"})).evento;
+  const mariana = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({tipo:"MEDICAO", data:dia, horaInicio:"09:00", horaFim:"10:00", equipe:"Mariana"})).evento;
+  assert.equal(appFase6.M.Calc.conflitosAgenda([ana, mariana]).length, 0, "'Ana' e 'Mariana' são pessoas diferentes — substring não pode gerar falso conflito");
+
+  const joao = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({tipo:"VISITA", data:dia, horaInicio:"11:00", horaFim:"12:00", equipe:"João"})).evento;
+  const joaoPedro = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({tipo:"MEDICAO", data:dia, horaInicio:"11:00", horaFim:"12:00", equipe:"João Pedro"})).evento;
+  assert.equal(appFase6.M.Calc.conflitosAgenda([joao, joaoPedro]).length, 0, "'João' e 'João Pedro' são colaboradores distintos — não podem conflitar por substring");
+
+  // mesmo colaborador, digitado com caixa/espaçamento diferente — PRECISA
+  // conflitar (normalização de espaço/caixa).
+  const c1 = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({tipo:"VISITA", data:dia, horaInicio:"13:00", horaFim:"14:00", equipe:"Carlos Nunes"})).evento;
+  const c2 = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({tipo:"MEDICAO", data:dia, horaInicio:"13:30", horaFim:"14:30", equipe:"  carlos   nunes"})).evento;
+  const confNorm = appFase6.M.Calc.conflitosAgenda([c1, c2]);
+  assert.equal(confNorm.length, 1, "mesmo colaborador, digitado com espaço/caixa diferente, precisa conflitar (mesma pessoa de verdade)");
+
+  // mesmo colaborador, mesmo dia, horários que não se sobrepõem — sem
+  // conflito (recobre o cenário já existente, agora com a nova comparação).
+  const c3 = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({tipo:"VISITA", data:dia, horaInicio:"15:00", horaFim:"16:00", equipe:"Carlos Nunes"})).evento;
+  assert.equal(appFase6.M.Calc.conflitosAgenda([c1, c3]).length, 0, "mesma pessoa, mesmo dia, sem sobreposição — sem conflito");
+
+  // CANCELADO continua ignorado (recobre de novo, com fixtures desta seção).
+  const c4 = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({tipo:"OUTRO", data:dia, horaInicio:"13:00", horaFim:"14:00", equipe:"Carlos Nunes"})).evento;
+  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.cancelarEvento(c4.id));
+  assert.equal(appFase6.M.Calc.conflitosAgenda([c1, c4]).length, 0, "evento cancelado continua fora do cálculo de conflito, mesmo com pessoa/horário batendo");
+}
+
+// ---- E) Semana agrupa/identifica claramente a equipe; mobile Hoje/Amanhã/
+// Semana respeita o período (smoke via M.Agenda, sem depender de HTML) ----
+{
+  const o = obraFixture6();
+  appFase6.M.Store.state.obras.push(o);
+  // dias_corridos aqui de propósito — este teste verifica que hoje/amanhã/
+  // semana ENXERGAM o período (mecânica de leitura), não a regra de dia
+  // útil em si (que tem teste dedicado com datas fixas, abaixo); com
+  // dias_uteis este teste ficaria dependente de em que dia da semana "hoje"
+  // cai quando a suíte roda.
+  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.setPlanejamentoMontagem(o.id, {
+    inicioPrevisto: appFase6.M.todayISO(), duracaoEstimadaValor:5, duracaoEstimadaUnidade:"dias_corridos",
+    equipePlanejada:"Roberto Diniz",
+  })); // 5 dias corridos a partir de hoje — cobre hoje, amanhã e a janela de 7 dias com folga
+
+  const amanha = appFase6.M.dOff(1);
+  assert.ok(appFase6.M.Agenda.eventosDoDia(appFase6.M.todayISO(), ["MONTAGEM"]).some(e=>e.obraId===o.id), "mobile Hoje — período cobre hoje");
+  assert.ok(appFase6.M.Agenda.eventosDoDia(amanha, ["MONTAGEM"]).some(e=>e.obraId===o.id), "mobile Amanhã — período cobre amanhã");
+  assert.ok(appFase6.M.Agenda.eventosDoPeriodo(appFase6.M.todayISO(), appFase6.M.dOff(6), ["MONTAGEM"]).some(e=>e.obraId===o.id), "mobile Semana — período aparece na janela de 7 dias");
+
+  // render real da view Semana não lança e o HTML carrega o nome da equipe
+  // como cabeçalho de grupo (eixo visível, não só texto perdido no card).
+  comoUsuarioFase6(ADMIN6, ()=>{
+    appFase6.M.UIState.agendaView = "SEMANA";
+    appFase6.M.UIState.agendaSemanaInicio = appFase6.M.Agenda.segundaFeiraDe(appFase6.M.todayISO());
+    const resultado = appFase6.M.Pages.agenda();
+    assert.ok(resultado.html.includes("Roberto Diniz"), "Semana precisa mostrar o nome da equipe como eixo, não só escondido no card");
+  });
+}
+
+console.log("Fase 6 — ajustes antes do push (multidia/conflito/substring): OK");
+
+// ==================================================================
+// FASE 6 — ÚLTIMO AJUSTE ANTES DO PUSH. A unidade do planejamento
+// (dias_uteis/semanas/dias_corridos) precisa decidir quais dias do período
+// viram ocupação REAL na Agenda — dias_uteis/semanas pulam sábado/domingo
+// (não geram ocorrência ali, nem visual nem de conflito); dias_corridos
+// inclui todos os dias. Datas FIXAS (não M.dOff) de propósito: são testes
+// de dia-da-semana, não podem depender de em que dia da semana "hoje" cai
+// no momento em que a suíte roda. 2030-01-07 é uma segunda-feira fixa,
+// usada como âncora (2030 só pra ficar bem longe de qualquer data real do
+// resto dos testes/fixtures).
+// ==================================================================
+const SEG = "2030-01-07", TER="2030-01-08", QUA="2030-01-09", QUI="2030-01-10",
+  SEX="2030-01-11", SAB="2030-01-12", DOM="2030-01-13", SEG_SEGUINTE="2030-01-14",
+  TER_SEGUINTE="2030-01-15";
+
+// ---- F) dias_uteis segunda→sexta = 5 ocorrências ----
+{
+  const o = obraFixture6();
+  appFase6.M.Store.state.obras.push(o);
+  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.setPlanejamentoMontagem(o.id, {
+    inicioPrevisto: SEG, duracaoEstimadaValor:5, duracaoEstimadaUnidade:"dias_uteis", equipePlanejada:"Roberto Diniz",
+  }));
+  const base = appFase6.M.Agenda.eventoMontagemDeObra(o);
+  assert.equal(base.unidadeDuracao, "dias_uteis");
+  const ocorrencias = appFase6.M.Agenda.ocorrenciasDeEventoBase(base);
+  assert.equal(ocorrencias.length, 5, "segunda a sexta, dias_uteis — 5 ocorrências, uma por dia útil");
+  assert.deepEqual(Array.from(ocorrencias, oc=>oc.data), [SEG,TER,QUA,QUI,SEX]);
+}
+
+// ---- G) dias_uteis atravessando fim de semana não gera sábado/domingo ----
+{
+  const o = obraFixture6();
+  appFase6.M.Store.state.obras.push(o);
+  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.setPlanejamentoMontagem(o.id, {
+    inicioPrevisto: QUA, duracaoEstimadaValor:5, duracaoEstimadaUnidade:"dias_uteis", equipePlanejada:"Roberto Diniz",
+  })); // quarta (09) + 5 dias úteis — atravessa o fim de semana 12/13 no meio da contagem
+  const base = appFase6.M.Agenda.eventoMontagemDeObra(o);
+  const dias = Array.from(appFase6.M.Agenda.ocorrenciasDeEventoBase(base), oc=>oc.data);
+  assert.deepEqual(dias, [QUA,QUI,SEX,SEG_SEGUINTE,TER_SEGUINTE], "atravessa o fim de semana — sábado/domingo não podem gerar ocorrência");
+  assert.ok(!dias.includes(SAB) && !dias.includes(DOM));
+}
+
+// ---- H) semanas não gera ocupação de fim de semana ("semana" é tratada
+// como período operacional de dias úteis, não fim de semana automático —
+// mesma regra de dias_uteis) ----
+{
+  const o = obraFixture6();
+  appFase6.M.Store.state.obras.push(o);
+  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.setPlanejamentoMontagem(o.id, {
+    inicioPrevisto: SEG, duracaoEstimadaValor:1, duracaoEstimadaUnidade:"semanas", equipePlanejada:"Roberto Diniz",
+  }));
+  const base = appFase6.M.Agenda.eventoMontagemDeObra(o);
+  assert.equal(base.unidadeDuracao, "semanas");
+  const dias = Array.from(appFase6.M.Agenda.ocorrenciasDeEventoBase(base), oc=>oc.data);
+  assert.ok(!dias.includes(SAB) && !dias.includes(DOM), "semanas não pode gerar ocupação automática de sábado/domingo");
+  // AJUSTE (verificação final de integração): "1 semana operacional" = 5
+  // dias úteis (segunda a sexta), NÃO 6 — a versão anterior deste teste
+  // esperava 6 dias (incluindo a segunda seguinte) porque a contagem vinha
+  // de fimPrevistoCalculado (aproximação de calendário de +7 dias corridos,
+  // Fase 5); agora a contagem vem direto de duracaoEstimadaValor×5 dias
+  // úteis, sem essa distorção.
+  assert.deepEqual(dias, [SEG,TER,QUA,QUI,SEX]);
+}
+
+// ---- I) dias_corridos gera sábado/domingo ----
+{
+  const o = obraFixture6();
+  appFase6.M.Store.state.obras.push(o);
+  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.setPlanejamentoMontagem(o.id, {
+    inicioPrevisto: SEG, duracaoEstimadaValor:7, duracaoEstimadaUnidade:"dias_corridos", equipePlanejada:"Roberto Diniz",
+  }));
+  const base = appFase6.M.Agenda.eventoMontagemDeObra(o);
+  const dias = Array.from(appFase6.M.Agenda.ocorrenciasDeEventoBase(base), oc=>oc.data);
+  assert.equal(dias.length, 7, "dias_corridos — todo dia do período, inclusive fim de semana");
+  assert.ok(dias.includes(SAB) && dias.includes(DOM), "dias_corridos precisa incluir sábado e domingo");
+}
+
+// ---- J/K) conflito respeita a unidade — sábado só conflita se o
+// planejamento for dias_corridos ----
+{
+  const oUteis = obraFixture6(), oCorridos = obraFixture6();
+  appFase6.M.Store.state.obras.push(oUteis, oCorridos);
+
+  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.setPlanejamentoMontagem(oUteis.id, {
+    inicioPrevisto: SEG, duracaoEstimadaValor:5, duracaoEstimadaUnidade:"dias_uteis", equipePlanejada:"Carlos Nunes",
+  })); // 5 dias úteis a partir de segunda — ocupa exatamente segunda a sexta, não chega no sábado
+
+  const visitaSabadoUteis = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({
+    tipo:"VISITA", titulo:"Visita de sábado", data:SAB, equipe:"Carlos Nunes",
+  })).evento;
+  const todosUteis = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Agenda.todosEventosRaw());
+  const idsConflitoUteis = appFase6.M.Calc.idsEmConflitoAgenda(todosUteis);
+  assert.ok(!idsConflitoUteis.has(visitaSabadoUteis.id),
+    "dias_uteis — sábado não é dia operacional do período; visita de sábado NÃO pode conflitar com a montagem");
+
+  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.setPlanejamentoMontagem(oCorridos.id, {
+    inicioPrevisto: SEG, duracaoEstimadaValor:7, duracaoEstimadaUnidade:"dias_corridos", equipePlanejada:"Fernanda Costa",
+  })); // 7 dias corridos a partir de segunda — inclui o sábado
+
+  const visitaSabadoCorridos = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarEvento({
+    tipo:"VISITA", titulo:"Visita de sábado 2", data:SAB, equipe:"Fernanda Costa",
+  })).evento;
+  const todosCorridos = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Agenda.todosEventosRaw());
+  const idsConflitoCorridos = appFase6.M.Calc.idsEmConflitoAgenda(todosCorridos);
+  assert.ok(idsConflitoCorridos.has(visitaSabadoCorridos.id),
+    "dias_corridos — sábado é dia operacional do período; visita de sábado precisa conflitar com a montagem");
+}
+
+// ---- L) alteração de planejamento continua refletindo imediatamente,
+// inclusive quando a mudança é só de UNIDADE (mesmo período de calendário,
+// dias_uteis → dias_corridos passa a incluir fim de semana na próxima
+// leitura, sem edição duplicada) ----
+{
+  const o = obraFixture6();
+  appFase6.M.Store.state.obras.push(o);
+  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.setPlanejamentoMontagem(o.id, {
+    inicioPrevisto: SEG, duracaoEstimadaValor:7, duracaoEstimadaUnidade:"dias_uteis", equipePlanejada:"Roberto Diniz",
+  }));
+  const diasAntes = Array.from(appFase6.M.Agenda.ocorrenciasDeEventoBase(appFase6.M.Agenda.eventoMontagemDeObra(o)), oc=>oc.data);
+  assert.ok(!diasAntes.includes(SAB), "antes da mudança (dias_uteis) — sábado não ocupa");
+
+  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.setPlanejamentoMontagem(o.id, {
+    inicioPrevisto: SEG, duracaoEstimadaValor:7, duracaoEstimadaUnidade:"dias_corridos", equipePlanejada:"Roberto Diniz",
+  }));
+  const diasDepois = Array.from(appFase6.M.Agenda.ocorrenciasDeEventoBase(appFase6.M.Agenda.eventoMontagemDeObra(o)), oc=>oc.data);
+  assert.ok(diasDepois.includes(SAB), "depois da mudança pra dias_corridos, sem edição duplicada — sábado passa a ocupar imediatamente");
+
+  assert.ok(!appFase6.M.Store.state.eventos.some(e=>e.origemRefId===o.id),
+    "nenhuma ocorrência derivada — de nenhuma das duas leituras — foi gravada em state.eventos");
+}
+
+// ---- M) fallback explícito de unidade ausente (planejamento "legado") ----
+{
+  const o = obraFixture6();
+  // sem duracaoEstimadaUnidade — simula dado antigo, sem passar por
+  // Store.setPlanejamentoMontagem. duracaoEstimadaValor PRECISA estar
+  // presente pro fixture ser realista: Store.calcularFimPrevisto só produz
+  // fimPrevistoCalculado quando duracaoEstimadaValor existe (Fase 5), então
+  // um planejamento "com fim calculado mas sem valor de duração" nunca
+  // acontece de verdade — não é esse o cenário legado a simular.
+  o.planejamentoMontagem = {inicioPrevisto: SEG, duracaoEstimadaValor:5, equipePlanejada:"Roberto Diniz"};
+  appFase6.M.Store.state.obras.push(o);
+  const base = appFase6.M.Agenda.eventoMontagemDeObra(o);
+  assert.equal(base.unidadeDuracao, "dias_uteis", "§3 — planejamento sem unidade cai no MESMO fallback fixo que Store.setPlanejamentoMontagem já usa (dias_uteis), nunca inferido de outra coisa");
+  const dias = Array.from(appFase6.M.Agenda.ocorrenciasDeEventoBase(base), oc=>oc.data);
+  assert.deepEqual(dias, [SEG,TER,QUA,QUI,SEX]);
+}
+
+console.log("Fase 6 — último ajuste antes do push (unidade dias_uteis/semanas/dias_corridos): OK");
+
+console.log("Fase 6 (Agenda V2): OK");
 
 // ==================================================================
 // HOTFIX 3.1 — persistSupabase() não pode chamar Supa.salvarEstado() com

@@ -49,6 +49,15 @@
     // (localStorage/Supabase) — é só estado efêmero de navegação, do mesmo
     // jeito que pendExpandido/producaoExpandidas já são hoje.
     expandSections: new Set(),
+    // FASE 6 (Agenda V2) — estado de navegação da tela nova (efêmero, igual
+    // a calMonth/calYear do Calendário legado — nunca persistido).
+    agendaView: "SEMANA", // Semana é a visão operacional principal (§7)
+    agendaAno: M.TODAY.getFullYear(), agendaMes: M.TODAY.getMonth(),
+    agendaSemanaInicio: null, // preenchido no boot (ver fim deste arquivo) — segunda-feira da semana atual
+    agendaDia: M.todayISO(),
+    agendaFiltros: {tipo:"", equipe:"", obraId:"", status:""},
+    agendaEventoSelId: null,
+    agendaMobileTab: "HOJE",
   };
 
   // ---------- upload de arquivos/fotos (Supabase Storage) ----------
@@ -832,6 +841,79 @@
     },
     abrirDiaCalendario(iso){
       UI.openModal(M.Pages.calendarioDiaModalHtml(iso));
+    },
+
+    // ---------- Agenda V2 (Fase 6) ----------
+    setAgendaView(v){ M.UIState.agendaView = v; M.UIState.agendaEventoSelId = null; Act.rerender(); },
+    agendaNav(delta){
+      const S = M.UIState, v = S.agendaView;
+      if(v==="MES"){
+        let m=S.agendaMes+delta, y=S.agendaAno;
+        if(m<0){ m=11; y--; } if(m>11){ m=0; y++; }
+        S.agendaMes=m; S.agendaAno=y;
+      } else if(v==="DIA"){
+        S.agendaDia = M.Agenda.addDias(S.agendaDia, delta);
+      } else {
+        S.agendaSemanaInicio = M.Agenda.addDias(S.agendaSemanaInicio, 7*delta);
+      }
+      Act.rerender();
+    },
+    agendaHoje(){
+      const S = M.UIState;
+      S.agendaMes = M.TODAY.getMonth(); S.agendaAno = M.TODAY.getFullYear();
+      S.agendaDia = M.todayISO();
+      S.agendaSemanaInicio = M.Agenda.segundaFeiraDe(M.todayISO());
+      Act.rerender();
+    },
+    agendaVerDia(iso){
+      // §6: "clique no dia abre/resume compromissos daquele dia" — navega
+      // pra visão Dia (§8) na data clicada, sem modal grande nenhum.
+      M.UIState.agendaView = "DIA"; M.UIState.agendaDia = iso; M.UIState.agendaEventoSelId = null;
+      Act.rerender();
+    },
+    setAgendaFiltro(campo, val){ M.UIState.agendaFiltros[campo] = val; Act.rerender(); },
+    selecionarEventoAgenda(id){ M.UIState.agendaEventoSelId = id; Act.rerender(); },
+    setAgendaMobileTab(t){ M.UIState.agendaMobileTab = t; Act.rerender(); },
+    openEventoForm(evento){
+      UI.openModal(M.Pages.eventoFormHtml(evento||null), {});
+      const form = document.getElementById("formEvento");
+      form.addEventListener("submit", (e)=>{
+        e.preventDefault();
+        const fd = new FormData(form);
+        const dados = {
+          tipo: fd.get("tipo"), titulo: fd.get("titulo") || undefined,
+          obraId: fd.get("obraId")||null, cliente: fd.get("clienteLivre")||null,
+          endereco: fd.get("endereco")||"", data: fd.get("data"),
+          horaInicio: fd.get("horaInicio")||null, horaFim: fd.get("horaFim")||null,
+          equipe: fd.get("equipe")||"", observacao: fd.get("observacao")||"",
+        };
+        const r = evento ? M.Store.atualizarEvento(evento.id, dados) : M.Store.criarEvento(dados);
+        if(!r.ok){
+          UI.toast(r.motivo==="SEM_PERMISSAO" ? "Seu perfil não tem permissão para isso na Agenda."
+            : r.motivo==="ORIGEM_NAO_EDITAVEL" ? "Este compromisso vem de outro módulo — edite por lá."
+            : "Não foi possível salvar o compromisso.");
+          return;
+        }
+        UI.closeModal();
+        UI.toast(evento? "Compromisso atualizado." : "Compromisso criado.");
+      });
+    },
+    editarEventoAgenda(id){
+      const evt = M.Store.state.eventos.find(x=>x.id===id); if(!evt) return;
+      Act.openEventoForm(evt);
+    },
+    cancelarEventoAgenda(id){
+      UI.confirm("Cancelar este compromisso da Agenda?", ()=>{
+        const r = M.Store.cancelarEvento(id);
+        if(!r.ok){ UI.toast("Seu perfil não tem permissão para cancelar este compromisso."); return; }
+        UI.toast("Compromisso cancelado.");
+      });
+    },
+    // "Editar" de evento derivado leva ao contexto de origem (§15) — nunca
+    // edita dado de Montagem/Assistência a partir da Agenda.
+    abrirAssistenciaDaAgenda(assistId){
+      M.UIState.assistExpandido = assistId;
+      Act.go("#/assistencias");
     },
 
     // ---------- lotes ----------

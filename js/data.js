@@ -301,6 +301,38 @@ window.M = window.M || {};
   ];
   const garantiaDef = (key)=> GARANTIA_DEF.find(g=>g.key===key) || GARANTIA_DEF[2];
 
+  // ---------- Agenda V2 (Fase 6) — tipos de evento e status ----------
+  // §3: "tipos aprovados... não inventar dezenas de tipos" — só estes 6.
+  // MONTAGEM e ASSISTENCIA são as duas origens DERIVADAS (computadas ao vivo
+  // a partir de obra.planejamentoMontagem e state.assistencias — nunca
+  // gravadas como registro próprio, ver M.Store.criarEvento/js/pages/
+  // agenda.js); RETORNO/VISITA/MEDICAO/OUTRO são os 4 tipos que podem nascer
+  // como evento MANUAL (§14 — exatamente a mesma lista de lá).
+  const TIPOS_EVENTO_AGENDA = [
+    {key:"MONTAGEM",    label:"Montagem",    tone:"brand",   manual:false},
+    {key:"ASSISTENCIA", label:"Assistência", tone:"warning", manual:false},
+    {key:"RETORNO",     label:"Retorno",     tone:"info",    manual:true},
+    {key:"VISITA",      label:"Visita",      tone:"neutral", manual:true},
+    {key:"MEDICAO",     label:"Medição",     tone:"neutral", manual:true},
+    {key:"OUTRO",       label:"Outro",       tone:"neutral", manual:true},
+  ];
+  const tipoEventoDef = (key)=> TIPOS_EVENTO_AGENDA.find(t=>t.key===key) || TIPOS_EVENTO_AGENDA[5];
+  // §16: "manter simples... verificar se os eventos atuais já possuem modelo
+  // equivalente antes de criar status novo." Nenhum dos vocabulários
+  // existentes (status de pendência, de assistência — 7 estados — ou de
+  // ambiente/montagem) serve pra "meu compromisso de agenda", cada um
+  // responde outra pergunta — por isso os 4 sugeridos no pedido são novos,
+  // exclusivos da Agenda, só pra eventos MANUAIS (eventos derivados usam seu
+  // próprio status de origem, mapeado só para exibição — ver comentário em
+  // js/pages/agenda.js).
+  const STATUS_EVENTO_AGENDA = [
+    {key:"AGENDADO",     label:"Agendado",     tone:"neutral"},
+    {key:"EM_ANDAMENTO", label:"Em andamento", tone:"warning"},
+    {key:"CONCLUIDO",    label:"Concluído",    tone:"good"},
+    {key:"CANCELADO",    label:"Cancelado",    tone:"blocked"},
+  ];
+  const statusEventoDef = (key)=> STATUS_EVENTO_AGENDA.find(s=>s.key===key) || STATUS_EVENTO_AGENDA[0];
+
   // perfis de acesso (seção 53-57)
   //
   // FASE 1 (V2 — permissões por ação, handoff): além das 10 flags antigas
@@ -971,6 +1003,10 @@ window.M = window.M || {};
   M.CHECKLIST_ENCERRAMENTO_AMBIENTE = CHECKLIST_ENCERRAMENTO_AMBIENTE;
   M.GARANTIA_DEF = GARANTIA_DEF;
   M.garantiaDef = garantiaDef;
+  M.TIPOS_EVENTO_AGENDA = TIPOS_EVENTO_AGENDA;
+  M.tipoEventoDef = tipoEventoDef;
+  M.STATUS_EVENTO_AGENDA = STATUS_EVENTO_AGENDA;
+  M.statusEventoDef = statusEventoDef;
   M.PERFIS = PERFIS;
   M.perfilDef = perfilDef;
   M.COLABORADORES = COLABORADORES;

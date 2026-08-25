@@ -131,16 +131,21 @@
       itens: itens.map(ambientePendenteAprovacaoHtml), vazio:"Nenhum ambiente aguardando aprovação agora."});
   }
 
-  // compromisso do M.Calendario (mesma fonte da tela Calendário — nunca
-  // reimplementa a agregação de eventos aqui).
-  function compromissoHtml(e){
-    const acao = e.tipo==="movel" ? `Act.openMovel('${e.movelId}')`
-      : e.tab ? `Act.setObraTab('${e.obraId}','${e.tab}'); Act.go('#/obra/${e.obraId}')`
-      : `Act.go('#/obra/${e.obraId}')`;
-    const dias = C.diasAte(e.iso);
-    const quando = dias===0?"hoje":dias===1?"amanhã":C.fmtDate(e.iso);
+  // FASE 6 (Agenda V2, §21): compromisso real da Agenda (M.Agenda —
+  // js/pages/agenda.js) — mesma fonte que a tela Agenda usa, nunca
+  // reimplementa a agregação de eventos aqui. Substitui o antigo
+  // compromissoHtml (que lia do M.Calendario legado, com outro formato de
+  // evento — {iso,label,tipo,tab} — incompatível com os 6 tipos aprovados
+  // da Agenda V2).
+  function compromissoAgendaHtml(e){
+    const acao = e.origem==="MONTAGEM" ? `Act.abrirPlanejamentoMontagem('${e.obraId}')`
+      : e.origem==="ASSISTENCIA" ? `Act.abrirAssistenciaDaAgenda('${e.origemRefId}')`
+      : e.obraId ? `Act.go('#/obra/${e.obraId}')` : `Act.go('#/agenda')`;
+    const dias = C.diasAte(e.data);
+    const quando = dias===0?"hoje":dias===1?"amanhã":C.fmtDate(e.data);
+    const hora = e.horaInicio? ` · ${e.horaInicio}` : "";
     return `<div class="alert-item" style="cursor:pointer;" onclick="${acao}">
-      <div><div>${esc(e.label)}</div><div class="alert-sub">${esc(quando)}</div></div>
+      <div><div>${esc(e.titulo)}</div><div class="alert-sub">${esc(quando)}${hora} · ${esc(M.tipoEventoDef(e.tipo).label)}</div></div>
     </div>`;
   }
 
@@ -220,8 +225,8 @@
       </div>
       ${(()=>{ const b=blocoAguardandoAprovacaoMontagem(ctx); return b? `<div class="hr"></div>${b}` : ""; })()}
       <div class="hr"></div>
-      ${blocoLista({titulo:"Próximos compromissos", icon:"calendar", tone:"neutral",
-        itens:ctx.compromissos.slice(0,6).map(compromissoHtml), vazio:"Nada nos próximos 7 dias."})}
+      ${blocoLista({titulo:"Próximos compromissos", icon:"calendar", tone:"neutral", href:"#/agenda",
+        itens:ctx.compromissos.slice(0,6).map(compromissoAgendaHtml), vazio:"Nada nos próximos 7 dias."})}
     `;
   }
 
@@ -252,7 +257,18 @@
         <div><div><b>${esc(o.cliente)}</b></div><div class="alert-sub">${o.numeroOS} · entrega ${C.fmtDate(o.dataEntregaPrevista)}</div></div>
       </div>`;
     }
-    const prazosProximos = ctx.compromissos.filter(e=>["obra","movel"].includes(e.tipo)||e.tab==="pendencias");
+    // FASE 6 (Agenda V2, §21 — ajuste necessário): "prazos próximos" do PCP
+    // antes lia do M.Calendario legado (tipos "obra"/"movel"/pendências com
+    // prazo — deadlines genéricos, não compromissos de campo). Os 6 tipos
+    // aprovados da Agenda V2 (Montagem/Assistência/Retorno/Visita/Medição/
+    // Outro) não cobrem "prazo de pendência de pré-produção" — não é um
+    // compromisso de "quem precisa estar onde e quando", é prazo de
+    // documento/material. Por isso este KPI passa a ler direto da MESMA
+    // lista `preProducao` já calculada acima (nenhuma consulta nova),
+    // filtrada pelos próximos 7 dias — mantém o significado original do
+    // handoff ("prazos relevantes de pré-produção que estão perto") sem
+    // inventar um 7º tipo de evento pra caber na Agenda.
+    const prazosProximos = preProducao.filter(p=> p.prazo && C.diasAte(p.prazo)>=0 && C.diasAte(p.prazo)<=7);
     // REFINO VISUAL V2 (ajustes finais, §1): "bloqueios relevantes de
     // projeto/material" = dentre a pré-produção já calculada acima, os que
     // também bloqueiam fechamento (M.bloqueiaFechamento — mesma função usada
@@ -279,8 +295,8 @@
       </div>
       ${(()=>{ const b=blocoAguardandoAprovacaoMontagem(ctx); return b? `<div class="hr"></div>${b}` : ""; })()}
       <div class="hr"></div>
-      ${blocoLista({titulo:"Prazos próximos", icon:"calendar", tone:"neutral",
-        itens:prazosProximos.slice(0,6).map(compromissoHtml),
+      ${blocoLista({titulo:"Prazos próximos", icon:"calendar", tone:"neutral", href:"#/pendencias",
+        itens:prazosProximos.slice(0,6).map(itemAtencaoHtml),
         vazio:"Nada nos próximos 7 dias."})}
     `;
   }
@@ -394,6 +410,17 @@
       const k = C.situacaoAmbiente(a).key;
       return k!=="FINALIZADO" && k!=="FINALIZADO_COM_RESSALVA";
     }));
+    // FASE 6 (Agenda V2, §21): "Obras do dia" continua sendo a MESMA seleção
+    // da Fase 5 (obra com ambiente ainda aberto — regra de Montagem V2, não
+    // mexida aqui) — trocar esse critério por "data agendada" seria mudar
+    // regra de negócio de Montagem, fora do escopo desta fase. O que integra
+    // com a Agenda é aditivo: se a obra tem um compromisso de MONTAGEM
+    // (M.Agenda, derivado do planejamento) agendado para HOJE, mostra esse
+    // horário/equipe no card — mesma fonte real da Agenda, sem duplicar
+    // cálculo (M.Agenda.eventosDoDia já aplica o mesmo escopo por perfil).
+    const agendaHojeMontagem = M.Agenda.eventosDoDia(M.todayISO(), ["MONTAGEM"]);
+    const agendaPorObra = {};
+    agendaHojeMontagem.forEach(e=>{ agendaPorObra[e.obraId] = e; });
     // REFINO VISUAL V2 (ajustes finais, §1): os 3 últimos tiles vêm de UMA
     // chamada a C.contadoresMontagem (mesma função da faixa de KPI de
     // Montagem) — nenhuma contagem nova/duplicada.
@@ -414,6 +441,7 @@
         return `<div class="card pad" style="margin-bottom:10px;">
           <div class="flex-between"><b>${esc(o.cliente)}</b><span class="small muted">${o.numeroOS}</span></div>
           ${o.endereco? `<div class="small muted" style="margin-top:2px;">${UI.icon('map-pin',11)} ${esc(o.endereco)}</div>`:""}
+          ${agendaPorObra[o.id]? `<div class="chip brand" style="margin-top:6px;">${UI.icon('calendar',11)} Agenda hoje${agendaPorObra[o.id].equipe? " · "+esc(agendaPorObra[o.id].equipe):""}</div>`:""}
           <div style="margin-top:8px;">
             ${ambientesAbertos.map(a=>{
               const sit = C.situacaoAmbiente(a);
@@ -476,8 +504,8 @@
           vazio:"Nenhum retorno pendente."})}
       </div>
       <div class="hr"></div>
-      ${blocoLista({titulo:"Próximos compromissos", icon:"calendar", tone:"neutral",
-        itens:ctx.compromissosAssistencia.slice(0,6).map(compromissoHtml), vazio:"Nada nos próximos 7 dias."})}
+      ${blocoLista({titulo:"Próximos compromissos", icon:"calendar", tone:"neutral", href:"#/agenda",
+        itens:ctx.compromissosAssistencia.slice(0,6).map(compromissoAgendaHtml), vazio:"Nada nos próximos 7 dias."})}
     `;
   }
 
@@ -508,10 +536,14 @@
     const ambientesTravados = obras.flatMap(o=> o.ambientes.map(a=>({o,a,sit:C.situacaoAmbiente(a)})))
       .filter(x=> x.sit.key==="TRAVADO");
     const prioridadeFechamento = C.prioridadeParaFinalizar(obras);
-    // próximos compromissos (7 dias) — vem do M.Calendario, respeitando a
-    // mesma restrição de "minhas obras" que o resto da tela já aplica.
-    const compromissos = M.Calendario.proximosEventos(7);
-    const compromissosAssistencia = M.Calendario.proximosEventos(7, ["ASSISTENCIAS"]);
+    // FASE 6 (Agenda V2, §21): "próximos compromissos" (7 dias) agora vem da
+    // Agenda de verdade (M.Agenda — js/pages/agenda.js), não mais do
+    // M.Calendario legado — mesma fonte que a tela Agenda usa, respeitando a
+    // mesma restrição de escopo por perfil que o resto da tela já aplica
+    // (M.Agenda.todosEventosRaw já filtra por dentro — nenhuma lógica de
+    // calendário duplicada aqui, só a chamada).
+    const compromissos = M.Agenda.proximosEventos(7);
+    const compromissosAssistencia = M.Agenda.proximosEventos(7, ["ASSISTENCIA"]);
 
     const ctx = {nome, restrito, meuObraIds, obras, pendAbertas, riscoRows, ambientesTravados, prioridadeFechamento, compromissos, compromissosAssistencia};
 
