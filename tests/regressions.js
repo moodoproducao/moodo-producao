@@ -2781,7 +2781,59 @@ async function rodarTestesHotfix(){
     assert.equal(ctx.chamadasSalvar.length, 0, "com o estado já migrado, migrarChecklistLegado() não pode achar nada pra migrar de novo, e não pode gerar nova gravação (sem isso, é o loop infinito da causa raiz nº 2)");
   }
 
+  // ---- 10 (HOTFIX 3.13.1): estado vindo da nuvem de ANTES da Fase 6
+  // (Agenda V2) não tem a chave `eventos` — aplicarEstadoRemoto() precisa
+  // deixar state.eventos como array vazio, nunca undefined, senão
+  // M.Agenda.todosEventosBrutos() (`state.eventos.concat(...)`) quebra a
+  // primeira leitura da Agenda/Hoje assim que a sincronização real chega.
+  // Reproduz o crash de produção encontrado no smoke test pós-push. ----
+  {
+    const ctx = criarContextoHotfix({semSincronizacaoNoBoot:false});
+    ctx.resolverPronto(true);
+    await esperar(50);
+    ctx.chamadasSalvar.length = 0; // baseline limpo
+
+    // completa o contexto com Calc/Agenda pra reproduzir a leitura real
+    // que quebrava em produção (M.Agenda.todosEventosRaw -> todosEventosBrutos).
+    ctx.app.M.UI = Object.assign({}, ctx.app.M.UI, {
+      esc:(s)=> String(s==null?"":s), icon:()=>"",
+      tipoEventoChip:(t)=> `[tipo:${t}]`, statusEventoChip:(s)=> `[status:${s}]`,
+    });
+    executar(ctx.app, "js/calc.js");
+    executar(ctx.app, "js/pages/agenda.js");
+
+    const cb = ctx.obterMudancaCb();
+    assert.ok(cb, "assinarMudancas precisa ter sido registrado no boot (sincronizarComSupabase)");
+
+    // estado remoto real de ANTES desta fase: sem a chave `eventos` (nunca
+    // foi salva na nuvem por uma versão anterior do app).
+    const remotoSemEventos = estadoDeExemplo();
+    delete remotoSemEventos.eventos;
+    assert.equal(Object.prototype.hasOwnProperty.call(remotoSemEventos, "eventos"), false, "pré-condição: o remoto simulado não pode ter a chave eventos");
+
+    assert.doesNotThrow(()=>{
+      cb(remotoSemEventos, "carimbo-sem-eventos");
+    }, "aplicarEstadoRemoto() não pode lançar quando o remoto não tem `eventos`");
+
+    assert.ok(Array.isArray(ctx.app.M.Store.state.eventos), "state.eventos precisa virar array (nunca undefined) mesmo quando o remoto não tem essa chave");
+    assert.equal(ctx.app.M.Store.state.eventos.length, 0);
+
+    assert.doesNotThrow(()=>{
+      ctx.app.M.Agenda.todosEventosRaw();
+    }, "leitura real da Agenda (todosEventosRaw -> todosEventosBrutos) não pode lançar depois de um estado remoto sem `eventos`");
+
+    // uma segunda sincronização, agora com o remoto já tendo `eventos`
+    // (array não vazio), continua funcionando normalmente — a defesa não
+    // pisa num valor real vindo da nuvem.
+    const remotoComEventos = estadoDeExemplo();
+    remotoComEventos.eventos = [{id:"evt-1", tipo:"VISITA", data:"2030-01-07", titulo:"Visita teste"}];
+    cb(remotoComEventos, "carimbo-com-eventos");
+    assert.equal(ctx.app.M.Store.state.eventos.length, 1, "quando o remoto TEM eventos de verdade, a defesa não pode substituir por array vazio");
+    assert.equal(ctx.app.M.Store.state.eventos[0].id, "evt-1");
+  }
+
   console.log("Hotfix 3.1 (persistencia Supabase antes do cliente pronto): OK");
+  console.log("Hotfix 3.13.1 (state.eventos undefined vindo de estado remoto pre-Fase-6): OK");
 }
 
 rodarTestesHotfix().catch(err=>{

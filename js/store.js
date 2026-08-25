@@ -462,6 +462,14 @@
     if(!remoto) return;
     Object.keys(state).forEach(k=>{ delete state[k]; });
     Object.assign(state, remoto);
+    // HOTFIX 3.13.1: estado salvo na nuvem de antes da Fase 6 (Agenda V2)
+    // não tem a chave `eventos` — sem esta defesa, o Object.assign acima
+    // deixa state.eventos undefined e quebra toda leitura da Agenda
+    // (M.Agenda.todosEventosBrutos faz `state.eventos.concat(...)`, e o
+    // resto do código — Store.criarEvento etc. — sempre assume array).
+    // Mesma defesa que load() já fazia pro caminho local (`parsed.eventos
+    // || fresh.eventos`) — só faltava espelhar aqui pro caminho remoto.
+    if(!Array.isArray(state.eventos)) state.eventos = [];
     // estado vindo da nuvem pode ter sido salvo por uma versão anterior do
     // app (antes da Fase 2) — mesma migração leve do boot local.
     migrarPendenciasParaModeloHandoff();
