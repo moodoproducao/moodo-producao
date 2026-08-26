@@ -15,7 +15,8 @@
   }
 
   M.Pages.dashboard = function(){
-    const obras = M.Store.state.obras;
+    // FASE 7.5: rascunho não entra no dashboard (item 7 do pedido).
+    const obras = M.Store.obrasOperacionais();
     const moveis = M.Store.allMoveis();
     const ind = C.indicadores();
     const meta = C.metaMensalProgresso();

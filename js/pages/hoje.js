@@ -532,7 +532,9 @@
 
     const restrito = !M.Store.pode("verTodasObras");
     const meuObraIds = restrito ? M.Store.obraIdsDoColaborador(nome) : null;
-    const obras = restrito ? M.Store.state.obras.filter(o=>meuObraIds.has(o.id)) : M.Store.state.obras;
+    // FASE 7.5: rascunho não entra em Hoje (item 7 do pedido).
+    const obrasBase = M.Store.obrasOperacionais();
+    const obras = restrito ? obrasBase.filter(o=>meuObraIds.has(o.id)) : obrasBase;
     const pendAbertas = M.Store.state.pendencias.filter(p=> p.status!=="RESOLVIDA" && (!restrito || meuObraIds.has(p.obraId)));
 
     // ---------- dados comuns entre grupos (calculados uma vez) ----------
@@ -585,7 +587,7 @@
     return {title:"Hoje", crumb:"O que exige você, hoje", html,
       actionsHtml:`${UI.pageSearchInput({id:'hojeSearch', placeholder:'Buscar obra, cliente, OS...'})} ${UI.botaoNovaObraHtml()} <button class="btn" onclick="Act.openPendenciaForm(null,null,null)">${UI.icon('alert',14)} Registrar pendência</button>`,
       afterRender(){
-        UI.attachQuickSearch('hojeSearch', M.Store.state.obras.map(o=>({label:o.cliente, sub:o.numeroOS, href:`#/obra/${o.id}`})));
+        UI.attachQuickSearch('hojeSearch', M.Store.obrasOperacionais().map(o=>({label:o.nome||o.cliente, sub:o.numeroOS, href:`#/obra/${o.id}`})));
       }
     };
   };

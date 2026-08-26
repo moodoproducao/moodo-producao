@@ -15,7 +15,8 @@
       return {title:"Indicadores", html:`<div class="card pad"><p>Seu perfil (<b>${UI.esc(M.Store.perfilAtual().label)}</b>) não tem acesso aos Indicadores.</p></div>`};
     }
     const ind = C.indicadores();
-    const obras = M.Store.state.obras;
+    // FASE 7.5: rascunho não entra em Indicadores (item 7 do pedido).
+    const obras = M.Store.obrasOperacionais();
     const noMes = (data)=>!!data && data>=ind.periodo.inicio && data<ind.periodo.fim;
     const tarefasMes = M.Store.state.tarefas.filter(t=>noMes(t.data));
     const refacoes = tarefasMes.filter(t=>t.tipo==="REFACAO"||t.resultado==="GEROU_REFACAO").length;

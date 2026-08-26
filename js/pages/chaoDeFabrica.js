@@ -32,7 +32,8 @@
     const ativos = M.Store.state.tvWidgetsAtivos || {};
     const show = (id)=> ativos[id]!==false;
     const corte = porEtapa("CORTE"), usinagem = porEtapa("USINAGEM"), fitagem = porEtapa("FITAGEM"), preMont = porEtapa("PRE_MONTAGEM");
-    const entregas = M.Store.state.obras.slice().sort((a,b)=> C.diasAte(a.dataEntregaPrevista)-C.diasAte(b.dataEntregaPrevista)).slice(0,5);
+    // FASE 7.5: rascunho não entra na TV do Chão de Fábrica (item 7).
+    const entregas = M.Store.obrasOperacionais().slice().sort((a,b)=> C.diasAte(a.dataEntregaPrevista)-C.diasAte(b.dataEntregaPrevista)).slice(0,5);
     const meta = C.metaMensalProgresso();
     const rotIdx = (M.UIState.tvRotIndex||0) % ROT_SLOTS.length;
     const rotSlot = ROT_SLOTS[rotIdx];

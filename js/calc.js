@@ -13,7 +13,11 @@
     if(abs>=1000) return "R$ "+(v/1000).toFixed(1).replace(".",",")+"k";
     return fmtBRL(v);
   };
-  const fmtDate = (iso)=>{ if(!iso) return "—"; const [y,m,d]=iso.split("-"); return `${d}/${m}/${y}`; };
+  // CORREÇÃO PÓS-ENTREGA (Fase 7.5, item 4) — criadoEm/ativadoEm de Obra
+  // agora podem vir com timestamp completo ("2026-08-26T02:35:00.000Z"),
+  // não só data ("2026-08-26"). slice(0,10) pega só a parte de data antes
+  // do split, então os dois formatos continuam funcionando aqui.
+  const fmtDate = (iso)=>{ if(!iso) return "—"; const [y,m,d]=String(iso).slice(0,10).split("-"); return `${d}/${m}/${y}`; };
   const fmtPct = (v)=> Math.round(v*100)+"%";
   const daysBetween = (aIso,bIso)=>{
     const a = new Date(aIso+"T00:00:00"), b=new Date(bIso+"T00:00:00");
@@ -516,7 +520,8 @@
       });
     });
     state_entregas: {
-      M.Store.state.obras.forEach(o=>{
+      // FASE 7.5: rascunho não entra em cálculo de risco/entrega (item 7).
+      M.Store.obrasOperacionais().forEach(o=>{
         const dias = diasAte(o.dataEntregaPrevista);
         if(dias>=0 && dias<=7 && o.status!=="FINALIZADA"){
           alerts.push({tipo:"ENTREGA", sev: dias<=2?"critical":"warning", texto:`Entrega de ${o.cliente} em ${dias===0?"hoje":dias+" dia(s)"}`, sub:`${o.numeroOS}`, ordem:20-dias});
@@ -689,7 +694,9 @@
   // Identifica obra por número de OS, nunca por nome do cliente — a TV fica
   // num painel de parede visível a qualquer um no chão de fábrica.
   function tvResumoProducao(){
-    const obras = M.Store.state.obras;
+    // FASE 7.5: rascunho nunca aparece na TV (item 7 do pedido) —
+    // obrasOperacionais() já exclui status:"RASCUNHO".
+    const obras = M.Store.obrasOperacionais();
     const emProducao = obras.filter(o=> o.status!=="FINALIZADA");
     // FASE 3: "N/A" (fase sem impactaRisco) não é risco — checa ALTO/MEDIO
     // explicitamente, em vez de "!=='BAIXO'" (que passaria a contar N/A como

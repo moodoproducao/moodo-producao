@@ -17,6 +17,43 @@
     {key:"historico", label:"Histórico"},
   ];
 
+  // FASE 7.5 (Edição V2, Parte B — item 14). Campos simples com histórico;
+  // numeroOS tem tratamento especial em Store.atualizarObra (exige motivo
+  // só depois da obra passar de LIBERACAO — ver Store._obraEmFaseOperacionalRelevante).
+  M.Pages.editarObraFormHtml = function(o){
+    const precisaMotivoSeMudarOS = M.Store._obraEmFaseOperacionalRelevante(o);
+    return `
+      <div class="modal-head"><div><h2>Editar obra</h2><div class="meta">${UI.esc(o.numeroOS||"sem OS")}</div></div><button class="modal-close" data-close>✕</button></div>
+      <form id="formEditarObra">
+        <div class="modal-body">
+          <div class="field-row">
+            <div class="field"><label>Nome da obra</label><input name="nome" value="${UI.esc(o.nome||"")}"></div>
+            <div class="field"><label>Número OS</label><input name="numeroOS" value="${UI.esc(o.numeroOS||"")}"></div>
+          </div>
+          <div class="field-row">
+            <div class="field"><label>Cliente</label><input name="cliente" value="${UI.esc(o.cliente||"")}"></div>
+            <div class="field"><label>Responsável</label>
+              <select name="responsavel">
+                ${M.COLABORADORES.filter(c=>c.ativo!==false).map(c=>`<option value="${UI.esc(c.nome)}" ${o.responsavel===c.nome?'selected':''}>${UI.esc(c.nome)}</option>`).join("")}
+              </select>
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field"><label>Data prevista de entrega</label><input type="date" name="dataEntregaPrevista" value="${o.dataEntregaPrevista||""}"></div>
+            <div class="field"><label>Endereço</label><input name="endereco" value="${UI.esc(o.endereco||"")}"></div>
+          </div>
+          <div class="field"><label>Observações</label><textarea name="observacoes">${UI.esc(o.observacoes||"")}</textarea></div>
+          ${precisaMotivoSeMudarOS? `<div class="help-banner" style="margin-top:2px;">${UI.icon('alert',13)} Esta obra já passou de Liberação — se você mudar o número da OS acima, o motivo abaixo é obrigatório.</div>
+          <div class="field"><label>Motivo da alteração de OS (só se estiver mudando a OS)</label><textarea name="motivoOS" placeholder="Ex.: OS estava digitada errada desde a importação do PDF"></textarea></div>`:""}
+        </div>
+        <div class="modal-foot">
+          <button type="button" class="btn" data-close>Cancelar</button>
+          <button type="submit" class="btn primary">Salvar</button>
+        </div>
+      </form>
+    `;
+  };
+
   function tabAssistencias(o){
     const list = M.Store.state.assistencias.filter(a=>a.obraId===o.id);
     if(!list.length) return `<p class="small muted">Nenhuma assistência registrada nesta obra.</p>`;
@@ -194,14 +231,17 @@
       </div>
     ` : "";
 
+    // FASE 7.5 (Detalhe Rápido, item 26): card inteiro clicável → Context
+    // Drawer (mesmo componente de Hoje/Pendências/Kanban); o botão "Resolver
+    // agora" mantém sua própria ação com stopPropagation, sem abrir o drawer.
     const bloqueiosHtml = bloqueios.length ? bloqueios.map(p=>{
       const proxima = p.fluxoPassos ? p.fluxoPassos[p.passoAtual] : null;
-      return `<div class="help-banner" style="background:var(--critical-bg);border-color:var(--critical);color:var(--critical);margin-bottom:10px;">
+      return `<div class="help-banner" style="background:var(--critical-bg);border-color:var(--critical);color:var(--critical);margin-bottom:10px;cursor:pointer;" onclick="Act.abrirPendenciaEm('${p.id}')">
         <div style="font-weight:800;">${UI.icon('alert',13)} ${UI.esc(p.categoria)} ${UI.impactoChip(p.impacto)}</div>
         <div style="color:var(--ink);margin:3px 0;">${UI.esc(p.descricao)}</div>
         <div class="small" style="color:var(--ink-soft);">${UI.person(p.responsavel)}${p.prazo?" · prazo "+C.fmtDate(p.prazo):""}</div>
         ${proxima? `<div class="small" style="margin-top:3px;"><b>Próxima ação:</b> ${UI.esc(proxima)}</div>`:""}
-        <div class="flex-gap" style="margin-top:8px;">
+        <div class="flex-gap" style="margin-top:8px;" onclick="event.stopPropagation()">
           <button class="btn sm danger" onclick="Act.setPendenciaStatus('${p.id}','RESOLVIDA')">Resolver agora</button>
         </div>
       </div>`;
@@ -366,10 +406,18 @@
     return `${(sitAmb.prontoParaMarcar && podeMarcarPronto)? `<button class="btn sm" onclick="Act.abrirFinalizarAmbiente('${a.id}')">${UI.icon('check-circle',12)} Marcar pronto</button>` : ""}
       ${podeTravar? `<button class="btn sm ghost" onclick="Act.abrirMarcarTravado('${a.id}')">${UI.icon('lock',12)} Marcar travado</button>` : ""}`;
   }
+  // FASE 7.5 (Edição V2, Parte B — item 15): alterações estruturais
+  // (adicionar/remover ambiente, adicionar/remover/mover móvel) ficam
+  // disponíveis direto na aba Ambientes pra quem tem obra.editar — nunca
+  // bloqueiam (Store já cuida de marcar "revisão PCP necessária" quando
+  // relevante e de bloquear remoção com vínculo existente, orientando em
+  // vez de apagar silenciosamente).
   function tabAmbientes(o){
-    return o.ambientes.map(a=>{
+    const podeEditarEstrutura = M.Store.pode("obra.editar");
+    const corpo = o.ambientes.map(a=>{
       const prog = C.progressoAmbiente(a);
       const sitAmb = C.situacaoAmbiente(a);
+      const inputMovId = "tabAmb_addMov_"+a.id;
       return `<div class="card pad" style="margin-bottom:12px;">
         <div class="flex-between" style="flex-wrap:wrap;gap:6px;">
           <div class="flex-gap" style="align-items:center;"><b>${UI.esc(a.nome)}</b>${UI.situacaoAmbienteChip(sitAmb)}</div>
@@ -379,20 +427,40 @@
         ${UI.progressBar(prog.pct, sitAmb.key==="TRAVADO"?"blocked":"")}
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px;">
           ${proximoPassoAmbienteObraHtml(a, sitAmb)}
+          ${podeEditarEstrutura? `<button class="btn sm ghost" title="Remover ambiente" onclick="Act.obraRemoverAmbiente('${o.id}','${a.id}')">${UI.icon('trash',12)}</button>`:""}
         </div>
         <div style="margin-top:10px;">
           ${a.moveis.map(m=>{
             const bloqueiosM = M.Store.bloqueiosMovel(m.id);
             const sit = C.situacaoMovel(m);
             return `
-            <div class="check-row" style="cursor:pointer;" onclick="Act.openMovel('${m.id}')">
-              <span class="dot ${sit.tone}"></span>
-              <span class="label"><b>${UI.esc(m.nome)}</b> <span class="chip neutral" style="margin-left:4px;">${UI.esc(M.Store.etapaById(m.etapa).nome)}</span>
+            <div class="check-row" style="flex-wrap:wrap;gap:6px;">
+              <span class="dot ${sit.tone}" style="cursor:pointer;" onclick="Act.openMovel('${m.id}')"></span>
+              <span class="label" style="cursor:pointer;" onclick="Act.openMovel('${m.id}')"><b>${UI.esc(m.nome)}</b> <span class="chip neutral" style="margin-left:4px;">${UI.esc(M.Store.etapaById(m.etapa).nome)}</span>
                 <div class="small muted">resp. ${UI.esc(m.responsavel)} · ${UI.valorOuOculto(C.fmtBRL(m.valorLiquido))}${bloqueiosM.length? " · ⏳ "+UI.esc(bloqueiosM[0].categoria)+(bloqueiosM.length>1?` +${bloqueiosM.length-1}`:''):""}</div></span>
+              ${podeEditarEstrutura? `<span class="flex-gap" style="gap:4px;">
+                <select style="font-size:11px;padding:3px 5px;border-radius:6px;border:1px solid var(--border-strong);" onchange="if(this.value)Act.obraMoverMovel('${o.id}','${m.id}',this.value)">
+                  <option value="">mover para...</option>
+                  ${o.ambientes.filter(a2=>a2.id!==a.id).map(a2=>`<option value="${a2.id}">${UI.esc(a2.nome)}</option>`).join("")}
+                </select>
+                <button class="btn-icon" title="Remover móvel" onclick="Act.obraRemoverMovel('${o.id}','${a.id}','${m.id}')">${UI.icon('trash',12)}</button>
+              </span>`:""}
             </div>`;}).join("")}
+          ${podeEditarEstrutura? `<div class="flex-gap" style="margin-top:8px;">
+            <input type="text" id="${inputMovId}" placeholder="Adicionar móvel neste ambiente..." style="flex:1;padding:6px 8px;border-radius:6px;border:1px solid var(--border-strong);font-size:12.5px;">
+            <button class="btn sm" onclick="Act.obraAdicionarMovel('${o.id}','${a.id}','${inputMovId}')">${UI.icon('plus',12)} Móvel</button>
+          </div>`:""}
         </div>
       </div>`;
     }).join("");
+    const addAmbienteHtml = podeEditarEstrutura ? `
+      <div class="card pad" style="margin-bottom:12px;">
+        <div class="flex-gap">
+          <input type="text" id="tabAmb_addAmb_${o.id}" placeholder="Adicionar ambiente..." style="flex:1;padding:7px 9px;border-radius:6px;border:1px solid var(--border-strong);font-size:13px;">
+          <button class="btn sm" onclick="Act.obraAdicionarAmbiente('${o.id}','tabAmb_addAmb_${o.id}')">${UI.icon('plus',13)} Ambiente</button>
+        </div>
+      </div>` : "";
+    return addAmbienteHtml + corpo;
   }
 
   function tabTarefas(o){
@@ -422,18 +490,22 @@
       </div>`;
   }
 
+  // FASE 7.5 (Detalhe Rápido, item 26): a linha inteira era inerte (não
+  // navegava nem fazia nada ao clicar, só o botão "Resolver" tinha ação) —
+  // agora abre o Context Drawer, mesmo componente do resto do app.
   function tabPendencias(o){
     const pend = M.Store.state.pendencias.filter(p=>p.obraId===o.id);
     if(!pend.length) return `<p class="small muted">Nenhuma pendência nesta obra.</p>`;
     return `<div class="card pad"><table class="tbl">
       <thead><tr><th>Tipo · Categoria</th><th>Local</th><th>Impacto</th><th>Responsável</th><th>Prazo</th><th>Status</th><th></th></tr></thead>
       <tbody>${pend.map(p=>`
-        <tr><td>${UI.tipoChip(p.tipo)} ${UI.esc(p.categoria)}<div class="small muted">${UI.esc(p.descricao)}</div>
+        <tr style="cursor:pointer;" onclick="Act.abrirPendenciaEm('${p.id}')">
+          <td>${UI.tipoChip(p.tipo)} ${UI.esc(p.categoria)}<div class="small muted">${UI.esc(p.descricao)}</div>
             ${(p.fotosAbertura&&p.fotosAbertura.length)? UI.fotosGaleriaHtml(p.fotosAbertura) : (p.fotos&&p.fotos.length? UI.fotosGaleriaHtml(p.fotos):"")}</td>
           <td class="small muted">${UI.esc(p.ambienteNome)} · ${UI.esc(p.movelNome)}</td>
           <td>${UI.impactoChip(p.impacto)}</td>
           <td>${UI.person(p.responsavel)}</td><td>${C.fmtDate(p.prazo)}</td><td>${UI.statusPendenciaChip(p.status)}</td>
-          <td>${p.status!=='RESOLVIDA'? `<button class="btn sm primary" onclick="Act.setPendenciaStatus('${p.id}','RESOLVIDA')">Resolver</button>`:""}</td>
+          <td onclick="event.stopPropagation()">${p.status!=='RESOLVIDA'? `<button class="btn sm primary" onclick="Act.setPendenciaStatus('${p.id}','RESOLVIDA')">Resolver</button>`:""}</td>
         </tr>`).join("")}</tbody></table></div>`;
   }
 
@@ -498,12 +570,22 @@
     const prog = C.progressoObra(o);
     const risco = C.situacaoObra(o);
 
+    // FASE 7.5 (Edição V2, item 15): flag persistente até alguém marcar como
+    // revisada — não bloqueia nada, só avisa (obra continua 100% operável).
+    const revisaoPCPHtml = o.revisaoPCPNecessaria ? `
+      <div class="help-banner" style="background:var(--warning-bg,var(--critical-bg));border-color:var(--warning-fill,var(--critical));color:var(--warning-fill,var(--critical));margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+        <span>${UI.icon('alert',13)} <b>Revisão PCP necessária</b> — esta obra teve uma alteração estrutural ou de OS depois de já estar em produção.</span>
+        ${M.Store.pode("obra.editar")? `<button class="btn sm" onclick="Act.limparRevisaoPCP('${o.id}')">Marcar como revisado</button>` : ""}
+      </div>` : "";
+
     const header = `
+      ${revisaoPCPHtml}
       <div class="card pad" style="margin-bottom:16px;">
         <div class="flex-between" style="flex-wrap:wrap;gap:12px;">
           <div>
-            <div class="small muted">${o.numeroOS} · ${UI.esc(o.endereco||"")}</div>
-            <h2 style="font-size:19px;">${UI.esc(o.cliente)}</h2>
+            <div class="small muted">${UI.esc(o.numeroOS||"sem OS")} · ${UI.esc(o.endereco||"")}</div>
+            <h2 style="font-size:19px;">${UI.esc(o.nome||o.cliente)}</h2>
+            ${o.nome && o.nome!==o.cliente? `<div class="small muted">${UI.esc(o.cliente||"")}</div>`:""}
           </div>
           <div class="flex-gap" style="gap:18px;flex-wrap:wrap;">
             <div><div class="small muted">Valor líquido</div><b>${UI.valorOuOculto(C.fmtBRL(o.valorLiquido))}</b></div>
@@ -520,7 +602,7 @@
     const bodies = {geral:tabGeral, ambientes:tabAmbientes, tarefas:tabTarefas, pendencias:tabPendencias, assistencias:tabAssistencias, cronograma:tabCronograma, arquivos:tabArquivos, historico:tabHistorico};
     const body = bodies[tab](o);
 
-    return {title:o.cliente, crumb:`<a href="#/obras">Obras</a> / ${o.numeroOS}`, html: header + body,
-      actionsHtml:`<button class="btn sm" onclick="Act.openPendenciaForm('${o.id}')">+ Pendência</button> <button class="btn sm" onclick="Act.openTarefaForm('${o.id}')">+ Tarefa</button> <button class="btn sm" onclick="Act.openAssistenciaForm('${o.id}')">+ Assistência</button>`};
+    return {title:o.nome||o.cliente, crumb:`<a href="#/obras">Obras</a> / ${UI.esc(o.numeroOS||"sem OS")}`, html: header + body,
+      actionsHtml:`${M.Store.pode("obra.editar")? `<button class="btn sm" onclick="Act.abrirEditarObra('${o.id}')">${UI.icon('edit',13)} Editar obra</button>` : ""} <button class="btn sm" onclick="Act.openPendenciaForm('${o.id}')">+ Pendência</button> <button class="btn sm" onclick="Act.openTarefaForm('${o.id}')">+ Tarefa</button> <button class="btn sm" onclick="Act.openAssistenciaForm('${o.id}')">+ Assistência</button>`};
   };
 })();

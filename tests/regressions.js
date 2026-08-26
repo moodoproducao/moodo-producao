@@ -3167,6 +3167,746 @@ console.log("Fase 6 (Agenda V2): OK");
 console.log("Fase 7 (Assistências V2): OK");
 
 // ==================================================================
+// FASE 7.5 — NOVA OBRA V2 + EDIÇÃO V2 (Partes A e B). Testes no nível de
+// Store/Pages (mesmo padrão já usado em todo o arquivo) — funções de
+// js/actions.js que leem elemento do DOM (document.getElementById, ex.
+// novaObraManualAddAmbiente) não são chamadas diretamente aqui; testamos a
+// mesma lógica através de M.Store.*/M.Pages.novaObraMontarManual, que é
+// exatamente o que Act.novaObra* chama por baixo. Cobertura do Detalhe
+// Rápido (Parte C) fica no próprio bloco da Parte C, mais abaixo.
+// ==================================================================
+{
+  const app75 = contextoBase();
+  executar(app75, "js/data.js");
+  executar(app75, "js/pdf-import.js");
+  app75.M.UI = {};
+  app75.M.Pages = {};
+  app75.M.UIState = {novaObra:{
+    obraId:null, step:"inicio", modo:null, osFileObj:null, osFileName:null, orcFileObj:null, orcFileName:null,
+    lendo:false, lido:false, erro:null, dados:null, ambientesAjuste:{},
+    nomeManual:"", numeroOSManual:"", clienteManual:"", responsavelProducao:"",
+    enderecoManual:"", observacoesManual:"", dataEntregaPrevistaManual:"", componentesSelecionados:{},
+    ambientesManual:[], osDuplicadaConfirmada:false, estruturaImportadaSincronizada:false,
+  }};
+  executar(app75, "js/store.js");
+  executar(app75, "js/calc.js");
+  executar(app75, "js/pages/novaObra.js");
+  function w75(){ return app75.M.UIState.novaObra; }
+  function resetWizard75(){
+    app75.M.UIState.novaObra = {
+      obraId:null, step:"inicio", modo:"manual", osFileObj:null, osFileName:null, orcFileObj:null, orcFileName:null,
+      lendo:false, lido:false, erro:null, dados:null, ambientesAjuste:{},
+      nomeManual:"", numeroOSManual:"", clienteManual:"", responsavelProducao:"",
+      enderecoManual:"", observacoesManual:"", dataEntregaPrevistaManual:"", componentesSelecionados:{},
+      ambientesManual:[], osDuplicadaConfirmada:false, estruturaImportadaSincronizada:false,
+    };
+  }
+
+  // ---- 1) criar rascunho manual, sem nenhum documento — item 2/3 do
+  // pedido: documento nunca é obrigatório. Nasce RASCUNHO, sem seeding
+  // (sem tarefas/pendência), fora de obrasOperacionais/allMoveis. ----
+  {
+    resetWizard75();
+    w75().clienteManual = "Cliente FX75 Rascunho";
+    w75().nomeManual = "Obra FX75 Rascunho";
+    const antesTarefas = app75.M.Store.state.tarefas.length;
+    const montado = app75.M.Pages.novaObraMontarManual();
+    montado.status = "RASCUNHO";
+    const criado = app75.M.Store.criarObra(montado);
+    assert.equal(criado.status, "RASCUNHO");
+    assert.equal(criado.faseMacro, "AGUARDANDO_INICIO");
+    assert.ok(criado.criadoPor!==undefined, "criadoPor precisa existir (mesmo que null)");
+    assert.ok(criado.criadoEm, "criadoEm precisa ter sido carimbado");
+    assert.equal(app75.M.Store.state.tarefas.length, antesTarefas, "rascunho não pode gerar tarefa nenhuma (sem seeding antes de ativar)");
+    assert.equal(app75.M.Store.obrasOperacionais().some(o=>o.id===criado.id), false, "rascunho não pode aparecer em obrasOperacionais()");
+    assert.equal(app75.M.Store.obrasRascunho().some(o=>o.id===criado.id), true, "rascunho precisa aparecer em obrasRascunho()");
+    assert.equal(app75.M.Store.allMoveis().some(({o})=>o.id===criado.id), false, "móvel de rascunho não pode aparecer em allMoveis() (usado por risco/Hoje/Montagem/etc.)");
+  }
+
+  // ---- 2) ativar rascunho incompleto (sem ambiente/móvel) precisa falhar
+  // com CAMPOS_OBRIGATORIOS, listando o que falta — item 6 do pedido ----
+  {
+    resetWizard75();
+    w75().clienteManual = "Cliente FX75 Incompleto";
+    w75().responsavelProducao = "";
+    const montado = app75.M.Pages.novaObraMontarManual();
+    montado.status = "RASCUNHO";
+    const criado = app75.M.Store.criarObra(montado);
+    const r = app75.M.Store.ativarObra(criado.id);
+    assert.equal(r.ok, false);
+    assert.equal(r.motivo, "CAMPOS_OBRIGATORIOS");
+    assert.ok(r.faltando.includes("responsável"));
+    assert.ok(r.faltando.includes("pelo menos 1 ambiente"));
+    assert.ok(r.faltando.includes("pelo menos 1 móvel"));
+    assert.equal(criado.status, "RASCUNHO", "ativação que falha não pode mudar o status");
+  }
+
+  // ---- 3) completar o rascunho (ambiente+móvel+responsável) e ativar —
+  // seeding (tarefas padrão da etapa inicial) só acontece agora, nunca
+  // antes. faseMacro continua AGUARDANDO_INICIO (nunca inferido) ----
+  {
+    resetWizard75();
+    w75().clienteManual = "Cliente FX75 Completo";
+    w75().nomeManual = "Obra FX75 Completa";
+    w75().responsavelProducao = "Willian Souza";
+    w75().ambientesManual = [{tid:"tmpamb-fx1", nome:"Sala", moveis:[{tid:"tmpmov-fx1", nome:"Painel ripado"}]}];
+    const montado = app75.M.Pages.novaObraMontarManual();
+    assert.ok(String(montado.ambientes[0].id).indexOf("amb-")===0, "novaObraMontarManual precisa mintar id canônico amb-N, não reaproveitar o tid temporário");
+    montado.status = "RASCUNHO";
+    const criado = app75.M.Store.criarObra(montado);
+    const antesTarefas = app75.M.Store.state.tarefas.length;
+    const r = app75.M.Store.ativarObra(criado.id);
+    assert.equal(r.ok, true);
+    assert.equal(criado.status, "ATIVA");
+    assert.equal(criado.faseMacro, "AGUARDANDO_INICIO");
+    assert.ok(criado.ativadoPor!==undefined);
+    assert.ok(criado.ativadoEm);
+    assert.ok(app75.M.Store.state.tarefas.length > antesTarefas, "ativarObra precisa gerar as tarefas padrão da etapa inicial (seeding adiado)");
+    assert.equal(app75.M.Store.obrasOperacionais().some(o=>o.id===criado.id), true, "obra ativada precisa sair de RASCUNHO e virar operacional");
+    // ativarObra chamado de novo (idempotência) não duplica nada nem falha.
+    const r2 = app75.M.Store.ativarObra(criado.id);
+    assert.equal(r2.ok, true);
+    assert.equal(r2.jaAtiva, true);
+  }
+
+  // ---- 4) componente especial marcado só vira pendência real na
+  // ativação (nunca no rascunho) — mesma régua do "sem seeding antes de
+  // ativar" acima, agora com componentesCriticosIniciais ----
+  {
+    resetWizard75();
+    w75().clienteManual = "Cliente FX75 Componente";
+    w75().responsavelProducao = "Willian Souza";
+    w75().ambientesManual = [{tid:"tmpamb-fx2", nome:"Quarto", moveis:[{tid:"tmpmov-fx2", nome:"Painel com espelho",
+      componentesCriticosIniciais:[{nome:"Espelho", tipo:"Espelho"}]}]}];
+    const montado = app75.M.Pages.novaObraMontarManual();
+    montado.status = "RASCUNHO";
+    const criado = app75.M.Store.criarObra(montado);
+    const movelRascunho = criado.ambientes[0].moveis[0];
+    assert.equal((movelRascunho.componentesCriticos||[]).length, 0, "rascunho não pode ter componente crítico ativo ainda");
+    const pendAntes = app75.M.Store.state.pendencias.length;
+    app75.M.Store.ativarObra(criado.id);
+    assert.equal(movelRascunho.componentesCriticos.length, 1, "ativação precisa processar componentesCriticosIniciais guardados");
+    assert.equal(movelRascunho.componentesCriticos[0].tipo, "Espelho");
+    assert.ok(app75.M.Store.state.pendencias.length > pendAntes, "ativação precisa criar a pendência real do componente especial");
+  }
+
+  // ---- 5) OS duplicada — getObraByNumeroOS normaliza (trim + minúsculas)
+  // e é a base da confirmação explícita da UI (item 9). Store em si não
+  // bloqueia duas obras com a mesma OS (decisão consciente — quem decide é
+  // a pessoa, via confirmação explícita) ----
+  {
+    resetWizard75();
+    w75().clienteManual = "Cliente FX75 OS Dup A";
+    w75().numeroOSManual = "  OS 7500/Dup  ";
+    w75().responsavelProducao = "Willian Souza";
+    w75().ambientesManual = [{tid:"a1", nome:"Amb", moveis:[{tid:"m1", nome:"Mov"}]}];
+    const montadoA = app75.M.Pages.novaObraMontarManual();
+    montadoA.status = "RASCUNHO";
+    app75.M.Store.criarObra(montadoA);
+    const achada = app75.M.Store.getObraByNumeroOS("os 7500/dup");
+    assert.ok(achada, "getObraByNumeroOS precisa casar ignorando espaço/maiúscula");
+    assert.equal(achada.numeroOS.trim(), "OS 7500/Dup");
+    assert.equal(app75.M.Store.getObraByNumeroOS("OS-QUE-NAO-EXISTE"), null);
+  }
+
+  // ---- 6) retomar rascunho salvo: hidratar o wizard a partir da obra do
+  // Store precisa preservar os ids reais (amb-N/mov-N), não regerar tmp —
+  // atualizarEstruturaRascunho depois reconhece e não duplica ----
+  {
+    resetWizard75();
+    w75().clienteManual = "Cliente FX75 Retomar";
+    w75().responsavelProducao = "Willian Souza";
+    w75().ambientesManual = [{tid:"tmpamb-fx3", nome:"Cozinha", moveis:[{tid:"tmpmov-fx3", nome:"Armário"}]}];
+    const montado = app75.M.Pages.novaObraMontarManual();
+    montado.status = "RASCUNHO";
+    const criado = app75.M.Store.criarObra(montado);
+    const ambienteIdReal = criado.ambientes[0].id;
+    const movelIdReal = criado.ambientes[0].moveis[0].id;
+
+    // hidratação manual do wizard igual à função hidratarWizardComRascunho
+    // (privada ao módulo da página) — reproduz o mesmo contrato aqui pra
+    // não depender de expor uma função interna só pro teste.
+    app75.M.UIState.novaObra = {
+      obraId:criado.id, step:"dados", modo:"manual", osFileObj:null, osFileName:null, orcFileObj:null, orcFileName:null,
+      lendo:false, lido:false, erro:null, dados:null, ambientesAjuste:{},
+      nomeManual:criado.nome||"", numeroOSManual:criado.numeroOS||"", clienteManual:criado.cliente||"",
+      responsavelProducao:criado.responsavel||"", enderecoManual:criado.endereco||"",
+      observacoesManual:criado.observacoes||"", dataEntregaPrevistaManual:criado.dataEntregaPrevista||"",
+      componentesSelecionados:{},
+      ambientesManual:(criado.ambientes||[]).map(a=>({tid:a.id, nome:a.nome, moveis:(a.moveis||[]).map(m=>({tid:m.id, nome:m.nome}))})),
+      osDuplicadaConfirmada:false,
+    };
+    assert.equal(w75().ambientesManual[0].tid, ambienteIdReal);
+    assert.equal(w75().ambientesManual[0].moveis[0].tid, movelIdReal);
+    // edita e salva de novo via atualizarEstruturaRascunho — precisa
+    // PRESERVAR os ids reais (não pode virar amb-novo/mov-novo).
+    w75().ambientesManual[0].moveis.push({tid:"tmpmov-fx3b", nome:"Bancada"});
+    const camposObj = app75.M.Pages.novaObraMontarManual();
+    app75.M.Store.atualizarEstruturaRascunho(criado.id, camposObj.ambientes);
+    assert.equal(criado.ambientes[0].id, ambienteIdReal, "id do ambiente precisa ser preservado ao reeditar o rascunho");
+    assert.equal(criado.ambientes[0].moveis[0].id, movelIdReal, "id do móvel original precisa ser preservado");
+    assert.equal(criado.ambientes[0].moveis.length, 2, "móvel novo adicionado na reedição precisa entrar");
+  }
+
+  // ---- 7) modo import: novaObraSincronizarEstruturaImportada converte
+  // w.dados + rateio + componentesSelecionados pra w.ambientesManual —
+  // isso é o que permite import e manual convergirem no mesmo caminho de
+  // edição/persistência a partir da etapa Revisão ----
+  {
+    resetWizard75();
+    w75().modo = "import";
+    w75().clienteManual = "Cliente FX75 Import";
+    w75().responsavelProducao = "Willian Souza";
+    w75().dados = {
+      numeroOS:"OS 7500/Imp", cliente:"Cliente FX75 Import", responsavel:"Externo",
+      valorBrutoTotal:200, valorFinalVendido:200, data:app75.M.todayISO(), dataEntregaPrevista:null,
+      endereco:"", telefone:"", email:"",
+      itensOrc:[{ambiente:"SALA", item:"Painel", qtd:1, valorBruto:200}],
+      ambientes:[{nome:"SALA", itens:[{item:"Painel", materiaisEspeciais:[
+        {nome:"Espelho", tipo:"Espelho", geraPendenciaPadrao:true},
+      ]}]}],
+    };
+    w75().componentesSelecionados = {"Espelho::Painel": true};
+    app75.M.Pages.novaObraSincronizarEstruturaImportada();
+    assert.equal(w75().ambientesManual.length, 1);
+    assert.equal(w75().ambientesManual[0].nome, "SALA");
+    assert.equal(w75().ambientesManual[0].moveis[0].nome, "Painel");
+    assert.equal(w75().ambientesManual[0].moveis[0].valorLiquido, 200);
+    assert.deepEqual(Array.from(w75().ambientesManual[0].moveis[0].componentesCriticosIniciais, c=>c.tipo), ["Espelho"]);
+    const montado = app75.M.Pages.novaObraMontarManual();
+    assert.equal(montado.valorLiquido, 200);
+    assert.equal(montado.ambientes[0].moveis[0].componentesCriticosIniciais[0].tipo, "Espelho");
+  }
+
+  // ---- 8) edição simples (item 14): atualizarObra troca nome/endereco/
+  // etc., loga OBRA_EDITADA, nunca mexe em ambientes/status/faseMacro ----
+  {
+    const o = {id:"fx75-editsimples", nome:"Nome Antigo", cliente:"Cliente X", numeroOS:"OS 1", responsavel:"Fulano",
+      status:"ATIVA", faseMacro:"AGUARDANDO_INICIO", endereco:"Rua A", observacoes:"", ambientes:[]};
+    app75.M.Store.state.obras.push(o);
+    const histAntes = app75.M.Store.state.historico.length;
+    const r = app75.M.Store.atualizarObra(o.id, {nome:"Nome Novo", endereco:"Rua B"});
+    assert.equal(r.ok, true);
+    assert.equal(o.nome, "Nome Novo");
+    assert.equal(o.endereco, "Rua B");
+    assert.equal(o.status, "ATIVA", "edição simples não pode mudar status");
+    assert.equal(o.faseMacro, "AGUARDANDO_INICIO", "edição simples não pode mudar faseMacro");
+    assert.ok(app75.M.Store.state.historico.length > histAntes);
+    assert.equal(app75.M.Store.state.historico[0].tipo, "OBRA_EDITADA");
+  }
+
+  // ---- 9) correção de OS: antes de fase operacional relevante (ordem<3)
+  // não exige motivo; depois de LIBERACAO (ordem>=3) exige, senão bloqueia
+  // com MOTIVO_OBRIGATORIO_OS e marca revisaoPCPNecessaria — item 16 ----
+  {
+    const oCedo = {id:"fx75-os-cedo", nome:"Obra Cedo", cliente:"C", numeroOS:"OS CEDO/1", responsavel:"F",
+      status:"ATIVA", faseMacro:"AGUARDANDO_INICIO", ambientes:[]};
+    app75.M.Store.state.obras.push(oCedo);
+    const rCedo = app75.M.Store.atualizarObra(oCedo.id, {numeroOS:"OS CEDO/2"});
+    assert.equal(rCedo.ok, true);
+    assert.equal(oCedo.numeroOS, "OS CEDO/2");
+    assert.notEqual(oCedo.revisaoPCPNecessaria, true, "correção de OS antes de fase operacional relevante não marca revisão PCP");
+
+    const oTarde = {id:"fx75-os-tarde", nome:"Obra Tarde", cliente:"C", numeroOS:"OS TARDE/1", responsavel:"F",
+      status:"ATIVA", faseMacro:"PCP_PLANO_DE_CORTE", ambientes:[]};
+    app75.M.Store.state.obras.push(oTarde);
+    const semMotivo = app75.M.Store.atualizarObra(oTarde.id, {numeroOS:"OS TARDE/2"});
+    assert.equal(semMotivo.ok, false);
+    assert.equal(semMotivo.motivo, "MOTIVO_OBRIGATORIO_OS");
+    assert.equal(oTarde.numeroOS, "OS TARDE/1", "sem motivo, a OS não pode ter sido alterada");
+    const comMotivo = app75.M.Store.atualizarObra(oTarde.id, {numeroOS:"OS TARDE/2"}, {motivo:"OS estava com número trocado desde a leitura do PDF"});
+    assert.equal(comMotivo.ok, true);
+    assert.equal(oTarde.numeroOS, "OS TARDE/2");
+    assert.equal(oTarde.revisaoPCPNecessaria, true, "correção de OS depois de LIBERACAO precisa marcar revisão PCP necessária");
+    assert.equal(app75.M.Store.state.historico[0].tipo, "OBRA_OS_CORRIGIDA");
+  }
+
+  // ---- 10) estrutural: adicionar/remover ambiente/móvel antes de
+  // LIBERACAO não marca revisão PCP; depois marca — nunca bloqueia
+  // (item 15) ----
+  {
+    const o = {id:"fx75-estrut", nome:"Obra Estrut", cliente:"C", numeroOS:"OS EST/1", responsavel:"F",
+      status:"ATIVA", faseMacro:"MEDICAO", ambientes:[]};
+    app75.M.Store.state.obras.push(o);
+    const rAmb = app75.M.Store.adicionarAmbiente(o.id, {nome:"Ambiente Novo"});
+    assert.equal(rAmb.ok, true);
+    assert.notEqual(o.revisaoPCPNecessaria, true, "estrutural antes de LIBERACAO não marca revisão PCP");
+    o.faseMacro = "LIBERADA_PARA_PRODUCAO";
+    const rMov = app75.M.Store.adicionarMovel(o.id, rAmb.ambiente.id, {nome:"Móvel Novo"});
+    assert.equal(rMov.ok, true);
+    assert.equal(o.revisaoPCPNecessaria, true, "estrutural depois de LIBERACAO precisa marcar revisão PCP necessária");
+  }
+
+  // ---- 10b) CORREÇÃO PÓS-ENTREGA (última correção antes do push) —
+  // limiar de revisão PCP não pode mais depender de número mágico, e
+  // precisa bater exatamente com a ordem oficial do catálogo (item 15):
+  // ANTES de LIBERACAO (AGUARDANDO_INICIO/MEDICAO/PROJETO_EXECUTIVO) não
+  // marca; A PARTIR de LIBERACAO (inclusive) e todas as fases seguintes
+  // marca. Cobre as 7 fases pedidas explicitamente, uma por uma, tanto via
+  // Store._obraEmFaseOperacionalRelevante (a fonte da regra) quanto via um
+  // adicionarAmbiente de verdade (efeito observável) ----
+  {
+    const NAO_MARCA = ["AGUARDANDO_INICIO", "MEDICAO", "PROJETO_EXECUTIVO"];
+    const MARCA = ["LIBERACAO", "PCP_PLANO_DE_CORTE", "LIBERADA_PARA_PRODUCAO", "PRODUCAO", "AGUARDANDO_MONTAGEM", "MONTAGEM", "FINALIZACAO", "CONCLUIDA"];
+
+    // confere que o teste está mesmo cobrindo o catálogo oficial inteiro
+    // (se uma fase nova for inserida no catálogo e ninguém atualizar as
+    // duas listas acima, isto quebra alto e visível, em vez de passar
+    // batido cobrindo só um subconjunto).
+    const chavesCatalogo = app75.M.Store.fasesMacroOrdenadas().map(f=>f.key);
+    assert.deepEqual(NAO_MARCA.concat(MARCA).sort(), chavesCatalogo.slice().sort(),
+      "as duas listas do teste (NAO_MARCA + MARCA) precisam cobrir exatamente todas as fases do catálogo oficial");
+
+    let seq = 0;
+    NAO_MARCA.forEach(faseKey=>{
+      seq++;
+      // via a fonte da regra
+      assert.equal(app75.M.Store._obraEmFaseOperacionalRelevante({faseMacro:faseKey}), false,
+        `${faseKey}: _obraEmFaseOperacionalRelevante precisa ser false (antes de LIBERACAO)`);
+      // via efeito observável (adicionarAmbiente de verdade)
+      const o = {id:`fx75-limiar-${seq}`, nome:`Obra Limiar ${faseKey}`, cliente:"C", numeroOS:`OS LIM/${seq}`, responsavel:"F",
+        status:"ATIVA", faseMacro:faseKey, ambientes:[]};
+      app75.M.Store.state.obras.push(o);
+      const r = app75.M.Store.adicionarAmbiente(o.id, {nome:"Ambiente Teste Limiar"});
+      assert.equal(r.ok, true);
+      assert.notEqual(o.revisaoPCPNecessaria, true, `${faseKey}: alteração estrutural NÃO pode marcar revisão PCP`);
+    });
+    MARCA.forEach(faseKey=>{
+      seq++;
+      assert.equal(app75.M.Store._obraEmFaseOperacionalRelevante({faseMacro:faseKey}), true,
+        `${faseKey}: _obraEmFaseOperacionalRelevante precisa ser true (LIBERACAO ou depois)`);
+      const o = {id:`fx75-limiar-${seq}`, nome:`Obra Limiar ${faseKey}`, cliente:"C", numeroOS:`OS LIM/${seq}`, responsavel:"F",
+        status:"ATIVA", faseMacro:faseKey, ambientes:[]};
+      app75.M.Store.state.obras.push(o);
+      const r = app75.M.Store.adicionarAmbiente(o.id, {nome:"Ambiente Teste Limiar"});
+      assert.equal(r.ok, true);
+      assert.equal(o.revisaoPCPNecessaria, true, `${faseKey}: alteração estrutural PRECISA marcar revisão PCP`);
+    });
+
+    // dado legado (sem faseMacro reconhecida no catálogo) nunca marca —
+    // regra pré-existente (fm.legado), reconfirmada aqui pra não regredir.
+    assert.equal(app75.M.Store._obraEmFaseOperacionalRelevante({faseMacro:"CHAVE_QUE_NAO_EXISTE"}), false,
+      "faseMacro legada/desconhecida nunca marca revisão PCP");
+  }
+
+  // ---- 11) remoção de ambiente/móvel com vínculo existente (pendência)
+  // precisa ser bloqueada e orientar, nunca apagar silenciosamente
+  // (item 17) — sem vínculo, remove normal ----
+  {
+    const o = {id:"fx75-vinculo", nome:"Obra Vinc", cliente:"C", numeroOS:"OS VIN/1", responsavel:"F",
+      status:"ATIVA", faseMacro:"MEDICAO", ambientes:[]};
+    app75.M.Store.state.obras.push(o);
+    const amb = app75.M.Store.adicionarAmbiente(o.id, {nome:"Ambiente Vínculo"}).ambiente;
+    const mov = app75.M.Store.adicionarMovel(o.id, amb.id, {nome:"Móvel Vínculo"}).movel;
+    app75.M.Store.state.pendencias.push({id:"fx75-pend-vinc", obraId:o.id, ambienteId:amb.id, movelId:mov.id, status:"ABERTA", categoria:"Teste"});
+    const rBloqueado = app75.M.Store.removerAmbiente(o.id, amb.id);
+    assert.equal(rBloqueado.ok, false);
+    assert.equal(rBloqueado.motivo, "VINCULOS_EXISTENTES");
+    assert.ok(rBloqueado.vinculos.length>0);
+    assert.equal(o.ambientes.some(a=>a.id===amb.id), true, "ambiente com vínculo não pode ter sido removido");
+
+    // "sem vínculo": usa uma obra RASCUNHO — adicionarMovel numa obra ATIVA
+    // já semeia tarefas-padrão na hora (comportamento correto e
+    // intencional), e essas tarefas por si só já contam como vínculo —
+    // então numa obra ATIVA todo móvel nasce com vínculo. Rascunho é o
+    // único jeito de ter um móvel "livre de verdade" pra este caso.
+    const oRascunho = {id:"fx75-vinculo-livre", nome:"Obra Vinc Livre", cliente:"C", numeroOS:"OS VIN/2", responsavel:"F",
+      status:"RASCUNHO", faseMacro:"AGUARDANDO_INICIO", ambientes:[]};
+    app75.M.Store.state.obras.push(oRascunho);
+    const ambLivre = app75.M.Store.adicionarAmbiente(oRascunho.id, {nome:"Ambiente Livre"}).ambiente;
+    const movLivre = app75.M.Store.adicionarMovel(oRascunho.id, ambLivre.id, {nome:"Móvel Livre"}).movel;
+    const rLivre = app75.M.Store.removerMovel(oRascunho.id, ambLivre.id, movLivre.id);
+    assert.equal(rLivre.ok, true);
+    const rLivre2 = app75.M.Store.removerAmbiente(oRascunho.id, ambLivre.id);
+    assert.equal(rLivre2.ok, true);
+    assert.equal(oRascunho.ambientes.some(a=>a.id===ambLivre.id), false);
+  }
+
+  // ---- 12) mover móvel entre ambientes NÃO passa pelo guard de vínculo
+  // (não é remoção) — histórico/pendência continuam válidos porque o
+  // movelId não muda ----
+  {
+    const o = {id:"fx75-mover", nome:"Obra Mover", cliente:"C", numeroOS:"OS MOV/1", responsavel:"F",
+      status:"ATIVA", faseMacro:"MEDICAO", ambientes:[]};
+    app75.M.Store.state.obras.push(o);
+    const ambA = app75.M.Store.adicionarAmbiente(o.id, {nome:"Origem"}).ambiente;
+    const ambB = app75.M.Store.adicionarAmbiente(o.id, {nome:"Destino"}).ambiente;
+    const mov = app75.M.Store.adicionarMovel(o.id, ambA.id, {nome:"Móvel Viajante"}).movel;
+    app75.M.Store.state.pendencias.push({id:"fx75-pend-mov", obraId:o.id, movelId:mov.id, status:"ABERTA", categoria:"Teste"});
+    const r = app75.M.Store.moverMovel(o.id, mov.id, ambB.id);
+    assert.equal(r.ok, true);
+    assert.equal(ambA.moveis.some(m=>m.id===mov.id), false);
+    assert.equal(ambB.moveis.some(m=>m.id===mov.id), true);
+    assert.equal(mov.ambienteId, ambB.id);
+    const pend = app75.M.Store.state.pendencias.find(p=>p.id==="fx75-pend-mov");
+    assert.equal(pend.movelId, mov.id, "pendência continua apontando pro mesmo movelId depois da mudança de ambiente");
+  }
+
+  // ---- 13) nenhum "excluir obra" normal existe (item 17 — sem delete
+  // comum de Obra, nunca) ----
+  {
+    assert.equal(typeof app75.M.Store.excluirObra, "undefined");
+    assert.equal(typeof app75.M.Store.deletarObra, "undefined");
+    assert.equal(typeof app75.M.Store.removerObra, "undefined");
+  }
+
+  // ---- 14) CORREÇÃO PÓS-ENTREGA (item 2) — "extração é semente, edição
+  // humana é soberana": voltar de Revisão pra Estrutura e avançar de novo
+  // NÃO pode reconstruir do PDF depois da primeira sincronização — renomear
+  // ambiente, remover ambiente, mover móvel entre ambientes e adicionar
+  // móvel manualmente precisam sobreviver a esse ciclo intacto ----
+  {
+    resetWizard75();
+    w75().modo = "import";
+    w75().clienteManual = "Cliente FX75 Preservar Edicao";
+    w75().responsavelProducao = "Willian Souza";
+    w75().dados = {
+      numeroOS:"OS 7500/Preserv", cliente:"Cliente FX75 Preservar Edicao", responsavel:"Externo",
+      valorBrutoTotal:300, valorFinalVendido:300, data:app75.M.todayISO(), dataEntregaPrevista:null,
+      endereco:"", telefone:"", email:"",
+      itensOrc:[
+        {ambiente:"SALA", item:"Painel", qtd:1, valorBruto:100},
+        {ambiente:"COZINHA", item:"Bancada", qtd:1, valorBruto:100},
+        {ambiente:"QUARTO", item:"Cama", qtd:1, valorBruto:100},
+      ],
+      ambientes:[
+        {nome:"SALA", itens:[{item:"Painel", materiaisEspeciais:[]}]},
+        {nome:"COZINHA", itens:[{item:"Bancada", materiaisEspeciais:[]}]},
+        {nome:"QUARTO", itens:[{item:"Cama", materiaisEspeciais:[]}]},
+      ],
+    };
+    // 1ª sincronização (equivalente a sair de "estrutura" pela 1ª vez).
+    app75.M.Pages.novaObraSincronizarEstruturaImportada();
+    assert.equal(w75().estruturaImportadaSincronizada, true, "1ª sincronização precisa marcar a flag");
+    assert.equal(w75().ambientesManual.length, 3, "1ª sincronização precisa trazer os 3 ambientes do PDF");
+
+    // edições humanas na Revisão — mesmas 4 operações que Act.obraAdicionar/
+    // RemoverAmbiente/Movel e Act.novaObraManualMoverMovel fazem sobre
+    // w.ambientesManual (reproduzidas aqui diretamente, sem depender de
+    // Act, que não está carregado neste contexto — ver contexto app75c
+    // abaixo pra cobertura via Act de verdade):
+    const ambSala = w75().ambientesManual.find(a=>a.nome==="SALA");
+    const ambCozinha = w75().ambientesManual.find(a=>a.nome==="COZINHA");
+    const ambQuarto = w75().ambientesManual.find(a=>a.nome==="QUARTO");
+    ambSala.nome = "Sala Ampla";                                          // renomear ambiente
+    w75().ambientesManual = w75().ambientesManual.filter(a=>a!==ambQuarto); // remover ambiente inteiro
+    const bancada = ambCozinha.moveis.find(m=>m.nome==="Bancada");
+    ambCozinha.moveis = ambCozinha.moveis.filter(m=>m!==bancada);
+    ambSala.moveis.push(bancada);                                        // mover móvel entre ambientes
+    ambCozinha.moveis.push({tid:"tmpmov-extra-fx75", nome:"Armário Extra"}); // adicionar móvel manual
+
+    const snapshotAntesDoCiclo = JSON.stringify(w75().ambientesManual);
+
+    // "voltar pra Estrutura e avançar de novo" == chamar a sincronização
+    // outra vez (é exatamente isso que Act.novaObraProximaEtapa faz ao
+    // sair de "estrutura" em modo import — ver js/actions.js).
+    app75.M.Pages.novaObraSincronizarEstruturaImportada();
+
+    assert.equal(JSON.stringify(w75().ambientesManual), snapshotAntesDoCiclo,
+      "2ª passagem pela sincronização NÃO pode alterar nada — edição humana é soberana depois da 1ª inicialização");
+    assert.equal(w75().ambientesManual.length, 2, "QUARTO removido precisa continuar removido (não pode ressurgir do PDF)");
+    assert.equal(w75().ambientesManual.find(a=>a.nome==="QUARTO"), undefined);
+    assert.equal(w75().ambientesManual.find(a=>a.nome==="Sala Ampla").moveis.some(m=>m.nome==="Bancada"), true, "móvel movido precisa continuar no ambiente de destino");
+    assert.equal(w75().ambientesManual.find(a=>a.nome==="COZINHA").moveis.some(m=>m.nome==="Bancada"), false, "móvel movido não pode ressurgir no ambiente de origem");
+    assert.equal(w75().ambientesManual.find(a=>a.nome==="COZINHA").moveis.some(m=>m.nome==="Armário Extra"), true, "móvel adicionado manualmente precisa sobreviver ao ciclo");
+
+    // montagem final reflete as edições, não o PDF original.
+    const montadoFinal = app75.M.Pages.novaObraMontarManual();
+    assert.equal(montadoFinal.ambientes.length, 2);
+    assert.equal(montadoFinal.ambientes.some(a=>a.nome==="Sala Ampla"), true);
+    assert.equal(montadoFinal.ambientes.some(a=>a.nome==="QUARTO"), false);
+  }
+}
+console.log("Fase 7.5 — Nova Obra V2 + Edição V2 (Partes A e B): OK");
+
+// ------------------------------------------------------------------
+// FASE 7.5 — CORREÇÕES PÓS-ENTREGA (contexto próprio, com js/actions.js
+// carregado de verdade): item 1 (OS duplicada em rascunho retomado, fim a
+// fim via Act.novaObraAtivar) e reforço do item 2 via Act.novaObraProximaEtapa
+// de verdade (não a chamada direta da função de sincronização). UI real não
+// é necessária aqui — só Act.*/Store.*, então M.UI/M.render/location são
+// stubs mínimos (só o que Act.novaObra* efetivamente usa: UI.toast,
+// Act.rerender→M.render, location.hash).
+// ------------------------------------------------------------------
+{
+  const app75c = contextoBase();
+  executar(app75c, "js/data.js");
+  executar(app75c, "js/pdf-import.js");
+  app75c.M.UI = { toast(){}, esc:(s)=>String(s==null?"":s), icon:()=>"" };
+  app75c.M.render = function(){};
+  app75c.location = {hash:""};
+  app75c.M.Pages = {};
+  app75c.M.UIState = {novaObra:{
+    obraId:null, step:"inicio", modo:null, osFileObj:null, osFileName:null, orcFileObj:null, orcFileName:null,
+    lendo:false, lido:false, erro:null, dados:null, ambientesAjuste:{},
+    nomeManual:"", numeroOSManual:"", clienteManual:"", responsavelProducao:"",
+    enderecoManual:"", observacoesManual:"", dataEntregaPrevistaManual:"", componentesSelecionados:{},
+    ambientesManual:[], osDuplicadaConfirmada:false, estruturaImportadaSincronizada:false,
+  }};
+  executar(app75c, "js/store.js");
+  executar(app75c, "js/calc.js");
+  executar(app75c, "js/pages/novaObra.js");
+  executar(app75c, "js/actions.js");
+  app75c.M.Store.setUsuarioAtual("Paulo Henrique"); // ADMIN, tem obra.criar
+
+  // ---- 1) BUG (item 1) — OS duplicada em rascunho retomado. Antes da
+  // correção, a checagem era pulada inteira sempre que w.obraId já existia
+  // ("w.obraId ? null : getObraByNumeroOS(...)") — e um rascunho retomado
+  // SEMPRE tem obraId. Passos exatamente como pedido: 1) criar obra A com
+  // OS X; 2) criar e salvar rascunho B; 3) retomar rascunho B; 4) definir
+  // OS X nele; 5) tentar ativar; 6) precisa exigir confirmação ----
+  {
+    // 1) obra A, ativa, com OS X.
+    const w = app75c.M.UIState.novaObra;
+    w.clienteManual = "Cliente FX75 OS-A"; w.numeroOSManual = "OS 7500/RETOMA-X";
+    w.responsavelProducao = "Willian Souza";
+    w.ambientesManual = [{tid:"tmpamb-a", nome:"Amb A", moveis:[{tid:"tmpmov-a", nome:"Mov A"}]}];
+    app75c.Act.novaObraAtivar();
+    const obraA = app75c.M.Store.state.obras.find(o=>o.cliente==="Cliente FX75 OS-A");
+    assert.ok(obraA, "obra A precisa ter sido criada e ativada");
+    assert.equal(obraA.numeroOS, "OS 7500/RETOMA-X");
+
+    // 2) criar e salvar rascunho B, com uma OS diferente.
+    app75c.Act.novaObraRecomecar();
+    const w2 = app75c.M.UIState.novaObra;
+    w2.clienteManual = "Cliente FX75 OS-B"; w2.numeroOSManual = "OS 7500/RETOMA-B-original";
+    w2.responsavelProducao = "Willian Souza";
+    w2.ambientesManual = [{tid:"tmpamb-b", nome:"Amb B", moveis:[{tid:"tmpmov-b", nome:"Mov B"}]}];
+    app75c.Act.novaObraSalvarRascunho();
+    const obraB = app75c.M.Store.state.obras.find(o=>o.cliente==="Cliente FX75 OS-B");
+    assert.ok(obraB, "rascunho B precisa ter sido salvo");
+    assert.equal(obraB.status, "RASCUNHO");
+
+    // 3) "retomar" o rascunho B — w.obraId passa a existir, exatamente como
+    // no fluxo real (Act.abrirEditarObra/router "#/nova-obra/:id" fazem
+    // essa hidratação; aqui simulamos o resultado direto no UIState).
+    app75c.M.UIState.novaObra = {
+      obraId:obraB.id, step:"ativar", modo:"manual",
+      osFileObj:null, osFileName:null, orcFileObj:null, orcFileName:null,
+      lendo:false, lido:false, erro:null, dados:null, ambientesAjuste:{},
+      nomeManual:obraB.nome||"", numeroOSManual:obraB.numeroOS||"", clienteManual:obraB.cliente||"",
+      responsavelProducao:obraB.responsavel||"", enderecoManual:obraB.endereco||"",
+      observacoesManual:obraB.observacoes||"", dataEntregaPrevistaManual:obraB.dataEntregaPrevista||"",
+      componentesSelecionados:{},
+      ambientesManual:(obraB.ambientes||[]).map(a=>({tid:a.id, nome:a.nome, moveis:(a.moveis||[]).map(m=>({tid:m.id, nome:m.nome}))})),
+      osDuplicadaConfirmada:false, estruturaImportadaSincronizada:true,
+    };
+    // rascunho retomado não pode conflitar com ele mesmo, mesmo antes de
+    // trocar a OS (regressão do "própria OS não conflita consigo mesma").
+    assert.equal(app75c.M.Store.getObraByNumeroOS(app75c.M.UIState.novaObra.numeroOSManual, app75c.M.UIState.novaObra.obraId), null,
+      "OS atual do próprio rascunho não pode aparecer como duplicada dele mesmo");
+
+    // 4) define a OS X (igual à obra A) no rascunho retomado.
+    app75c.M.UIState.novaObra.numeroOSManual = "OS 7500/RETOMA-X";
+
+    // 5) tentar ativar sem confirmar — precisa BLOQUEAR (não ativar) e
+    // continuar em RASCUNHO. Este é o bug relatado: antes da correção,
+    // como w.obraId já existia (rascunho retomado), a checagem de
+    // duplicidade era pulada inteira e a obra ativava direto.
+    app75c.Act.novaObraAtivar();
+    const obraBApos = app75c.M.Store.getObra(obraB.id);
+    assert.equal(obraBApos.status, "RASCUNHO", "rascunho retomado com OS duplicada NÃO pode ativar sem confirmação explícita — bug do item 1");
+    assert.equal(obraBApos.numeroOS, "OS 7500/RETOMA-B-original", "sem confirmar, a OS gravada no Store nem deveria ter sido trocada");
+
+    // 6) confirma "mesmo assim continuar" — agora ativa normalmente, e a
+    // obra A (a "outra obra", que é quem de fato tem essa OS) continua
+    // intacta e sem qualquer alteração.
+    app75c.M.UIState.novaObra.osDuplicadaConfirmada = true;
+    app75c.Act.novaObraAtivar();
+    const obraBFinal = app75c.M.Store.getObra(obraB.id);
+    assert.equal(obraBFinal.status, "ATIVA", "com confirmação explícita, o rascunho retomado precisa poder ativar mesmo com OS duplicada");
+    assert.equal(obraBFinal.numeroOS, "OS 7500/RETOMA-X");
+    const obraAApos = app75c.M.Store.getObra(obraA.id);
+    assert.equal(obraAApos.numeroOS, "OS 7500/RETOMA-X", "obra A (a outra obra com essa OS) não pode ter sido alterada");
+  }
+}
+console.log("Fase 7.5 — Correções pós-entrega (OS duplicada em rascunho retomado + edição importada preservada): OK");
+
+// ==================================================================
+// FASE 7.5 — DETALHE RÁPIDO (Parte C — Context Drawer) + Partes D/E
+// (Kanban e Hoje/Obra abrindo o MESMO drawer). Precisa de um `document`
+// mínimo (o harness padrão não tem DOM de verdade) — stub só com o que
+// js/drawer.js realmente usa: createElement/getElementById/body.appendChild/
+// classList/innerHTML. innerHTML aqui não faz parsing de HTML de verdade —
+// só registra, por regex, qualquer id="..." encontrado no texto, o
+// suficiente pra js/drawer.js conseguir achar "drawerPanel" depois de criar
+// o overlay (mesmo truque documentado inline abaixo).
+// ==================================================================
+{
+  function domStubDrawer(){
+    const registry = {};
+    function makeEl(tag){
+      let _id = "";
+      const el = {
+        tagName: String(tag||"div").toUpperCase(),
+        _html: "",
+        className: "",
+        children: [],
+        classList: { _set:new Set(), add(c){this._set.add(c);}, remove(c){this._set.delete(c);}, contains(c){return this._set.has(c);} },
+        addEventListener(){},
+        querySelectorAll(){ return []; },
+        appendChild(child){ this.children.push(child); if(child.id) registry[child.id]=child; },
+        get id(){ return _id; }, set id(v){ _id=v; if(v) registry[v]=el; },
+        get innerHTML(){ return this._html; },
+        set innerHTML(html){
+          this._html = html;
+          const re = /id="([a-zA-Z0-9_-]+)"/g; let m;
+          while((m = re.exec(html))){ if(!registry[m[1]]) registry[m[1]] = makeEl("div"); }
+        },
+      };
+      return el;
+    }
+    const body = makeEl("body");
+    return { body, createElement: makeEl, getElementById: (id)=> registry[id]||null };
+  }
+
+  const appDrawer = contextoBase();
+  executar(appDrawer, "js/data.js");
+  appDrawer.document = Object.assign({currentScript:{src:"https://teste.local/js/pdf-import.js"}}, domStubDrawer());
+  executar(appDrawer, "js/store.js");
+  executar(appDrawer, "js/calc.js");
+  executar(appDrawer, "js/ui.js");
+  appDrawer.M.Pages = {};
+  appDrawer.M.UIState = {
+    obraTab:{}, obraFoco:{}, pendFiltro:{status:"",impacto:"",obraId:"",responsavel:"",busca:""},
+    pendExpandido:null, pendView:"lista", pendSomenteMinhas:null,
+    calFiltros:new Set(["PRODUCAO","ENTREGAS","MONTAGENS","PENDENCIAS","FORNECEDORES","ASSISTENCIAS"]),
+  };
+  executar(appDrawer, "js/pages/pendencias.js");
+  executar(appDrawer, "js/pages/obraDetail.js");
+  executar(appDrawer, "js/actions.js");
+  executar(appDrawer, "js/drawer.js");
+  appDrawer.M.Store.subscribe(()=> appDrawer.M.Drawer.refresh());
+
+  const oDrawer = {
+    id:"fxdw-obra1", nome:"Obra Drawer", cliente:"Cliente Drawer", numeroOS:"OS DW/1", responsavel:"Fulano",
+    status:"ATIVA", faseMacro:"PRODUCAO", endereco:"Rua Drawer", ambientes:[
+      {id:"fxdw-amb1", nome:"Sala", moveis:[{id:"fxdw-mov1", nome:"Painel", etapa:"CORTE", componentesCriticos:[]}]},
+    ],
+  };
+  appDrawer.M.Store.state.obras.push(oDrawer);
+  const pendDrawer = {
+    id:"fxdw-pend1", obraId:oDrawer.id, obraNome:oDrawer.cliente, ambienteId:"fxdw-amb1", ambienteNome:"Sala",
+    movelId:"fxdw-mov1", movelNome:"Painel", categoria:"Vidro", tipo:"CRITICO", impacto:"IMPEDE_FINALIZAR",
+    descricao:"Vidro trincado na chegada", status:"ABERTA", responsavel:"Fulano", abertura:appDrawer.M.todayISO(),
+    fluxoPassos:["Fornecedor","Instalar"], passoAtual:0, fotosAbertura:[], fotosResolucao:[],
+    criadoPor:"Fulano", criadoEm:appDrawer.M.todayISO(), atualizadoPor:"Fulano", atualizadoEm:appDrawer.M.todayISO(),
+    origem:"MANUAL",
+    // prazo/observacoes DELIBERADAMENTE ausentes — item 22: "nunca inventar",
+    // o drawer não pode preencher isso sozinho nem mostrar "undefined"/"null".
+  };
+  appDrawer.M.Store.state.pendencias.push(pendDrawer);
+
+  // ---- 1) abrir o drawer mostra os campos reais (nunca inventa) ----
+  appDrawer.M.Store.setUsuarioAtual("Willian Souza");
+  appDrawer.M.Drawer.abrirPendencia(pendDrawer.id);
+  const overlay1 = appDrawer.document.getElementById("drawerOverlay");
+  assert.equal(overlay1.classList.contains("open"), true, "abrir precisa deixar o overlay com a classe 'open'");
+  let painelHtml = appDrawer.document.getElementById("drawerPanel").innerHTML;
+  assert.ok(painelHtml.includes("Vidro trincado na chegada"), "drawer precisa mostrar a descrição real");
+  assert.ok(painelHtml.includes("Sala"), "drawer precisa mostrar o ambiente (hierarquia Cliente→Obra→Ambiente→Móvel)");
+  assert.ok(painelHtml.includes("Cliente Drawer"), "drawer precisa mostrar o cliente (via M.Store.getObra)");
+  assert.ok(painelHtml.includes("Painel"), "drawer precisa mostrar o móvel");
+  assert.ok(painelHtml.toLowerCase().includes("undefined")===false, "drawer nunca pode vazar 'undefined' de campo ausente");
+  assert.ok(painelHtml.toLowerCase().includes("null")===false, "drawer nunca pode vazar 'null' de campo ausente");
+  assert.ok(!/Prazo<\/div>/.test(painelHtml), "campo ausente (prazo) não pode aparecer — item 22, nunca inventar dado");
+  assert.ok(!/Observações<\/div>/.test(painelHtml), "campo ausente (observações) não pode aparecer");
+
+  // ---- 2) primeira visualização: idempotente por usuário ----
+  assert.equal(appDrawer.M.Store.visualizacoesDaPendencia(pendDrawer.id).length, 1, "1ª abertura precisa registrar exatamente 1 visualização");
+  appDrawer.M.Drawer.abrirPendencia(pendDrawer.id); // reabre, mesmo usuário
+  assert.equal(appDrawer.M.Store.visualizacoesDaPendencia(pendDrawer.id).length, 1, "reabrir com o MESMO usuário não pode duplicar (idempotente)");
+  appDrawer.M.Store.setUsuarioAtual("Paulo Henrique");
+  appDrawer.M.Drawer.abrirPendencia(pendDrawer.id); // outro usuário
+  assert.equal(appDrawer.M.Store.visualizacoesDaPendencia(pendDrawer.id).length, 2, "usuário DIFERENTE precisa gerar um segundo registro");
+  const vis = appDrawer.M.Store.visualizacoesDaPendencia(pendDrawer.id);
+  // .join(",") em vez de deepEqual no array: os dois lados vêm de realms
+  // diferentes (vm context vs. este arquivo) — deepStrictEqual do node trata
+  // Array de outro realm como "estrutura diferente" mesmo com conteúdo igual.
+  assert.equal(vis.map(v=>v.usuario).sort().join(","), "Paulo Henrique,Willian Souza");
+  assert.ok(vis.every(v=>v.visualizadoEm), "todo registro precisa ter visualizadoEm carimbado");
+
+  // ---- 3) ações do drawer reaproveitam Store/Act já existentes (item 24)
+  // e o drawer se atualiza sozinho (Store.subscribe -> M.Drawer.refresh).
+  // "Marcar resolvida" no drawer chama Act.setPendenciaStatus(...,"RESOLVIDA")
+  // — mesmo Act.* que a lista já usava — que abre o modal de fotos de
+  // resolução (Act.abrirResolverPendencia) em vez de resolver na hora; o
+  // Store só muda quando esse formulário é submetido de verdade. Como o
+  // stub de DOM deste teste não simula submit de formulário, chamamos
+  // direto o Store que o submit chamaria (M.Store.atualizarStatusPendencia)
+  // — o que importa aqui é confirmar que o DRAWER reflete sozinho qualquer
+  // mudança de estado, vinda de onde vier.
+  appDrawer.M.Store.atualizarStatusPendencia(pendDrawer.id, "RESOLVIDA");
+  painelHtml = appDrawer.document.getElementById("drawerPanel").innerHTML;
+  assert.ok(painelHtml.includes("Reabrir"), "drawer precisa refletir sozinho a mudança de status feita fora dele (Store.subscribe -> refresh)");
+  assert.equal(pendDrawer.status, "RESOLVIDA");
+
+  // ---- 4) fechar limpa o overlay ----
+  appDrawer.M.Drawer.fechar();
+  assert.equal(appDrawer.document.getElementById("drawerOverlay").classList.contains("open"), false);
+
+  // ---- 5) drawer some sozinho se o item que ele mostrava deixar de existir
+  // (nunca mostra um painel quebrado) ----
+  appDrawer.M.Drawer.abrirPendencia(pendDrawer.id);
+  assert.equal(appDrawer.document.getElementById("drawerOverlay").classList.contains("open"), true);
+  appDrawer.M.Store.state.pendencias = appDrawer.M.Store.state.pendencias.filter(p=>p.id!==pendDrawer.id);
+  appDrawer.M.Drawer.refresh();
+  assert.equal(appDrawer.document.getElementById("drawerOverlay").classList.contains("open"), false, "drawer precisa fechar sozinho se o item some do estado");
+  appDrawer.M.Store.state.pendencias.push(pendDrawer); // devolve pro resto dos testes
+
+  // ---- 6) Pendências (lista completa) abre o MESMO drawer, não expande
+  // mais inline (item 21 — "clicar em qualquer lugar abre o mesmo drawer") ----
+  appDrawer.M.UIState.pendView = "lista";
+  const htmlListaPend = appDrawer.M.Pages.pendencias().html;
+  assert.ok(htmlListaPend.includes(`Act.abrirPendenciaEm('${pendDrawer.id}')`), "linha da lista de Pendências precisa chamar Act.abrirPendenciaEm (drawer)");
+  assert.ok(!htmlListaPend.includes("Act.togglePendExpandido"), "lista completa não pode mais usar o expand inline antigo");
+
+  // ---- 7) Pendências (Kanban) — corpo do card inteiro abre o drawer ----
+  appDrawer.M.UIState.pendView = "kanban";
+  const htmlKanbanPend = appDrawer.M.Pages.pendencias().html;
+  assert.ok(htmlKanbanPend.includes(`Act.abrirPendenciaEm('${pendDrawer.id}')`), "card do Kanban precisa chamar Act.abrirPendenciaEm (drawer) — item 23");
+  assert.ok(!htmlKanbanPend.includes("Act.go('#/pendencias')"), "kanban não pode mais navegar pra lista ao clicar (bug descrito no pedido)");
+
+  // ---- 8) Obra → aba Pendências: linha inteira abre o drawer, botão
+  // "Resolver" continua com ação própria (stopPropagation) ----
+  const htmlObraPend = appDrawer.M.Pages.obraDetail(oDrawer.id); // tab padrão = geral
+  appDrawer.M.UIState.obraTab[oDrawer.id] = "pendencias";
+  const htmlObraPendTab = appDrawer.M.Pages.obraDetail(oDrawer.id).html;
+  assert.ok(htmlObraPendTab.includes(`Act.abrirPendenciaEm('${pendDrawer.id}')`), "linha de pendência na aba Obra→Pendências precisa abrir o drawer — item 26");
+
+  // ---- 9) Obra → Visão Geral: bloqueio ativo (banner) também abre o
+  // drawer, com o botão de ação própria isolado por stopPropagation ----
+  pendDrawer.status = "ABERTA"; pendDrawer.impacto = "BLOQUEIA_OBRA"; // força aparecer como bloqueio
+  appDrawer.M.UIState.obraTab[oDrawer.id] = "geral";
+  const htmlObraGeral = appDrawer.M.Pages.obraDetail(oDrawer.id).html;
+  assert.ok(htmlObraGeral.includes(`Act.abrirPendenciaEm('${pendDrawer.id}')`), "banner de bloqueio na Visão Geral da obra precisa abrir o drawer — item 26");
+  assert.ok(htmlObraGeral.includes("event.stopPropagation()"), "botão 'Resolver agora' dentro do banner precisa isolar o clique (não also abrir/fechar o drawer)");
+
+  // ---- 10) Hoje: os dois pontos que mostram pendência (attention-item e
+  // alert-item) chamam Act.abrirPendenciaEm, que agora abre o drawer em vez
+  // de navegar pra #/pendencias (era o bug descrito no pedido) — checagem
+  // estática do arquivo-fonte, já que reconstruir o dispatcher inteiro de
+  // Hoje por perfil está fora do escopo deste teste pontual.
+  const hojeSrc = fs.readFileSync(path.join(root, "js/pages/hoje.js"), "utf8");
+  const chamadasAbrirPendenciaEm = (hojeSrc.match(/Act\.abrirPendenciaEm\(/g)||[]).length;
+  assert.ok(chamadasAbrirPendenciaEm >= 2, "Hoje precisa ter pelo menos os 2 pontos (attention-item e alert-item) chamando Act.abrirPendenciaEm");
+  assert.ok(!/pendExpandido\s*=\s*pendId/.test(fs.readFileSync(path.join(root, "js/actions.js"), "utf8")),
+    "Act.abrirPendenciaEm não pode mais setar pendExpandido/navegar pra #/pendencias — precisa abrir o drawer");
+
+  // ---- 11) permissão: ação "Marcar resolvida" só aparece pra quem tem
+  // pendencia.resolver (mesma régua de sempre, reaproveitada — item 24) ----
+  appDrawer.M.Store.setUsuarioAtual("Willian Souza"); // MONTADOR, sem pendencia.resolver
+  appDrawer.M.Drawer.abrirPendencia(pendDrawer.id);
+  const painelSemPermissao = appDrawer.document.getElementById("drawerPanel").innerHTML;
+  assert.ok(!painelSemPermissao.includes("Marcar resolvida"), "perfil sem pendencia.resolver não pode ver o botão no drawer");
+  appDrawer.M.Store.setUsuarioAtual("Paulo Henrique"); // ADMIN, tem tudo
+  appDrawer.M.Drawer.abrirPendencia(pendDrawer.id);
+  const painelComPermissao = appDrawer.document.getElementById("drawerPanel").innerHTML;
+  assert.ok(painelComPermissao.includes("Marcar resolvida"), "ADMIN precisa ver o botão Marcar resolvida no drawer");
+}
+console.log("Fase 7.5 — Detalhe Rápido (Context Drawer) + Kanban/Hoje/Obra (Partes C/D/E): OK");
+
+// ==================================================================
 // HOTFIX 3.1 — persistSupabase() não pode chamar Supa.salvarEstado() com
 // cliente nulo; precisa esperar M.Supa.ready; precisa coalescer gravações
 // concorrentes (fila de tamanho 1 — só a mais recente sobrevive, nunca uma

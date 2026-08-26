@@ -187,7 +187,9 @@
     // relevante aqui porque é a tela que o montador mais usa em campo.
     const restrito = !M.Store.pode("verTodasObras");
     const meuObraIds = restrito ? M.Store.obraIdsDoColaborador(M.Store.state.usuarioAtual) : null;
-    const obrasVisiveis = restrito ? M.Store.state.obras.filter(o=>meuObraIds.has(o.id)) : M.Store.state.obras;
+    // FASE 7.5: rascunho não entra em Montagem (item 7 do pedido).
+    const obrasBaseMontagem = M.Store.obrasOperacionais();
+    const obrasVisiveis = restrito ? obrasBaseMontagem.filter(o=>meuObraIds.has(o.id)) : obrasBaseMontagem;
 
     const agregado = C.agregarMontagem(obrasVisiveis);
     const contadores = C.contadoresMontagem(obrasVisiveis);

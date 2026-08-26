@@ -55,7 +55,8 @@
 
   // ---------- Modo 2: Montagem ----------
   function telaMontagem(){
-    const obras = M.Store.state.obras;
+    // FASE 7.5: rascunho não aparece na TV (item 7 do pedido).
+    const obras = M.Store.obrasOperacionais();
     const agg = C.agregarMontagem(obras);
     const fila = C.prioridadeParaFinalizar(obras).slice(0,4);
     // "Oportunidade": fechamento projetado se a fila de prioridade (poucos

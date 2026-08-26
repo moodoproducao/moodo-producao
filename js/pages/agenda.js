@@ -202,7 +202,8 @@
   // evento só.
   function todosEventosBrutos(){
     const manuais = M.Store.state.eventos;
-    const montagensBase = M.Store.state.obras.map(eventoMontagemDeObra).filter(Boolean);
+    // FASE 7.5: rascunho não entra em Agenda (item 7 do pedido).
+    const montagensBase = M.Store.obrasOperacionais().map(eventoMontagemDeObra).filter(Boolean);
     const assistenciasBase = M.Store.state.assistencias.flatMap(eventosDeAssistencia);
     const ocorrenciasDerivadas = montagensBase.concat(assistenciasBase).flatMap(ocorrenciasDeEventoBase);
     return manuais.concat(ocorrenciasDerivadas);
@@ -519,8 +520,10 @@
     else if(view==="DIA") periodoLabel = new Date(S.agendaDia+"T00:00:00").toLocaleDateString("pt-BR",{weekday:"long", day:"2-digit", month:"long"});
     else periodoLabel = `${C.fmtDate(S.agendaSemanaInicio)} – ${C.fmtDate(addDias(S.agendaSemanaInicio,6))}`;
 
-    const obrasParaFiltro = M.Store.pode("verTodasObras") ? M.Store.state.obras
-      : M.Store.state.obras.filter(o=> M.Store.obraIdsDoColaborador(M.Store.state.usuarioAtual).has(o.id));
+    // FASE 7.5: rascunho não entra no filtro de obra da Agenda (item 7).
+    const obrasFiltroBase = M.Store.obrasOperacionais();
+    const obrasParaFiltro = M.Store.pode("verTodasObras") ? obrasFiltroBase
+      : obrasFiltroBase.filter(o=> M.Store.obraIdsDoColaborador(M.Store.state.usuarioAtual).has(o.id));
 
     const topoHtml = `
       <div class="card pad" style="margin-bottom:14px;">
@@ -587,7 +590,8 @@
   M.Pages.eventoFormHtml = function(evento){
     const editando = !!evento;
     const tiposManuais = M.TIPOS_EVENTO_AGENDA.filter(t=>t.manual);
-    const obras = M.Store.state.obras;
+    // FASE 7.5: rascunho não pode ganhar compromisso manual de Agenda (item 7).
+    const obras = M.Store.obrasOperacionais();
     return `
       <div class="modal-head"><h2>${editando?"Editar compromisso":"Novo compromisso"}</h2><button class="modal-close" data-close>✕</button></div>
       <form id="formEvento">

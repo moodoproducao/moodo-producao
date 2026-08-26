@@ -5,7 +5,7 @@
   "use strict";
   const M = window.M;
   const UI = M.UI;
-  const APP_VERSION = "3.14.0";
+  const APP_VERSION = "3.15.0";
 
   function usuarioAtualColab(){
     return M.colabByNome(M.Store.state.usuarioAtual) || M.COLABORADORES[9];
@@ -247,6 +247,11 @@
     if(!location.hash) location.hash = "#/hoje";
     render();
     M.Store.subscribe(render);
+    // FASE 7.5 (Context Drawer — item 21): o drawer vive FORA de #app (igual
+    // o modal), então sobrevive ao innerHTML novo de cada render() — mas
+    // por isso também precisa da própria assinatura pra se atualizar sozinho
+    // quando uma ação feita dentro dele (ex.: marcar resolvida) muda o estado.
+    if(M.Drawer) M.Store.subscribe(M.Drawer.refresh);
 
     // PWA: registra service worker (cache básico do shell) e escuta atualização
     if("serviceWorker" in navigator){

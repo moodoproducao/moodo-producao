@@ -20,7 +20,8 @@
     const respOptions = ["",...M.COLABORADORES.map(c=>c.nome)];
     // item 9 do backlog: dá pra ver as tarefas de uma obra específica sem sair
     // desta tela — mesma lista de sempre, só filtrada.
-    const obrasOptions = M.Store.state.obras.slice().sort((a,b)=>a.cliente.localeCompare(b.cliente));
+    // FASE 7.5: rascunho não entra no filtro de obra de Tarefas (item 7).
+    const obrasOptions = M.Store.obrasOperacionais().slice().sort((a,b)=>a.cliente.localeCompare(b.cliente));
     const html = `
       <div class="card pad" style="margin-bottom:14px;">
         <div class="flex-gap" style="flex-wrap:wrap;">
@@ -61,7 +62,8 @@
   };
 
   M.Pages.tarefaFormHtml = function(obraId){
-    const obras = M.Store.state.obras;
+    // FASE 7.5: rascunho não pode receber tarefa manual (item 7).
+    const obras = M.Store.obrasOperacionais();
     return `
       <div class="modal-head"><h2>Nova tarefa</h2><button class="modal-close" data-close>✕</button></div>
       <form id="formTarefa">

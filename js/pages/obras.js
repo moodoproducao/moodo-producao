@@ -35,13 +35,27 @@
     const risco = C.situacaoObra(o);
     const montagemIniciada = o.ambientes.some(a=> C.situacaoAmbiente(a).key!=="NAO_INICIADO");
     return `<tr onclick="Act.go('#/obra/${o.id}')" style="cursor:pointer;">
-        <td><b>${UI.esc(o.cliente)}</b><div class="small muted">${o.numeroOS}</div></td>
+        <td><b>${UI.esc(o.nome||o.cliente)}</b><div class="small muted">${o.numeroOS||"sem OS"}</div></td>
         <td>${faseMacroChip(o)}</td>
         <td style="min-width:120px;">${UI.progressBar(prog.pct)}<div class="small muted">Produção ${prog.pct}%</div></td>
         <td class="small muted">${montagemIniciada? `${C.progressoFisicoMontagem(o)}% físico · ${C.taxaFechamento(o)}% fech.` : "—"}</td>
         <td>${C.fmtDate(o.dataEntregaPrevista)} ${risco.diasEntrega<0?`<span class="chip critical">${-risco.diasEntrega}d atraso</span>`:""}</td>
         <td>${risco.pendencias? `<span class="chip critical">${risco.pendencias}</span>` : `<span class="chip good">0</span>`}</td>
         <td>${UI.riscoChip(risco)}</td>
+      </tr>`;
+  }
+  // FASE 7.5 (Nova Obra V2, item 7) — linha simplificada pro filtro
+  // "Rascunhos": nada de progresso/risco/montagem (rascunho nunca entrou no
+  // pipeline), só o que já foi preenchido até agora + quem criou/quando +
+  // "Continuar" (volta pro wizard nesse rascunho).
+  function linhaRascunhoHtml(o){
+    const totalMoveis = (o.ambientes||[]).reduce((s,a)=>s+(a.moveis||[]).length,0);
+    return `<tr onclick="Act.go('#/nova-obra/${o.id}')" style="cursor:pointer;">
+        <td><b>${UI.esc(o.nome||o.cliente||"(sem nome ainda)")}</b><div class="small muted">${UI.esc(o.cliente||"cliente não preenchido")}</div></td>
+        <td class="small muted">${(o.ambientes||[]).length} ambiente(s) · ${totalMoveis} móvel(is)</td>
+        <td class="small muted">${UI.person(o.criadoPor)}</td>
+        <td class="small muted">${C.fmtDate(o.criadoEm)}</td>
+        <td><button class="btn sm" onclick="event.stopPropagation();Act.go('#/nova-obra/${o.id}')">${UI.icon('edit',12)} Continuar</button></td>
       </tr>`;
   }
   // REFINO VISUAL V2 (ajustes finais, §2): versão em cartão da mesma linha,
@@ -55,7 +69,7 @@
     const montagemIniciada = o.ambientes.some(a=> C.situacaoAmbiente(a).key!=="NAO_INICIADO");
     return `<div class="mcard" onclick="Act.go('#/obra/${o.id}')" style="cursor:pointer;">
       <div class="mcard-top">
-        <div><div class="mcard-title">${UI.esc(o.cliente)}</div><div class="small muted">${o.numeroOS}</div></div>
+        <div><div class="mcard-title">${UI.esc(o.nome||o.cliente)}</div><div class="small muted">${o.numeroOS||"sem OS"}</div></div>
         ${UI.riscoChip(risco)}
       </div>
       <div class="mcard-rows">
@@ -70,7 +84,40 @@
   M.Pages.obras = function(forcarMinhas){
     const restrito = forcarMinhas || !M.Store.pode("verTodasObras");
     const meuObraIds = restrito ? M.Store.obraIdsDoColaborador(M.Store.state.usuarioAtual) : null;
-    const obras = restrito ? M.Store.state.obras.filter(o=>meuObraIds.has(o.id)) : M.Store.state.obras;
+
+    // FASE 7.5 (item 7 do pedido) — "Rascunhos" só existe como filtro/status
+    // dedicado aqui em Obras, atrás de "Somente usuários autorizados": mesma
+    // permissão que já controla quem pode criar obra (obra.criar). Sem essa
+    // permissão o toggle nem aparece — a lista continua 100% igual a antes.
+    const podeVerRascunhos = !forcarMinhas && M.Store.pode("obra.criar");
+    const filtroStatus = podeVerRascunhos ? (M.UIState.obrasFiltroStatus||"ATIVAS") : "ATIVAS";
+    const verRascunhos = filtroStatus==="RASCUNHO";
+
+    const obrasBase = verRascunhos ? M.Store.obrasRascunho() : M.Store.obrasOperacionais();
+    const obras = restrito ? obrasBase.filter(o=>meuObraIds.has(o.id)) : obrasBase;
+
+    const toggleStatusHtml = podeVerRascunhos ? `
+      <div class="segmented" style="margin-bottom:14px;">
+        <button class="${!verRascunhos?'active':''}" onclick="Act.setObrasFiltroStatus('ATIVAS')">Ativas</button>
+        <button class="${verRascunhos?'active':''}" onclick="Act.setObrasFiltroStatus('RASCUNHO')">Rascunhos${M.Store.obrasRascunho().length?` (${M.Store.obrasRascunho().length})`:""}</button>
+      </div>` : "";
+
+    if(verRascunhos){
+      const rowsRascunho = obras.map(linhaRascunhoHtml).join("");
+      const htmlRascunho = `
+        ${toggleStatusHtml}
+        <div class="help-banner">${UI.icon('alert',13)} Rascunho não aparece em Hoje, risco, Montagem, Agenda nem gera pendência automática — só existe aqui até ser ativado ou descartado.</div>
+        <div class="card pad">
+          <div style="overflow-x:auto;">
+          <table class="tbl">
+            <thead><tr><th>Obra</th><th>Estrutura</th><th>Criado por</th><th>Criado em</th><th></th></tr></thead>
+            <tbody>${rowsRascunho.length?rowsRascunho:`<tr><td colspan="5" class="small muted" style="text-align:center;padding:20px;">Nenhum rascunho no momento.</td></tr>`}</tbody>
+          </table>
+          </div>
+        </div>
+      `;
+      return {title:"Obras", crumb:"Rascunhos — obras ainda não ativadas", html:htmlRascunho, actionsHtml: UI.botaoNovaObraHtml()};
+    }
 
     // "listas por exceção" (§5) — mesma definição de risco/parada já usada
     // em Hoje (C.situacaoObra/C.obraParada), reaproveitada aqui, não uma
@@ -82,8 +129,8 @@
 
     const excecaoRowHtml = ({o,sit,parada})=> `<div class="compact-row" onclick="Act.go('#/obra/${o.id}')">
       <div class="cr-main">
-        <div class="cr-top"><span class="cr-title">${UI.esc(o.cliente)}</span>${UI.riscoChip(sit)}</div>
-        <div class="cr-sub">${o.numeroOS} · ${faseMacroChip(o)} ${parada? ` · <span style="color:var(--critical);font-weight:700;">parada há ${C.diasParada(o)}d</span>`:""}</div>
+        <div class="cr-top"><span class="cr-title">${UI.esc(o.nome||o.cliente)}</span>${UI.riscoChip(sit)}</div>
+        <div class="cr-sub">${o.numeroOS||"sem OS"} · ${faseMacroChip(o)} ${parada? ` · <span style="color:var(--critical);font-weight:700;">parada há ${C.diasParada(o)}d</span>`:""}</div>
       </div>
       <div class="cr-action">${sit.diasEntrega<0? `<span class="chip critical">${-sit.diasEntrega}d atraso</span>` : `<span class="small muted">entrega em ${sit.diasEntrega}d</span>`}</div>
     </div>`;
@@ -94,6 +141,7 @@
     const rows = obras.map(linhaObraHtml).join("");
 
     const html = `
+      ${toggleStatusHtml}
       ${restrito? `<div class="help-banner">${UI.icon('user',13)} Mostrando só as obras onde você tem tarefa, pendência ou assistência atribuída.</div>`:""}
 
       ${UI.kpiRow([

@@ -146,7 +146,9 @@
     // não existe (nem deveria existir) um campo fixo "obra do fulano".
     const restrito = !M.Store.pode("verTodasObras");
     const meuObraIds = restrito ? M.Store.obraIdsDoColaborador(M.Store.state.usuarioAtual) : null;
-    const obrasVisiveis = restrito ? M.Store.state.obras.filter(o=>meuObraIds.has(o.id)) : M.Store.state.obras;
+    // FASE 7.5: rascunho não entra em Produção/Kanban (item 7 do pedido).
+    const obrasBaseProducao = M.Store.obrasOperacionais();
+    const obrasVisiveis = restrito ? obrasBaseProducao.filter(o=>meuObraIds.has(o.id)) : obrasBaseProducao;
 
     // FASE 3 (handoff): "Produção" agora tem duas visões — Macro (obra como
     // unidade de linha, "painel de obras, macro por padrão") e o Kanban que

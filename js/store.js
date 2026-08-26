@@ -162,6 +162,14 @@
       tvWidgetsAtivos: {},
       historico: [],
       auditoria: [],
+      // FASE 7.5 (Detalhe Rápido, item 22) — auditoria de primeira
+      // visualização: {pendenciaId, usuario, visualizadoEm}, um registro por
+      // par (pendência, usuário) — idempotente, nunca duplica quando a
+      // mesma pessoa abre o drawer de novo. Array SEPARADO de historico/
+      // auditoria de propósito (não é evento de negócio nem trilha de
+      // governança — é telemetria de UI, preparada pra um futuro consumo em
+      // Admin → Auditoria; não aparece em nenhuma tela ainda).
+      visualizacoesPendencia: [],
       usuarioAtual: "Paulo Henrique",
       criadoEm: new Date().toISOString(),
     };
@@ -227,6 +235,8 @@
             // até alguém mover ela manualmente).
             fasesMacro: (parsed.fasesMacro && parsed.fasesMacro.length) ? parsed.fasesMacro : fresh.fasesMacro,
             requisitosPorEtapa: parsed.requisitosPorEtapa || fresh.requisitosPorEtapa,
+            // FASE 7.5 — estado salvo de antes desta fase não tem essa chave.
+            visualizacoesPendencia: parsed.visualizacoesPendencia || fresh.visualizacoesPendencia,
           });
           // saneamento: se algum móvel salvo antigamente ainda tiver etapa numérica
           // (índice de array, formato pré-v2.1), converte pra chave da etapa nessa posição.
@@ -470,6 +480,9 @@
     // Mesma defesa que load() já fazia pro caminho local (`parsed.eventos
     // || fresh.eventos`) — só faltava espelhar aqui pro caminho remoto.
     if(!Array.isArray(state.eventos)) state.eventos = [];
+    // FASE 7.5 — mesma defesa, mesmo motivo: estado remoto de antes desta
+    // fase não tem `visualizacoesPendencia`.
+    if(!Array.isArray(state.visualizacoesPendencia)) state.visualizacoesPendencia = [];
     // estado vindo da nuvem pode ter sido salvo por uma versão anterior do
     // app (antes da Fase 2) — mesma migração leve do boot local.
     migrarPendenciasParaModeloHandoff();
@@ -575,9 +588,13 @@
       for(const o of state.obras) for(const a of o.ambientes) if(a.id===ambienteId) return {o,a};
       return null;
     },
+    // FASE 7.5: exclui obra RASCUNHO — usada por cálculo de risco/atraso
+    // (Calc.alertasHoje) e por várias telas operacionais; rascunho não pode
+    // gerar alerta de atraso porque ele nunca entrou no pipeline de verdade
+    // (item 7 do pedido).
     allMoveis(){
       const out=[];
-      state.obras.forEach(o=>o.ambientes.forEach(a=>a.moveis.forEach(m=>out.push({o,a,m}))));
+      Store.obrasOperacionais().forEach(o=>o.ambientes.forEach(a=>a.moveis.forEach(m=>out.push({o,a,m}))));
       return out;
     },
 
@@ -1148,6 +1165,38 @@
       if(comp) comp.status = novoStatusComponente;
     },
 
+    // FASE 7.5 (Detalhe Rápido, item 22) — registra que ESTE usuário abriu o
+    // detalhe desta pendência pela primeira vez. Idempotente por (pendenciaId,
+    // usuario): reabrir o mesmo drawer de novo não duplica registro. Sem
+    // permissão nenhuma exigida de propósito (é telemetria de leitura, não
+    // uma ação de negócio) e sem `Store.log`/`Store.audit` — array próprio
+    // (`visualizacoesPendencia`), não visível em nenhuma tela hoje; existe
+    // só como base pronta pra uma futura tela Admin → Auditoria (item 22:
+    // "não implementar 'Ciente'/'Assumir' ainda — só 'visualizou'").
+    //
+    // AVISO IMPORTANTE (correção pós-entrega, item 5) — até existir Auth
+    // real neste app, `usuario` vem de `state.usuarioAtual`, que é um
+    // seletor de perfil compartilhado/trocável por qualquer pessoa na
+    // mesma sessão (ver Act.trocarUsuario), não uma sessão autenticada.
+    // Ou seja: este array é TELEMETRIA DE DESENVOLVIMENTO, não evidência
+    // forte de identidade/autoria — não deve ser tratado como prova de que
+    // "a pessoa X" de fato viu a pendência, só de que "o perfil selecionado
+    // como X" esteve com o drawer aberto. Quando Auth for implementado, a
+    // origem de `usuario` aqui deve ser trocada pelo usuário autenticado de
+    // verdade — nenhum comportamento muda agora, isto é só documentação.
+    registrarPrimeiraVisualizacaoPendencia(pendId){
+      const usuario = state.usuarioAtual || null;
+      if(!pendId || !usuario) return {ok:false};
+      const jaExiste = state.visualizacoesPendencia.some(v=> v.pendenciaId===pendId && v.usuario===usuario);
+      if(jaExiste) return {ok:true, jaVisualizado:true};
+      state.visualizacoesPendencia.push({pendenciaId:pendId, usuario, visualizadoEm:new Date().toISOString()});
+      emit();
+      return {ok:true};
+    },
+    visualizacoesDaPendencia(pendId){
+      return state.visualizacoesPendencia.filter(v=>v.pendenciaId===pendId);
+    },
+
     // ---------- componentes críticos / exceções (vidro, serralheria, pintura...) ----------
     // AGUARDANDO/REFACAO já nascem com pendência real vinculada (criarComponenteEmMovel);
     // RESOLVIDO é o único status "não bloqueante" hoje reconhecido pelo resto do app.
@@ -1682,21 +1731,45 @@
     setUsuarioAtual(nome){ state.usuarioAtual = nome; emit(); },
 
     // ---------- nova obra ----------
+    // FASE 7.5 (Nova Obra V2): criarObra continua sendo o único ponto que
+    // insere uma obra em state.obras — tanto vindo do wizard (import OU
+    // manual) quanto de RASCUNHO. status:"RASCUNHO" é o único valor que pula
+    // o seeding operacional (componentes críticos → pendência automática +
+    // tarefas padrão da etapa inicial) — item 7 do pedido: rascunho não pode
+    // gerar Pendência operacional automática nem entrar no pipeline de
+    // produção. Qualquer outro status (inclusive o legado "EM_PRODUCAO")
+    // segue exatamente o comportamento de sempre — nada regride pra
+    // obras/testes das Fases 0-7. O seeding adiado do rascunho acontece em
+    // Store.ativarObra, no momento em que a obra vira operacional de fato.
     criarObra(obra){
       const processed = obra;
-      processed.fatorLiquido = processed.valorLiquido / processed.valorBruto;
-      processed.desconto = processed.valorBruto - processed.valorLiquido;
-      processed.descontoPct = processed.desconto / processed.valorBruto;
+      const ehRascunho = processed.status === "RASCUNHO";
+      // AJUSTE (Fase 7.5): antes dividia direto (valorLiquido/valorBruto), o
+      // que dava NaN pra obra criada manualmente sem PDF/valores. Rascunho e
+      // criação manual sem preço agora só zeram fatorLiquido/desconto em vez
+      // de propagar NaN pelo resto do objeto.
+      processed.fatorLiquido = processed.valorBruto>0 ? processed.valorLiquido/processed.valorBruto : 0;
+      processed.desconto = (processed.valorBruto||0) - (processed.valorLiquido||0);
+      processed.descontoPct = processed.valorBruto>0 ? processed.desconto/processed.valorBruto : 0;
       // FASE 3 — toda obra nova nasce em AGUARDANDO_INICIO (impactaRisco:
       // false, não gera alerta de atraso/risco até alguém mover ela pra
       // frente de propósito). Só obra criada a partir daqui ganha isso —
       // obras já existentes não são tocadas por esta linha.
       processed.faseMacro = "AGUARDANDO_INICIO";
-      processed.ambientes.forEach(a=>{
-        a.valorBruto = Math.round(processed.valorBruto * a.valorBrutoPct);
+      // FASE 7.5 — auditoria de criação (item 8 do pedido: criadoPor/criadoEm).
+      // Só preenche se o chamador não tiver passado já (ex.: ativarObra nunca
+      // reescreve isso — a obra já existe).
+      // CORREÇÃO PÓS-ENTREGA (item 4) — timestamp completo (data+hora), não
+      // só a data: histórico/auditoria precisam distinguir duas obras
+      // criadas no mesmo dia. Obras antigas (sem esse campo) não são
+      // migradas — continuam lidas normalmente onde quer que apareçam.
+      processed.criadoPor = processed.criadoPor || state.usuarioAtual || null;
+      processed.criadoEm = processed.criadoEm || new Date().toISOString();
+      (processed.ambientes||[]).forEach(a=>{
+        a.valorBruto = Math.round((processed.valorBruto||0) * (a.valorBrutoPct||0));
         a.valorLiquido = Math.round(a.valorBruto * processed.fatorLiquido);
         a.obraId = processed.id;
-        a.moveis.forEach(m=>{
+        (a.moveis||[]).forEach(m=>{
           m.ambienteId=a.id; m.obraId=processed.id;
           // CORREÇÃO: o móvel nascia com etapa:0 (índice numérico do formato antigo,
           // nunca convertido pro id de verdade) e nunca ganhava as ações padrão da
@@ -1710,29 +1783,340 @@
           // fase 2 do plano "obra no centro": sem checklist genérico (Corpo MDF,
           // Ferragens) — o trabalho real da etapa já vem de TAREFAS_PADRAO_ETAPA.
           // Só material especial vira componente crítico (exceção, não checklist).
-          const especiais = m.componentesCriticosIniciais || [];
-          delete m.componentesCriticosIniciais;
           m.checklist = [];
           m.componentesCriticos = m.componentesCriticos || [];
-          // fase seguinte do plano "obra no centro": cada item especial já nasce
-          // com a pendência real vinculada (mesmo caminho de Store.criarComponenteCritico),
-          // em vez de ficar decorativo até alguém mexer nele manualmente.
-          // Aceita string solta (nome, tipo genérico "Material especial" — entrada
-          // manual) ou {nome, tipo} (leitor de PDF já sabe o tipo específico —
-          // Vidro/Serralheria/etc. — porque detectou por palavra-chave no texto,
-          // o que dá uma categoria de pendência mais precisa que "Material especial").
-          especiais.forEach(especial=>{
-            const dados = typeof especial === "string" ? {nome:especial, tipo:"Material especial"} : especial;
-            criarComponenteEmMovel({o:processed, a, m}, dados);
-          });
-          Store.criarTarefasPadraoParaEtapa({o:processed, a, m}, primeiraEtapa.id);
+          if(ehRascunho){
+            // não deleta m.componentesCriticosIniciais aqui — fica guardado no
+            // móvel até Store.ativarObra processar (item 7: rascunho não gera
+            // pendência automática ainda).
+          } else {
+            // fase seguinte do plano "obra no centro": cada item especial já nasce
+            // com a pendência real vinculada (mesmo caminho de Store.criarComponenteCritico),
+            // em vez de ficar decorativo até alguém mexer nele manualmente.
+            // Aceita string solta (nome, tipo genérico "Material especial" — entrada
+            // manual) ou {nome, tipo} (leitor de PDF já sabe o tipo específico —
+            // Vidro/Serralheria/etc. — porque detectou por palavra-chave no texto,
+            // o que dá uma categoria de pendência mais precisa que "Material especial").
+            const especiais = m.componentesCriticosIniciais || [];
+            delete m.componentesCriticosIniciais;
+            especiais.forEach(especial=>{
+              const dados = typeof especial === "string" ? {nome:especial, tipo:"Material especial"} : especial;
+              criarComponenteEmMovel({o:processed, a, m}, dados);
+            });
+            Store.criarTarefasPadraoParaEtapa({o:processed, a, m}, primeiraEtapa.id);
+          }
         });
       });
       state.obras.push(processed);
-      Store.log(processed.id, "OBRA_CRIADA", `Obra ${processed.numeroOS} criada a partir da importação.`);
+      Store.log(processed.id, ehRascunho ? "OBRA_RASCUNHO_CRIADO" : "OBRA_CRIADA",
+        ehRascunho ? `Rascunho de obra criado — ${processed.nome||processed.cliente||"sem nome ainda"}.`
+                   : `Obra ${processed.numeroOS||processed.nome||processed.cliente} criada.`);
       emit();
       return processed;
     },
+
+    // FASE 7.5 — base pra qualquer tela/cálculo que NÃO deve considerar
+    // rascunho: Hoje, risco (Calc), Montagem, Produção, Agenda, Indicadores,
+    // TV, Chão de Fábrica, Para Finalizar, seletor de obra em
+    // Pendência/Tarefa/Assistência/Agenda manual. Obra sem `status` (todo o
+    // legado pré-Fase-7.5, inclusive "EM_PRODUCAO") conta como operacional —
+    // só "RASCUNHO" é excluído. A tela Obras é a única que usa state.obras
+    // "cru" (ela é o único lugar que a Fase 7.5 pede pra rascunho aparecer,
+    // atrás de um filtro/status dedicado).
+    obrasOperacionais(){ return state.obras.filter(o=>o.status!=="RASCUNHO"); },
+    obrasRascunho(){ return state.obras.filter(o=>o.status==="RASCUNHO"); },
+    // Item 9 do pedido — nunca existiu (RELATORIO-FASE-0-V2 já documentava a
+    // ausência). Comparação por número de OS normalizado (trim + minúsculas)
+    // pra não deixar "OS 2026/336" e "os 2026/336 " passarem como diferentes.
+    // FASE 7.5 (correção pós-entrega, item 1) — `excluirObraId` ignora a
+    // própria obra sendo editada: um rascunho retomado (ou qualquer edição)
+    // já tem obraId, mas ainda precisa saber se ALGUMA OUTRA obra tem o
+    // mesmo número de OS. A obra sendo editada nunca conflita com ela mesma.
+    getObraByNumeroOS(numeroOS, excluirObraId){
+      const alvo = String(numeroOS||"").trim().toLowerCase();
+      if(!alvo) return null;
+      return state.obras.find(o=> o.id!==excluirObraId && String(o.numeroOS||"").trim().toLowerCase()===alvo) || null;
+    },
+
+    // FASE 7.5 — ativarObra(): a única transição RASCUNHO → ATIVA. Reaplica
+    // a validação mínima (item 6 do pedido) mesmo que a UI já tenha
+    // desabilitado o botão — mesma defesa em profundidade usada em
+    // Store.cancelarAssistencia/atualizarAssistencia na Fase 7. É AQUI (não
+    // na criação do rascunho) que o seeding operacional roda pela primeira
+    // vez — tarefas-padrão da etapa inicial + componentes críticos/pendência
+    // automática dos itens especiais guardados em m.componentesCriticosIniciais.
+    ativarObra(obraId){
+      const o = Store.getObra(obraId); if(!o) return {ok:false, motivo:"NAO_ENCONTRADA"};
+      if(o.status!=="RASCUNHO") return {ok:true, jaAtiva:true};
+      const faltando = [];
+      if(!String(o.nome||"").trim()) faltando.push("nome da obra");
+      if(!String(o.cliente||"").trim()) faltando.push("cliente");
+      if(!String(o.responsavel||"").trim()) faltando.push("responsável");
+      if(!(o.ambientes||[]).length) faltando.push("pelo menos 1 ambiente");
+      const totalMoveis = (o.ambientes||[]).reduce((s,a)=>s+(a.moveis||[]).length, 0);
+      if(!totalMoveis) faltando.push("pelo menos 1 móvel");
+      if(faltando.length) return {ok:false, motivo:"CAMPOS_OBRIGATORIOS", faltando};
+      o.status = "ATIVA";
+      o.ativadoPor = state.usuarioAtual || null;
+      // CORREÇÃO PÓS-ENTREGA (item 4) — timestamp completo, mesmo motivo de
+      // processed.criadoEm acima (distinguir data E hora na auditoria).
+      o.ativadoEm = new Date().toISOString();
+      const primeiraEtapa = M.Store.etapasAtivas()[0];
+      o.ambientes.forEach(a=>{
+        (a.moveis||[]).forEach(m=>{
+          const especiais = m.componentesCriticosIniciais || [];
+          delete m.componentesCriticosIniciais;
+          especiais.forEach(especial=>{
+            const dados = typeof especial === "string" ? {nome:especial, tipo:"Material especial"} : especial;
+            criarComponenteEmMovel({o, a, m}, dados);
+          });
+          Store.criarTarefasPadraoParaEtapa({o, a, m}, m.etapa || primeiraEtapa.id);
+        });
+      });
+      Store.log(o.id, "OBRA_ATIVADA", `Obra ativada — ${o.nome||o.cliente}.`);
+      emit();
+      return {ok:true, obra:o};
+    },
+
+    // FASE 7.5 (Edição V2) ----------------------------------------------
+    // "fase operacional relevante" (item 15 do pedido) — a partir de qual
+    // faseMacro uma alteração estrutural passa a marcar REVISÃO PCP
+    // NECESSÁRIA em vez de só acontecer normal. LIBERACAO é o primeiro
+    // estágio em que o PCP já está de fato engajado no plano de corte —
+    // antes disso (Aguardando início/Medição/Projeto executivo) a obra
+    // ainda está em desenho, editar é normal. A PARTIR de LIBERACAO
+    // (inclusive) e em todas as fases seguintes, marca revisão PCP.
+    //
+    // CORREÇÃO PÓS-ENTREGA (última correção antes do push) — antes disto
+    // o limiar era o número mágico "3" hardcoded. Funcionalmente já dava
+    // o resultado certo (LIBERACAO tem ordem:3 no catálogo oficial de
+    // M.FASES_MACRO_SEED — ver js/data.js), mas dependia de ninguém nunca
+    // reordenar/inserir uma fase no catálogo sem lembrar de atualizar este
+    // "3" em algum outro lugar do código. Agora o limiar é lido direto do
+    // catálogo oficial pela CHAVE ("LIBERACAO"), nunca por número — se a
+    // ordem oficial mudar (nova fase inserida antes/depois), esta função
+    // acompanha sozinha, sem precisar tocar aqui.
+    _obraEmFaseOperacionalRelevante(o){
+      const fm = Store.faseMacroDeObra(o);
+      if(fm.legado) return false;
+      const liberacao = Store.faseMacroById("LIBERACAO");
+      return !!liberacao && fm.ordem >= liberacao.ordem;
+    },
+
+    // Edições simples (item 14): nome, cliente, responsável, entrega,
+    // endereço, observações, telefone, email. Correção de numeroOS depois da
+    // obra já ter saído de AGUARDANDO_INICIO/MEDICAO/PROJETO_EXECUTIVO exige
+    // motivo (item 16) — antes disso é edição normal, sem motivo obrigatório
+    // (mesma régua do item 15). Nunca mexe em faseMacro/status/ambientes/
+    // moveis — isso é papel de ativarObra/adicionarAmbiente&co, não deste.
+    atualizarObra(obraId, patch, opts){
+      opts = opts || {};
+      const o = Store.getObra(obraId); if(!o) return {ok:false, motivo:"NAO_ENCONTRADA"};
+      patch = patch || {};
+      const CAMPOS_SIMPLES = ["nome","cliente","responsavel","dataEntregaPrevista","endereco","observacoes","telefone","email"];
+      const alterados = [];
+      CAMPOS_SIMPLES.forEach(campo=>{
+        if(!(campo in patch)) return;
+        const novo = patch[campo];
+        if(novo === o[campo]) return;
+        alterados.push(campo);
+        o[campo] = novo;
+      });
+      let osAlterada = false;
+      if("numeroOS" in patch && patch.numeroOS !== o.numeroOS){
+        const precisaMotivo = Store._obraEmFaseOperacionalRelevante(o);
+        if(precisaMotivo && !(opts.motivo && String(opts.motivo).trim())){
+          return {ok:false, motivo:"MOTIVO_OBRIGATORIO_OS"};
+        }
+        o.numeroOS = patch.numeroOS;
+        osAlterada = true;
+        alterados.push("numeroOS");
+        if(precisaMotivo){
+          o.revisaoPCPNecessaria = true;
+          Store.log(o.id, "OBRA_OS_CORRIGIDA", `Número de OS corrigido para "${patch.numeroOS}" — motivo: ${opts.motivo}.`);
+        }
+      }
+      if(!alterados.length) return {ok:true, semAlteracao:true};
+      o.atualizadoPor = state.usuarioAtual || null;
+      o.atualizadoEm = M.todayISO();
+      if(!(osAlterada && Store._obraEmFaseOperacionalRelevante(o))){
+        // já logou um evento mais específico (OBRA_OS_CORRIGIDA) acima —
+        // não duplica com um genérico também.
+        Store.log(o.id, "OBRA_EDITADA", `Dados da obra atualizados — ${alterados.join(", ")}.`);
+      }
+      emit();
+      return {ok:true, obra:o, alterados};
+    },
+
+    // Alterações estruturais (item 15) — Ambiente/Móvel. Nenhuma delas exige
+    // motivo (só a correção de OS exige, item 16) — só marcam "revisão PCP
+    // necessária" quando a obra já passou de LIBERACAO, sem bloquear.
+    adicionarAmbiente(obraId, dados){
+      const o = Store.getObra(obraId); if(!o) return {ok:false, motivo:"NAO_ENCONTRADA"};
+      const nome = String((dados&&dados.nome)||"").trim();
+      if(!nome) return {ok:false, motivo:"NOME_OBRIGATORIO"};
+      const ambiente = {id:M.uid("amb"), nome, valorBrutoPct:0, valorBruto:0, valorLiquido:0, obraId:o.id, moveis:[]};
+      o.ambientes = o.ambientes || [];
+      o.ambientes.push(ambiente);
+      const relevante = Store._obraEmFaseOperacionalRelevante(o);
+      if(relevante) o.revisaoPCPNecessaria = true;
+      Store.log(o.id, "OBRA_AMBIENTE_ADICIONADO", `Ambiente "${nome}" adicionado.${relevante?" (revisão PCP necessária)":""}`);
+      emit();
+      return {ok:true, ambiente};
+    },
+    // Bloqueia remoção se o ambiente (ou algum móvel dele) já tiver vínculo
+    // operacional real — item 17: "não apagar silenciosamente Pendências,
+    // histórico, Montagem, Assistência, arquivos". Se não for seguro,
+    // bloqueia e orienta (não tenta decidir sozinho o que descartar).
+    removerAmbiente(obraId, ambienteId){
+      const o = Store.getObra(obraId); if(!o) return {ok:false, motivo:"NAO_ENCONTRADA"};
+      const ambiente = (o.ambientes||[]).find(a=>a.id===ambienteId);
+      if(!ambiente) return {ok:false, motivo:"NAO_ENCONTRADO"};
+      const movelIds = new Set((ambiente.moveis||[]).map(m=>m.id));
+      const vinculos = [];
+      const pend = state.pendencias.filter(p=>p.ambienteId===ambienteId || movelIds.has(p.movelId));
+      if(pend.length) vinculos.push(`${pend.length} pendência(s)`);
+      const tar = (state.tarefas||[]).filter(t=>movelIds.has(t.movelId));
+      if(tar.length) vinculos.push(`${tar.length} tarefa(s)`);
+      const assist = state.assistencias.filter(a=>a.ambienteNome===ambiente.nome && a.obraId===o.id);
+      if(assist.length) vinculos.push(`${assist.length} assistência(s)`);
+      const movelComProgresso = (ambiente.moveis||[]).some(m=>{
+        const primeiraEtapa = M.Store.etapasAtivas()[0];
+        return (m.etapa && primeiraEtapa && m.etapa!==primeiraEtapa.id) || (m.componentesCriticos||[]).length;
+      });
+      if(movelComProgresso) vinculos.push("móvel com progresso/componente registrado");
+      if(vinculos.length) return {ok:false, motivo:"VINCULOS_EXISTENTES", vinculos};
+      o.ambientes = o.ambientes.filter(a=>a.id!==ambienteId);
+      const relevante = Store._obraEmFaseOperacionalRelevante(o);
+      if(relevante) o.revisaoPCPNecessaria = true;
+      Store.log(o.id, "OBRA_AMBIENTE_REMOVIDO", `Ambiente "${ambiente.nome}" removido (sem vínculos).${relevante?" (revisão PCP necessária)":""}`);
+      emit();
+      return {ok:true};
+    },
+    adicionarMovel(obraId, ambienteId, dados){
+      const o = Store.getObra(obraId); if(!o) return {ok:false, motivo:"NAO_ENCONTRADA"};
+      const ambiente = (o.ambientes||[]).find(a=>a.id===ambienteId);
+      if(!ambiente) return {ok:false, motivo:"AMBIENTE_NAO_ENCONTRADO"};
+      const nome = String((dados&&dados.nome)||"").trim();
+      if(!nome) return {ok:false, motivo:"NOME_OBRIGATORIO"};
+      const primeiraEtapa = M.Store.etapasAtivas()[0];
+      const movel = {
+        id:M.uid("mov"), nome, ambienteId:ambiente.id, obraId:o.id,
+        etapa: primeiraEtapa? primeiraEtapa.id : null,
+        responsavel: (dados&&dados.responsavel) || o.responsavel || null,
+        valorLiquido:0, dataPrevista:o.dataEntregaPrevista||null, dataReal:null,
+        requisitosOverride:{}, dataEntradaEtapa:M.todayISO(), checklist:[], componentesCriticos:[],
+      };
+      ambiente.moveis = ambiente.moveis || [];
+      ambiente.moveis.push(movel);
+      const relevante = Store._obraEmFaseOperacionalRelevante(o);
+      // Móvel adicionado numa obra RASCUNHO ainda não entra no pipeline
+      // (mesma régua de criarObra/ativarObra — item 7: sem seeding
+      // operacional antes da ativação). Numa obra já ATIVA, ganha as
+      // tarefas padrão da etapa inicial imediatamente, como qualquer móvel.
+      if(o.status!=="RASCUNHO" && primeiraEtapa){
+        Store.criarTarefasPadraoParaEtapa({o, a:ambiente, m:movel}, primeiraEtapa.id);
+      }
+      if(relevante) o.revisaoPCPNecessaria = true;
+      Store.log(o.id, "OBRA_MOVEL_ADICIONADO", `Móvel "${nome}" adicionado em "${ambiente.nome}".${relevante?" (revisão PCP necessária)":""}`);
+      emit();
+      return {ok:true, movel};
+    },
+    removerMovel(obraId, ambienteId, movelId){
+      const o = Store.getObra(obraId); if(!o) return {ok:false, motivo:"NAO_ENCONTRADA"};
+      const ambiente = (o.ambientes||[]).find(a=>a.id===ambienteId);
+      if(!ambiente) return {ok:false, motivo:"AMBIENTE_NAO_ENCONTRADO"};
+      const movel = (ambiente.moveis||[]).find(m=>m.id===movelId);
+      if(!movel) return {ok:false, motivo:"NAO_ENCONTRADO"};
+      const vinculos = [];
+      const pend = state.pendencias.filter(p=>p.movelId===movelId);
+      if(pend.length) vinculos.push(`${pend.length} pendência(s)`);
+      const tar = (state.tarefas||[]).filter(t=>t.movelId===movelId);
+      if(tar.length) vinculos.push(`${tar.length} tarefa(s)`);
+      const assist = state.assistencias.filter(a=>a.movelNome===movel.nome && a.obraId===o.id);
+      if(assist.length) vinculos.push(`${assist.length} assistência(s)`);
+      const primeiraEtapa = M.Store.etapasAtivas()[0];
+      if((movel.etapa && primeiraEtapa && movel.etapa!==primeiraEtapa.id) || (movel.componentesCriticos||[]).length){
+        vinculos.push("progresso/componente registrado");
+      }
+      if(vinculos.length) return {ok:false, motivo:"VINCULOS_EXISTENTES", vinculos};
+      ambiente.moveis = ambiente.moveis.filter(m=>m.id!==movelId);
+      const relevante = Store._obraEmFaseOperacionalRelevante(o);
+      if(relevante) o.revisaoPCPNecessaria = true;
+      Store.log(o.id, "OBRA_MOVEL_REMOVIDO", `Móvel "${movel.nome}" removido de "${ambiente.nome}" (sem vínculos).${relevante?" (revisão PCP necessária)":""}`);
+      emit();
+      return {ok:true};
+    },
+    // Mover não é remoção — não passa pelo guard de vínculos (só muda de
+    // ambiente dentro da mesma obra, histórico/pendência/tarefa continuam
+    // válidos porque continuam apontando pro mesmo movelId).
+    moverMovel(obraId, movelId, novoAmbienteId){
+      const o = Store.getObra(obraId); if(!o) return {ok:false, motivo:"NAO_ENCONTRADA"};
+      const origem = (o.ambientes||[]).find(a=>(a.moveis||[]).some(m=>m.id===movelId));
+      const destino = (o.ambientes||[]).find(a=>a.id===novoAmbienteId);
+      if(!origem) return {ok:false, motivo:"NAO_ENCONTRADO"};
+      if(!destino) return {ok:false, motivo:"AMBIENTE_DESTINO_NAO_ENCONTRADO"};
+      if(origem.id===destino.id) return {ok:true, semAlteracao:true};
+      const movel = origem.moveis.find(m=>m.id===movelId);
+      origem.moveis = origem.moveis.filter(m=>m.id!==movelId);
+      movel.ambienteId = destino.id;
+      destino.moveis = destino.moveis || [];
+      destino.moveis.push(movel);
+      const relevante = Store._obraEmFaseOperacionalRelevante(o);
+      if(relevante) o.revisaoPCPNecessaria = true;
+      Store.log(o.id, "OBRA_MOVEL_MOVIDO", `Móvel "${movel.nome}" movido de "${origem.nome}" para "${destino.nome}".${relevante?" (revisão PCP necessária)":""}`);
+      emit();
+      return {ok:true};
+    },
+
+    // FASE 7.5 (Nova Obra V2) — substitui a estrutura inteira (ambientes +
+    // móveis) de uma obra ainda RASCUNHO, num só passo, vinda do editor
+    // manual do wizard. Só funciona pra RASCUNHO — deliberado: uma obra
+    // RASCUNHO nunca pode ter pendência/tarefa/assistência vinculada (todos
+    // os pontos de criação disso já filtram por obrasOperacionais()), então
+    // não existe vínculo pra perder ao substituir a estrutura inteira — o
+    // guard de vínculos de removerAmbiente/removerMovel é desnecessário
+    // aqui, e recriar tudo do zero é muito mais simples que fazer diff.
+    // Preserva o id de ambiente/móvel que já existia (reaproveitado pelo
+    // wizard ao reabrir um rascunho salvo), só gera id novo pro que é
+    // genuinamente novo nesta edição.
+    atualizarEstruturaRascunho(obraId, ambientesNovos){
+      const o = Store.getObra(obraId); if(!o) return {ok:false, motivo:"NAO_ENCONTRADA"};
+      if(o.status!=="RASCUNHO") return {ok:false, motivo:"OBRA_NAO_E_RASCUNHO"};
+      o.ambientes = (ambientesNovos||[]).map(a=>{
+        const ambId = a.id && String(a.id).indexOf("amb-")===0 ? a.id : M.uid("amb");
+        return {
+          id: ambId, nome: String(a.nome||"").trim(), valorBrutoPct:0, valorBruto:0, valorLiquido:0, obraId:o.id,
+          moveis: (a.moveis||[]).map(m=>({
+            id: m.id && String(m.id).indexOf("mov-")===0 ? m.id : M.uid("mov"),
+            nome: String(m.nome||"").trim(), ambienteId:ambId, obraId:o.id,
+            etapa:null, responsavel:o.responsavel||null, valorLiquido:0,
+            dataPrevista:o.dataEntregaPrevista||null, dataReal:null,
+            requisitosOverride:{}, dataEntradaEtapa:null, checklist:[], componentesCriticos:[],
+          })),
+        };
+      });
+      o.atualizadoPor = state.usuarioAtual || null;
+      o.atualizadoEm = M.todayISO();
+      Store.log(o.id, "OBRA_RASCUNHO_ATUALIZADO", `Estrutura do rascunho atualizada — ${o.ambientes.length} ambiente(s).`);
+      emit();
+      return {ok:true, obra:o};
+    },
+
+    // FASE 7.5 (Edição V2, item 15) — "não bloqueia necessariamente, mas
+    // flag REVISÃO PCP NECESSÁRIA" implica alguém precisar poder marcar como
+    // resolvida depois de revisar de verdade, senão o aviso nunca sai da
+    // tela. Ação separada e simples de propósito — não inventa nenhum fluxo
+    // de aprovação formal do PCP (isso é DinaBox/fase futura).
+    limparRevisaoPCP(obraId){
+      const o = Store.getObra(obraId); if(!o) return {ok:false, motivo:"NAO_ENCONTRADA"};
+      if(!o.revisaoPCPNecessaria) return {ok:true, semAlteracao:true};
+      o.revisaoPCPNecessaria = false;
+      Store.log(o.id, "OBRA_REVISAO_PCP_CONCLUIDA", "Revisão de PCP marcada como concluída.");
+      emit();
+      return {ok:true};
+    },
+
     // tarefa gerada a partir de um item de checklist de componente (ver criarObra
     // e migrarChecklistLegado) — não é obrigatória para avançar de etapa (nunca foi,
     // como checklist também não bloqueava), só precisa aparecer e poder ser concluída.

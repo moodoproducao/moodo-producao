@@ -73,8 +73,10 @@
     // do escopo de quem está vendo a tela — mesmo não sendo em si um
     // vazamento de dado (a lista de pendências já vem filtrada pelo Store),
     // oferecer uma obra que a pessoa não tem acesso é ruído/confuso.
-    const obras = M.Store.pode("verTodasObras") ? M.Store.state.obras
-      : M.Store.state.obras.filter(o=> M.Store.obraIdsDoColaborador(M.Store.state.usuarioAtual).has(o.id));
+    // FASE 7.5: rascunho não entra no filtro de obra de Pendências (item 7).
+    const obrasFiltroPend = M.Store.obrasOperacionais();
+    const obras = M.Store.pode("verTodasObras") ? obrasFiltroPend
+      : obrasFiltroPend.filter(o=> M.Store.obraIdsDoColaborador(M.Store.state.usuarioAtual).has(o.id));
     return `
       <div class="card pad" style="margin-bottom:14px;">
         <div class="flex-gap" style="flex-wrap:wrap;margin-bottom:8px;">
@@ -120,13 +122,20 @@
   }
 
   // ---------- linha da Lista ----------
+  // FASE 7.5 (Detalhe Rápido, item 21): clicar na linha abre o Context
+  // Drawer (mesmo componente usado em Hoje/Kanban/Obra) — não expande mais
+  // inline. O antigo comportamento (Act.togglePendExpandido + bloco
+  // expandido com fluxo/fotos/histórico/ações direto aqui) foi exatamente o
+  // tipo de "variante por módulo" que o pedido quer eliminar; esse conteúdo
+  // agora mora só no drawer (js/drawer.js), reaproveitado daqui em vez de
+  // duplicado. Os elementos que navegam por conta própria (foto, link da
+  // obra) continuam com stopPropagation pra não abrir o drawer por cima.
   function linhaLista(p){
     const dias = C.diasDesde(p.abertura);
-    const expandido = M.UIState.pendExpandido===p.id;
     const proximaAcao = p.status!=="RESOLVIDA" && p.fluxoPassos ? p.fluxoPassos[p.passoAtual] : null;
     const impDef = M.impactoDef(p.impacto);
     const foto = (p.fotosAbertura&&p.fotosAbertura[0]) || (p.fotos&&p.fotos[0]);
-    return `<div class="card pad" style="margin-bottom:10px;cursor:pointer;" onclick="Act.togglePendExpandido('${p.id}')">
+    return `<div class="card pad" style="margin-bottom:10px;cursor:pointer;" onclick="Act.abrirPendenciaEm('${p.id}')">
       <div class="pend-row">
         <div class="impacto-bar ${impDef.tone}" title="${UI.esc(impDef.label)}"></div>
         <div class="pend-body">
@@ -148,42 +157,21 @@
           </div>
           <div class="small muted" style="margin-top:4px;">origem: ${UI.esc(p.origem||"—")} · resp. ${UI.esc(p.responsavel||"—")}${p.prazo?" · prazo "+C.fmtDate(p.prazo):""}</div>
           ${proximaAcao? `<div class="next-action"><div class="lbl">Próxima ação</div><div class="txt">${UI.esc(proximaAcao)} — ${UI.person(p.responsavel)} ${p.prazo?" · prazo "+C.fmtDate(p.prazo):""}</div></div>`:""}
-          ${expandido ? `
-            ${fluxoStepsHtml(p,false)}
-            ${M.Store.pode("pendencia.atribuir") ? `
-            <div class="field-row" style="margin-top:10px;align-items:flex-end;" onclick="event.stopPropagation()">
-              <div class="field" style="flex:1;"><label>Responsável</label>
-                <select id="pendResp_${p.id}">${M.COLABORADORES.map(c=>`<option ${c.nome===p.responsavel?'selected':''}>${UI.esc(c.nome)}</option>`).join("")}</select>
-              </div>
-              <button class="btn sm" onclick="Act.atribuirPendencia('${p.id}', document.getElementById('pendResp_${p.id}').value)">Atribuir</button>
-            </div>` : ""}
-            <div class="flex-between" style="margin-top:10px;" onclick="event.stopPropagation()">
-              <div class="small" style="font-weight:700;color:var(--ink-soft);">Fotos de abertura</div>
-              ${M.Store.pode("pendencia.editar")? `<button class="btn sm ghost" onclick="Act.adicionarFotosPendencia('${p.id}','abertura')">${UI.icon('camera',11)} + fotos</button>`:""}
-            </div>
-            ${UI.fotosGaleriaHtml(p.fotosAbertura&&p.fotosAbertura.length?p.fotosAbertura:p.fotos) || `<p class="small muted">Nenhuma foto de abertura.</p>`}
-            <div class="flex-between" style="margin-top:10px;" onclick="event.stopPropagation()">
-              <div class="small" style="font-weight:700;color:var(--ink-soft);">Fotos de resolução</div>
-              ${M.Store.pode("pendencia.editar")? `<button class="btn sm ghost" onclick="Act.adicionarFotosPendencia('${p.id}','resolucao')">${UI.icon('camera',11)} + fotos</button>`:""}
-            </div>
-            ${UI.fotosGaleriaHtml(p.fotosResolucao) || `<p class="small muted">Nenhuma foto de resolução${p.status!=='RESOLVIDA'?' — serão exigidas ao marcar como resolvida':''}.</p>`}
-            <div class="small" style="font-weight:700;color:var(--ink-soft);margin-top:10px;">Histórico</div>
-            ${historicoPendenciaHtml(p.id)}
-            <div class="flex-gap" style="margin-top:12px;flex-wrap:wrap;" onclick="event.stopPropagation()">
-              ${p.status!=="RESOLVIDA"? `<button class="btn sm primary" onclick="Act.avancarFluxo('${p.id}')">${UI.icon('chevron-right',12)} Continuar fluxo</button>`:""}
-              ${p.status!=="RESOLVIDA"? `<button class="btn sm" onclick="Act.setPendenciaStatus('${p.id}','RESOLVIDA')">Marcar resolvida</button>`:""}
-              ${p.status==="RESOLVIDA"? `<button class="btn sm" onclick="Act.reabrirPendencia('${p.id}')">Reabrir</button>`:""}
-            </div>
-          ` : fluxoStepsHtml(p,true)}
+          ${fluxoStepsHtml(p,true)}
         </div>
       </div>
     </div>`;
   }
 
   // ---------- card do Kanban (colunas = status, handoff baixa/média-fi) ----------
+  // FASE 7.5 (Detalhe Rápido, item 23): corpo inteiro do card clicável →
+  // drawer (nunca navega, nunca fica inerte — era exatamente esse o bug
+  // descrito no pedido). Sem botão interno neste card hoje; se um for
+  // adicionado depois, precisa de stopPropagation (mesmo padrão já usado em
+  // obras.js/obraDetail.js).
   function cardKanban(p){
     const impDef = M.impactoDef(p.impacto);
-    return `<div class="kcard" onclick="Act.togglePendExpandido('${p.id}');Act.go('#/pendencias')">
+    return `<div class="kcard" onclick="Act.abrirPendenciaEm('${p.id}')">
       <div class="pend-row">
         <div class="impacto-bar ${impDef.tone}"></div>
         <div class="pend-body">
@@ -215,11 +203,13 @@
   // densa que linhaLista (sem fluxo/histórico/fotos expandidos). Clicar
   // expande o item na LISTA COMPLETA abaixo (mesmo M.UIState.pendExpandido
   // que a lista completa já lê — não é um estado paralelo novo).
+  // FASE 7.5 (Detalhe Rápido, item 21): agora abre o Context Drawer, igual
+  // todo outro lugar que mostra Pendência — não expande mais a lista completa.
   function pendCompactRowHtml(p){
     const dias = C.diasDesde(p.abertura);
     const impDef = M.impactoDef(p.impacto);
     const prazoTxt = p.prazo ? (C.diasAte(p.prazo)<=0 ? "vencida" : "prazo "+C.fmtDate(p.prazo)) : `${dias}d em aberto`;
-    return `<div class="compact-row" onclick="Act.togglePendExpandido('${p.id}')">
+    return `<div class="compact-row" onclick="Act.abrirPendenciaEm('${p.id}')">
       <div class="impacto-bar ${impDef.tone}" style="align-self:stretch;"></div>
       <div class="cr-main">
         <div class="cr-top"><span class="cr-title">${UI.esc(p.descricao||p.categoria)}</span>${UI.statusPendenciaChip(p.status)}</div>
@@ -316,7 +306,8 @@
   // (ex.: "Nova pendência" solta em Hoje/Pendências), o form continua
   // pedindo Obra + Móvel do jeito que já funcionava.
   M.Pages.pendenciaFormHtml = function(obraId, ambienteId, movelId){
-    const obras = M.Store.state.obras;
+    // FASE 7.5: rascunho não pode receber pendência manual (item 7).
+    const obras = M.Store.obrasOperacionais();
     // móvel é o contexto mais específico — se veio, ele já resolve obra+ambiente.
     let fMovel = movelId ? M.Store.findMovel(movelId) : null;
     if(fMovel){ obraId = fMovel.o.id; ambienteId = fMovel.a.id; }

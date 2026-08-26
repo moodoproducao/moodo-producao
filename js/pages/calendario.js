@@ -24,7 +24,8 @@
       raw.push(Object.assign({iso, label, cls, obraId}, extra||{}));
     }
     const ativos = filtrosSet || M.UIState.calFiltros;
-    M.Store.state.obras.forEach(o=>{
+    // FASE 7.5: rascunho não entra no Calendário (item 7 do pedido).
+    M.Store.obrasOperacionais().forEach(o=>{
       if(ativos.has("ENTREGAS")) add(o.dataEntregaPrevista, "Entrega — "+o.cliente, "critical", o.id, {tipo:"obra"});
     });
     if(ativos.has("PRODUCAO")){

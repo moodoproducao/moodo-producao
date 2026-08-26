@@ -144,7 +144,10 @@
     "dashboard": ()=> M.Pages.hoje(),
     "producao": ()=> M.Pages.producao(),
     "obras": ()=> M.Pages.obras(),
-    "nova-obra": ()=> M.Pages.novaObra(),
+    // FASE 7.5 (Nova Obra V2) — params[0], quando presente, é o id de um
+    // rascunho já existente pra continuar de onde parou (link "Continuar" da
+    // aba Rascunhos em Obras); sem params, começa um wizard em branco.
+    "nova-obra": (p)=> M.Pages.novaObra(p[0]),
     "obra": (p)=> M.Pages.obraDetail(p[0]),
     "pendencias": ()=> M.Pages.pendencias(),
     "para-finalizar": ()=> M.Pages.paraFinalizar(),

@@ -133,7 +133,8 @@
   };
 
   M.Pages.assistenciaFormHtml = function(obraId){
-    const obras = M.Store.state.obras;
+    // FASE 7.5: rascunho não pode receber assistência (item 7).
+    const obras = M.Store.obrasOperacionais();
     return `
       <div class="modal-head"><h2>Nova assistência</h2><button class="modal-close" data-close>✕</button></div>
       <form id="formAssistencia">

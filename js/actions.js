@@ -12,8 +12,29 @@
     novaVersaoDisponivel: false,
     obraTab: {},
     obraFoco: {}, // {obraId: ambienteId} — ambiente em destaque na página operacional da obra (plano "obra no centro")
-    novaObra: {osFileObj:null, osFileName:null, orcFileObj:null, orcFileName:null,
-      lendo:false, lido:false, erro:null, dados:null, enderecoManual:"", ambientesAjuste:{}},
+    // FASE 7.5 (Nova Obra V2) — wizard em 5 etapas (Início/Dados/Ambientes e
+    // móveis/Revisão/Ativar). obraId só é preenchido depois do primeiro
+    // "Salvar rascunho"/"Ativar obra" — antes disso o rascunho vive só aqui
+    // em UIState, nada é gravado no Store (ver comentário completo em
+    // js/pages/novaObra.js e Act.novaObra* em js/actions.js).
+    novaObra: {
+      obraId:null, step:"inicio", modo:null,
+      // ---- import (PDF) ----
+      osFileObj:null, osFileName:null, orcFileObj:null, orcFileName:null,
+      lendo:false, lido:false, erro:null, dados:null, ambientesAjuste:{},
+      // ---- identificação (comum a import e manual) ----
+      nomeManual:"", numeroOSManual:"", clienteManual:"", responsavelProducao:"",
+      enderecoManual:"", observacoesManual:"", dataEntregaPrevistaManual:"", componentesSelecionados:{},
+      // ---- estrutura manual (só usada quando modo==="manual") ----
+      ambientesManual:[],
+      osDuplicadaConfirmada:false,
+      // CORREÇÃO PÓS-ENTREGA (item 2) — "extração é semente, edição humana
+      // é soberana": true depois da primeira conversão import→ambientesManual
+      // (ver M.Pages.novaObraSincronizarEstruturaImportada). Nunca mais
+      // reconstrói do PDF depois disso, mesmo se a pessoa voltar pra
+      // Estrutura e avançar de novo.
+      estruturaImportadaSincronizada:false,
+    },
     // FASE 4 (§7 handoff): filtros exatos — status/impacto/obraId/responsavel
     // + busca livre. categoria/tipo/prioridade/bloqueiaFechamento saíram da
     // barra (ver comentário em pages/pendencias.js filtrosHtml).
@@ -185,13 +206,14 @@
       Act.rerender();
     },
 
-    // ---------- Hoje (handoff — Fase 3): abre uma pendência específica já
-    // expandida na tela de Pendências, em vez de só linkar pra lista inteira ----------
-    abrirPendenciaEm(pendId){
-      M.UIState.pendExpandido = pendId;
-      M.UIState.pendFiltro = {categoria:"", status:"", tipo:"", obraId:"", responsavel:"", prioridade:"", bloqueiaFechamento:false, busca:""};
-      location.hash = "#/pendencias";
-    },
+    // FASE 7.5 (Detalhe Rápido, item 21): clicar numa pendência em QUALQUER
+    // lugar (Hoje, Pendências lista/Kanban, Obra, Montagem, Assistência)
+    // abre o mesmo Context Drawer — nunca navega automaticamente. Esta
+    // função (chamada de Hoje desde a Fase 3) antes pulava direto pra
+    // #/pendencias com o item expandido lá; esse era exatamente o
+    // comportamento que o pedido classificou como bug ("muitos cards só
+    // navegam ou não fazem nada").
+    abrirPendenciaEm(pendId){ M.Drawer.abrirPendencia(pendId); },
 
     // ---------- kanban ----------
     setKanbanView(v){ M.UIState.kanbanView = v; Act.rerender(); },
@@ -909,7 +931,124 @@
       UI.confirm("Remover este arquivo da obra?", ()=>{ M.Store.removerArquivo(obraId, arquivoId); UI.toast("Arquivo removido."); });
     },
 
-    // ---------- nova obra (tela única — seção 6, leitura real de PDF) ----------
+    // ---------- FASE 7.5 — Edição V2 (Parte B) ----------------------------
+    // Defesa em profundidade de sempre: cada mutator de Store.* NÃO checa
+    // permissão sozinho — só o Act.* que chama checa Store.pode(...) antes
+    // (mesmo padrão de cancelarAssistencia na Fase 7).
+    abrirEditarObra(obraId){
+      const o = M.Store.getObra(obraId); if(!o) return;
+      if(!M.Store.pode("obra.editar")){ UI.toast("Seu perfil não tem permissão para editar esta obra."); return; }
+      UI.openModal(M.Pages.editarObraFormHtml(o), {});
+      const form = document.getElementById("formEditarObra");
+      form.addEventListener("submit", (e)=>{
+        e.preventDefault();
+        const fd = new FormData(form);
+        const patch = {
+          nome: fd.get("nome")||"", cliente: fd.get("cliente")||"", responsavel: fd.get("responsavel")||"",
+          dataEntregaPrevista: fd.get("dataEntregaPrevista")||null, endereco: fd.get("endereco")||"",
+          observacoes: fd.get("observacoes")||"",
+        };
+        const numeroOSNovo = String(fd.get("numeroOS")||"").trim();
+        if(numeroOSNovo !== (o.numeroOS||"")) patch.numeroOS = numeroOSNovo;
+        const motivo = fd.get("motivoOS")||"";
+        const r = M.Store.atualizarObra(obraId, patch, {motivo});
+        if(!r.ok){
+          if(r.motivo==="MOTIVO_OBRIGATORIO_OS"){ UI.toast("Esta obra já está em fase avançada — informe o motivo da alteração do número de OS para continuar."); return; }
+          UI.toast("Não foi possível salvar as alterações."); return;
+        }
+        UI.closeModal();
+        UI.toast(r.semAlteracao? "Nenhuma alteração." : "Obra atualizada.");
+      });
+    },
+    obraAdicionarAmbiente(obraId, inputId){
+      if(!M.Store.pode("obra.editar")){ UI.toast("Seu perfil não tem permissão para editar esta obra."); return; }
+      const el = document.getElementById(inputId);
+      const nome = el ? String(el.value||"").trim() : "";
+      if(!nome){ UI.toast("Digite o nome do ambiente."); return; }
+      const r = M.Store.adicionarAmbiente(obraId, {nome});
+      if(!r.ok){ UI.toast("Não foi possível adicionar o ambiente."); return; }
+      if(el) el.value = "";
+      UI.toast("Ambiente adicionado." + (M.Store.getObra(obraId).revisaoPCPNecessaria ? " Revisão PCP necessária." : ""));
+    },
+    obraRemoverAmbiente(obraId, ambienteId){
+      if(!M.Store.pode("obra.editar")){ UI.toast("Seu perfil não tem permissão para editar esta obra."); return; }
+      UI.confirm("Remover este ambiente? Só é possível se não houver pendência, tarefa, assistência ou progresso vinculado a ele.", ()=>{
+        const r = M.Store.removerAmbiente(obraId, ambienteId);
+        if(!r.ok){
+          if(r.motivo==="VINCULOS_EXISTENTES"){ UI.toast("Não é possível remover — já tem: " + r.vinculos.join(", ") + "."); return; }
+          UI.toast("Não foi possível remover o ambiente."); return;
+        }
+        UI.toast("Ambiente removido.");
+      });
+    },
+    obraAdicionarMovel(obraId, ambienteId, inputId){
+      if(!M.Store.pode("obra.editar")){ UI.toast("Seu perfil não tem permissão para editar esta obra."); return; }
+      const el = document.getElementById(inputId);
+      const nome = el ? String(el.value||"").trim() : "";
+      if(!nome){ UI.toast("Digite o nome do móvel."); return; }
+      const r = M.Store.adicionarMovel(obraId, ambienteId, {nome});
+      if(!r.ok){ UI.toast("Não foi possível adicionar o móvel."); return; }
+      if(el) el.value = "";
+      UI.toast("Móvel adicionado.");
+    },
+    obraRemoverMovel(obraId, ambienteId, movelId){
+      if(!M.Store.pode("obra.editar")){ UI.toast("Seu perfil não tem permissão para editar esta obra."); return; }
+      UI.confirm("Remover este móvel? Só é possível se não houver pendência, tarefa, assistência ou progresso vinculado a ele.", ()=>{
+        const r = M.Store.removerMovel(obraId, ambienteId, movelId);
+        if(!r.ok){
+          if(r.motivo==="VINCULOS_EXISTENTES"){ UI.toast("Não é possível remover — já tem: " + r.vinculos.join(", ") + "."); return; }
+          UI.toast("Não foi possível remover o móvel."); return;
+        }
+        UI.toast("Móvel removido.");
+      });
+    },
+    obraMoverMovel(obraId, movelId, novoAmbienteId){
+      if(!novoAmbienteId) return;
+      if(!M.Store.pode("obra.editar")){ UI.toast("Seu perfil não tem permissão para editar esta obra."); return; }
+      const r = M.Store.moverMovel(obraId, movelId, novoAmbienteId);
+      if(!r.ok){ UI.toast("Não foi possível mover o móvel."); return; }
+      UI.toast("Móvel movido.");
+    },
+    limparRevisaoPCP(obraId){
+      if(!M.Store.pode("obra.editar")){ UI.toast("Seu perfil não tem permissão."); return; }
+      M.Store.limparRevisaoPCP(obraId);
+      UI.toast("Revisão de PCP marcada como concluída.");
+    },
+
+    // ---------- FASE 7.5 — Nova Obra V2 (wizard em etapas) ----------------
+    // Fluxo: Início (escolhe modo) → Dados (identificação) → Ambientes e
+    // móveis (estrutura) → Revisão → Ativar. "Salvar rascunho" funciona em
+    // qualquer etapa a partir de "Dados". Nada é gravado no Store até o
+    // primeiro "Salvar rascunho"/"Ativar obra" (ver comentário completo em
+    // js/pages/novaObra.js).
+    novaObraEscolherModo(modo){
+      const w = M.UIState.novaObra;
+      w.modo = modo; w.step = "dados";
+      Act.rerender();
+    },
+    novaObraIrParaEtapa(step){ M.UIState.novaObra.step = step; Act.rerender(); },
+    novaObraVoltarEtapa(){
+      const ORDEM = ["inicio","dados","estrutura","revisao","ativar"];
+      const w = M.UIState.novaObra;
+      const i = ORDEM.indexOf(w.step);
+      w.step = ORDEM[Math.max(0, i-1)];
+      Act.rerender();
+    },
+    novaObraProximaEtapa(){
+      const ORDEM = ["inicio","dados","estrutura","revisao","ativar"];
+      const w = M.UIState.novaObra;
+      // Saindo de "estrutura" em modo import: converte o rateio/valores/
+      // componentes calculados a partir do PDF pra mesma estrutura editável
+      // (w.ambientesManual) que o modo manual já usa — a partir daqui
+      // (Revisão/Ativar) os dois modos passam a compartilhar um único
+      // caminho de edição/persistência (ver comentário em novaObra.js).
+      if(w.step==="estrutura" && w.modo==="import" && M.Pages.novaObraSincronizarEstruturaImportada){
+        M.Pages.novaObraSincronizarEstruturaImportada();
+      }
+      const i = ORDEM.indexOf(w.step);
+      w.step = ORDEM[Math.min(ORDEM.length-1, i+1)];
+      Act.rerender();
+    },
     novaObraArquivoSelecionado(kind, file){
       if(!file) return;
       const w = M.UIState.novaObra;
@@ -941,6 +1080,14 @@
         } else {
           w.dados = dados;
           w.lido = true;
+          // ITEM 3 do pedido: só preenche o que veio de verdade do PDF, e só
+          // se a pessoa ainda não tiver digitado nada manualmente nesta
+          // sessão (não sobrescreve edição já feita na revisão).
+          if(!w.numeroOSManual && dados.numeroOS) w.numeroOSManual = dados.numeroOS;
+          if(!w.clienteManual && dados.cliente) w.clienteManual = dados.cliente;
+          if(!w.nomeManual && dados.cliente) w.nomeManual = dados.cliente;
+          if(!w.enderecoManual && dados.endereco) w.enderecoManual = dados.endereco;
+          if(!w.dataEntregaPrevistaManual && dados.dataEntregaPrevista) w.dataEntregaPrevistaManual = dados.dataEntregaPrevista;
         }
       }catch(err){
         console.error("[Moodo] erro ao ler PDF:", err);
@@ -950,12 +1097,34 @@
       w.lendo = false;
       Act.rerender();
     },
+    // ITEM 2 do pedido: "não obrigar documento pra criar obra" — reset total
+    // volta pro Início, pronto pra escolher de novo (import ou manual).
     novaObraRecomecar(){
-      M.UIState.novaObra = {osFileObj:null, osFileName:null, orcFileObj:null, orcFileName:null,
-        lendo:false, lido:false, erro:null, dados:null, enderecoManual:"", ambientesAjuste:{}};
+      M.UIState.novaObra = {
+        obraId:null, step:"inicio", modo:null,
+        osFileObj:null, osFileName:null, orcFileObj:null, orcFileName:null,
+        lendo:false, lido:false, erro:null, dados:null, ambientesAjuste:{},
+        nomeManual:"", numeroOSManual:"", clienteManual:"", responsavelProducao:"",
+        enderecoManual:"", observacoesManual:"", dataEntregaPrevistaManual:"", componentesSelecionados:{},
+        ambientesManual:[], osDuplicadaConfirmada:false, estruturaImportadaSincronizada:false,
+      };
       Act.rerender();
     },
-    novaObraSetEndereco(valor){ M.UIState.novaObra.enderecoManual = valor; },
+    novaObraCancelar(){ Act.novaObraRecomecar(); location.hash = "#/obras"; },
+    // setter único pros campos de identificação (comum a import e manual —
+    // substitui os antigos novaObraSetIdentificacao/SetResponsavel, que
+    // nunca existiram de verdade, ver achado de auditoria no relatório).
+    novaObraSetCampo(campo, valor){
+      const CAMPOS_VALIDOS = ["nomeManual","numeroOSManual","clienteManual","responsavelProducao","enderecoManual","observacoesManual","dataEntregaPrevistaManual"];
+      if(CAMPOS_VALIDOS.indexOf(campo)===-1) return;
+      M.UIState.novaObra[campo] = valor;
+      M.UIState.novaObra.osDuplicadaConfirmada = false; // qualquer edição de identificação reabre a confirmação de OS duplicada
+    },
+    novaObraToggleComponente(descricaoItem){
+      const w = M.UIState.novaObra;
+      w.componentesSelecionados[descricaoItem] = !w.componentesSelecionados[descricaoItem];
+      Act.rerender();
+    },
     novaObraSetVendido(valor){
       M.UIState.novaObra.dados.valorFinalVendido = Number(valor);
       M.UIState.novaObra.ambientesAjuste = {}; // valor vendido mudou: rateio automático recalcula do zero
@@ -966,23 +1135,143 @@
       Act.rerender();
     },
     novaObraResetAjustes(){ M.UIState.novaObra.ambientesAjuste = {}; Act.rerender(); },
-    novaObraCriar(){
-      // FASE 1 (V2 — permissões por ação, camada AÇÃO): esta é a lacuna que o
-      // handoff cita como exemplo obrigatório (Montador → Criar Obra deve ser
-      // NÃO nas 3 camadas). Antes desta mudança não havia NENHUMA checagem
-      // aqui — mesmo alguém que chegasse nesta tela por engano (ou por link
-      // direto) conseguia criar a obra de verdade. Agora, mesmo que a pessoa
-      // chegue até aqui (com JS customizado, por exemplo), a ação real não
-      // acontece sem "obra.criar".
-      if(!M.Store.pode("obra.criar")){
-        UI.toast("Seu perfil não tem permissão para criar obra.");
+    novaObraConfirmarOsDuplicada(checked){ M.UIState.novaObra.osDuplicadaConfirmada = !!checked; Act.rerender(); },
+
+    // ---- estrutura manual (modo==="manual") — ambientes/móveis simples,
+    // sem rateio de valor (item 5: hierarquia Cliente→Obra→Ambiente→Móvel,
+    // sem granularidade de peça/operação — isso é DinaBox). ----
+    novaObraManualAddAmbiente(nomeInputId){
+      const el = document.getElementById(nomeInputId);
+      const nome = el ? String(el.value||"").trim() : "";
+      if(!nome){ UI.toast("Digite o nome do ambiente."); return; }
+      M.UIState.novaObra.ambientesManual.push({tid:M.uid("tmpamb"), nome, moveis:[]});
+      if(el) el.value = "";
+      Act.rerender();
+    },
+    novaObraManualRemoverAmbiente(tid){
+      const w = M.UIState.novaObra;
+      w.ambientesManual = w.ambientesManual.filter(a=>a.tid!==tid);
+      Act.rerender();
+    },
+    novaObraManualAddMovel(ambTid, nomeInputId){
+      const el = document.getElementById(nomeInputId);
+      const nome = el ? String(el.value||"").trim() : "";
+      if(!nome){ UI.toast("Digite o nome do móvel."); return; }
+      const w = M.UIState.novaObra;
+      const amb = w.ambientesManual.find(a=>a.tid===ambTid); if(!amb) return;
+      amb.moveis.push({tid:M.uid("tmpmov"), nome});
+      if(el) el.value = "";
+      Act.rerender();
+    },
+    novaObraManualRemoverMovel(ambTid, movTid){
+      const w = M.UIState.novaObra;
+      const amb = w.ambientesManual.find(a=>a.tid===ambTid); if(!amb) return;
+      amb.moveis = amb.moveis.filter(m=>m.tid!==movTid);
+      Act.rerender();
+    },
+    // Usado na etapa Revisão (item 4 do pedido — "com capacidade de edição
+    // completa": corrigir/excluir/adicionar item, mover móvel entre
+    // ambientes, criar ambiente/móvel) — funciona igual em modo import ou
+    // manual, porque a partir da etapa Estrutura os dois já convergem pra
+    // w.ambientesManual (ver M.Pages.novaObraSincronizarEstruturaImportada).
+    novaObraManualMoverMovel(ambTidOrigem, movTid, ambTidDestino){
+      const w = M.UIState.novaObra;
+      if(!ambTidDestino || ambTidOrigem===ambTidDestino) return;
+      const origem = w.ambientesManual.find(a=>a.tid===ambTidOrigem); if(!origem) return;
+      const destino = w.ambientesManual.find(a=>a.tid===ambTidDestino); if(!destino) return;
+      const idx = origem.moveis.findIndex(m=>m.tid===movTid); if(idx===-1) return;
+      const mv = origem.moveis.splice(idx,1)[0];
+      destino.moveis.push(mv);
+      Act.rerender();
+    },
+    novaObraManualRenomearAmbiente(tid, valor){
+      const w = M.UIState.novaObra;
+      const a = w.ambientesManual.find(a=>a.tid===tid); if(!a) return;
+      a.nome = String(valor||"").trim();
+      Act.rerender();
+    },
+    novaObraManualRenomearMovel(ambTid, movTid, valor){
+      const w = M.UIState.novaObra;
+      const a = w.ambientesManual.find(a=>a.tid===ambTid); if(!a) return;
+      const m = a.moveis.find(m=>m.tid===movTid); if(!m) return;
+      m.nome = String(valor||"").trim();
+      Act.rerender();
+    },
+
+    // ---- persistência: salvar rascunho / ativar ----------------------
+    // Mesma defesa em profundidade de sempre (rota + ação — ver comentário
+    // histórico de novaObraCriar): mesmo chegando aqui por fora da tela
+    // normal, sem obra.criar nada é gravado.
+    novaObraSalvarRascunho(){
+      if(!M.Store.pode("obra.criar")){ UI.toast("Seu perfil não tem permissão para criar obra."); return; }
+      const w = M.UIState.novaObra;
+      if(!w.obraId){
+        const nova = M.Pages.novaObraMontarManual();
+        nova.status = "RASCUNHO";
+        const criada = M.Store.criarObra(nova);
+        w.obraId = criada.id;
+        UI.toast("Rascunho salvo — você pode continuar depois em Obras → Rascunhos.");
+      } else {
+        const camposObj = M.Pages.novaObraMontarManual();
+        M.Store.atualizarObra(w.obraId, {
+          nome:camposObj.nome, cliente:camposObj.cliente, numeroOS:camposObj.numeroOS,
+          responsavel:camposObj.responsavel, dataEntregaPrevista:camposObj.dataEntregaPrevista,
+          endereco:camposObj.endereco, observacoes:camposObj.observacoes,
+        });
+        M.Store.atualizarEstruturaRascunho(w.obraId, camposObj.ambientes);
+        UI.toast("Rascunho atualizado.");
+      }
+      Act.rerender();
+    },
+    novaObraAtivar(){
+      if(!M.Store.pode("obra.criar")){ UI.toast("Seu perfil não tem permissão para criar obra."); return; }
+      const w = M.UIState.novaObra;
+      // ITEM 9 do pedido — OS duplicada exige confirmação explícita antes de
+      // ativar (não bloqueia rígido, mas também não deixa passar batido).
+      // CORREÇÃO PÓS-ENTREGA (item 1) — "w.obraId ? null : ..." desligava a
+      // checagem inteira pra qualquer rascunho retomado (rascunho já tem
+      // obraId). Um rascunho retomado ainda precisa saber se ALGUMA OUTRA
+      // obra tem esse número — só a própria obra sendo editada é ignorada.
+      const osAtual = w.modo==="import" ? String(w.numeroOSManual||"").trim() : String(w.numeroOSManual||"").trim();
+      if(osAtual){
+        const existente = M.Store.getObraByNumeroOS(osAtual, w.obraId);
+        if(existente && !w.osDuplicadaConfirmada){
+          UI.toast(`Já existe uma obra com esse número de OS (${existente.nome||existente.cliente}). Confirme "mesmo assim continuar" antes de ativar.`);
+          return;
+        }
+      }
+      // Ativar sempre depende de w.ambientesManual já sincronizado (etapa
+      // Estrutura, ao "Continuar", sincroniza sozinha — ver
+      // Act.novaObraProximaEtapa). Se por algum motivo a pessoa chegou aqui
+      // sem passar por lá (ex.: retomou um rascunho e foi direto pra
+      // Ativar), sincroniza aqui também como rede de segurança.
+      if(w.modo==="import" && !w.ambientesManual.length && w.dados && M.Pages.novaObraSincronizarEstruturaImportada){
+        M.Pages.novaObraSincronizarEstruturaImportada();
+      }
+      if(!w.obraId){
+        const nova = M.Pages.novaObraMontarManual();
+        nova.status = "RASCUNHO";
+        const criada = M.Store.criarObra(nova);
+        w.obraId = criada.id;
+      } else {
+        const camposObj = M.Pages.novaObraMontarManual();
+        M.Store.atualizarObra(w.obraId, {
+          nome:camposObj.nome, cliente:camposObj.cliente, numeroOS:camposObj.numeroOS,
+          responsavel:camposObj.responsavel, dataEntregaPrevista:camposObj.dataEntregaPrevista,
+          endereco:camposObj.endereco, observacoes:camposObj.observacoes,
+        });
+        M.Store.atualizarEstruturaRascunho(w.obraId, camposObj.ambientes);
+      }
+      const r = M.Store.ativarObra(w.obraId);
+      if(!r.ok){
+        UI.toast("Ainda falta: " + (r.faltando||[]).join(", ") + ".");
+        Act.rerender();
         return;
       }
-      const nova = M.Pages.novaObraMontar();
-      M.Store.criarObra(nova);
-      UI.toast("Obra criada com sucesso!");
+      UI.toast("Obra ativada com sucesso!");
+      const obraId = w.obraId;
       Act.novaObraRecomecar();
-      location.hash = "#/obra/"+nova.id;
+      location.hash = "#/obra/"+obraId;
     },
 
     // ---------- calendário ----------

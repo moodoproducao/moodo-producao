@@ -411,6 +411,32 @@ table.tbl tr:hover td{ background:var(--surface-alt); }
 .modal-body{ padding:18px 20px; }
 .modal-foot{ padding:14px 20px; border-top:1px solid var(--border); display:flex; justify-content:flex-end; gap:8px;}
 .modal-close{ background:none;border:none;font-size:18px;cursor:pointer;color:var(--ink-mute); padding:4px;}
+
+/* ============ FASE 7.5 — Context Drawer (Detalhe Rápido) ============
+   Componente único reutilizável (item 21): desktop = painel lateral
+   direito; mobile = overlay de altura confortável (não tela cheia, não
+   modal central). z-index 90: acima do chrome da página, abaixo do modal
+   (100) — se uma ação do drawer abrir um modal, ele empilha por cima. */
+.drawer-overlay{ position:fixed; inset:0; background:rgba(20,15,10,0.4); z-index:90; display:none; }
+.drawer-overlay.open{ display:block; }
+.drawer-panel{
+  position:fixed; top:0; right:0; height:100%; width:420px; max-width:92vw;
+  background:var(--surface); box-shadow:var(--shadow-lg); border-left:1px solid var(--border);
+  overflow-y:auto; transform:translateX(100%); transition:transform .18s ease;
+}
+.drawer-overlay.open .drawer-panel{ transform:translateX(0); }
+@media (max-width:720px){
+  .drawer-panel{ top:auto; bottom:0; left:0; right:0; width:auto; max-width:none; height:86vh;
+    border-left:none; border-top:1px solid var(--border); border-radius:16px 16px 0 0; transform:translateY(100%); }
+  .drawer-overlay.open .drawer-panel{ transform:translateY(0); }
+}
+.drawer-head{ position:sticky; top:0; background:var(--surface); display:flex; align-items:flex-start; justify-content:space-between; gap:10px; padding:16px 18px 12px; border-bottom:1px solid var(--border); z-index:1; }
+.drawer-body{ padding:16px 18px 24px; }
+.drawer-close{ background:none;border:none;font-size:18px;cursor:pointer;color:var(--ink-mute);padding:4px;flex-shrink:0;}
+.drawer-section{ margin-bottom:18px; }
+.drawer-section .lbl{ font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--ink-mute); margin-bottom:5px; }
+.drawer-breadcrumb{ font-size:12px; color:var(--ink-soft); margin-bottom:4px; }
+.drawer-actions{ display:flex; flex-wrap:wrap; gap:8px; padding:14px 18px; border-top:1px solid var(--border); position:sticky; bottom:0; background:var(--surface); }
 .field{ margin-bottom:14px; }
 .field label{ display:block; font-size:11.5px; font-weight:700; color:var(--ink-soft); margin-bottom:5px;}
 .field input, .field select, .field textarea{
@@ -724,11 +750,31 @@ body.tv-mode .sidebar, body.tv-mode .mobile-nav, body.tv-mode .topbar-actions .h
 .pend-row{ display:flex; gap:10px; align-items:stretch; }
 .pend-row .pend-body{ flex:1; min-width:0; }
 
-/* ============ single-page nova obra ============ */
+/* ============ single-page nova obra (import: dados/valores/rateio) ======= */
 .oneform-section{ padding:22px 0; border-bottom:1px solid var(--border); }
 .oneform-section:last-child{ border-bottom:none; }
 .oneform-section .num-badge{ display:inline-flex; align-items:center; justify-content:center; width:24px;height:24px;border-radius:50%; background:var(--brand); color:#fff; font-size:11px; font-weight:800; margin-right:8px;}
 .oneform-section h2{ font-size:15px; display:flex; align-items:center; margin-bottom:14px;}
+
+/* ============ FASE 7.5 — wizard Nova Obra V2 (5 etapas) ============ */
+.wizard-steps{ display:flex; align-items:center; gap:0; margin-bottom:20px; flex-wrap:wrap; }
+.wizard-step{ display:flex; align-items:center; gap:8px; padding:8px 12px; font-size:12px; font-weight:700; color:var(--ink-mute); }
+.wizard-step .wizard-dot{ width:22px;height:22px;border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:11px; background:var(--surface-alt); border:1px solid var(--border-strong); color:var(--ink-mute); flex-shrink:0; }
+.wizard-step.done .wizard-dot{ background:var(--good); border-color:var(--good); color:#fff; }
+.wizard-step.active{ color:var(--ink); }
+.wizard-step.active .wizard-dot{ background:var(--brand); border-color:var(--brand); color:#fff; }
+.wizard-sep{ width:20px; height:1px; background:var(--border-strong); margin:0 2px; flex-shrink:0; }
+@media (max-width:900px){ .wizard-step span.wizard-label{ display:none; } .wizard-sep{ width:10px; } }
+.wizard-actions{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:22px; padding-top:16px; border-top:1px solid var(--border); flex-wrap:wrap; }
+.wizard-actions .wizard-actions-right{ display:flex; gap:8px; flex-wrap:wrap; }
+.opcao-inicio{ cursor:pointer; transition:border-color .12s; border:1px solid var(--border-strong); }
+.opcao-inicio:hover{ border-color:var(--brand); }
+.ambiente-builder{ margin-bottom:12px; }
+.ambiente-builder .movel-row{ display:flex; align-items:center; gap:8px; padding:7px 0; border-bottom:1px solid var(--surface-alt); }
+.ambiente-builder .movel-row:last-child{ border-bottom:none; }
+.ambiente-builder .movel-row input[type=text]{ flex:1; border:1px solid transparent; background:transparent; padding:4px 6px; border-radius:6px; font-size:13px; }
+.ambiente-builder .movel-row input[type=text]:hover, .ambiente-builder .movel-row input[type=text]:focus{ border-color:var(--border-strong); background:var(--surface); }
+.ambiente-builder select.mover-select{ font-size:11px; padding:3px 5px; border-radius:6px; border:1px solid var(--border-strong); }
 
 /* ============================================================
    REFINO VISUAL V2 (mockups aprovados — Hoje/Produção/Pendências/

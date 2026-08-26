@@ -19,7 +19,9 @@
     // com o que a pessoa pode de fato abrir, não pra mudar regra de negócio.
     const restrito = !M.Store.pode("verTodasObras");
     const meuObraIds = restrito ? M.Store.obraIdsDoColaborador(M.Store.state.usuarioAtual) : null;
-    const obras = (restrito ? M.Store.state.obras.filter(o=>meuObraIds.has(o.id)) : M.Store.state.obras)
+    // FASE 7.5: rascunho não entra em Para Finalizar (item 7 do pedido).
+    const obrasBaseFinalizar = M.Store.obrasOperacionais();
+    const obras = (restrito ? obrasBaseFinalizar.filter(o=>meuObraIds.has(o.id)) : obrasBaseFinalizar)
       .slice().sort((a,b)=> C.progressoObra(b).pct - C.progressoObra(a).pct);
     const html = `
       ${restrito? `<div class="help-banner">${UI.icon('user',13)} Mostrando só as obras onde você tem tarefa, pendência ou assistência atribuída.</div>`:""}
