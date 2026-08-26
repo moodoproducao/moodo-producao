@@ -154,31 +154,56 @@
       periodoInicio: base.data, periodoFim,
     }));
   }
-  // ---------- derivação — Assistência (mesma regra do Calendário legado) ----------
-  function eventoDeAssistencia(a){
-    if(a.status==="CONCLUIDA" || !a.prazo) return null;
+  // ---------- derivação — Assistência (Fase 7 — reescrita) ----------
+  // ATÉ A FASE 6: um único evento por assistência, na data de `prazo` (mesma
+  // regra do Calendário legado — nunca uma visita real, só um "lembrete" da
+  // data-limite). Correção do usuário (item 4, aprovada): "confirma que a
+  // Agenda deriva das visitas AGENDADAS (não mais de `prazo`); UMA
+  // assistência pode gerar MÚLTIPLOS eventos derivados (um por visita
+  // agendada); nunca persiste; usar assistenciaId+visitaId como referência
+  // determinística; mudar a data da visita reflete automaticamente; visita
+  // REALIZADA/CANCELADA para de aparecer como compromisso futuro (regra já
+  // existente da Agenda, sem checagem nova)."
+  //
+  // Por isso esta função agora devolve um ARRAY (0, 1 ou N bases — uma por
+  // visita AGENDADA do chamado), nunca mais um evento único ou null solto.
+  // Cada base usa um id DETERMINÍSTICO combinando assistência+visita
+  // ("evt-asst-"+assistenciaId+"-"+visitaId) — a mesma visita sempre produz
+  // o mesmo id entre renders (igual ao id determinístico já usado em
+  // ocorrenciasDeEventoBase pra ocorrência-por-dia), o que mantém estável a
+  // seleção no drawer e a filtragem por id em qualquer lugar. `tipo` continua
+  // SEMPRE "ASSISTENCIA" (nunca "RETORNO" — são dois tipos do catálogo com
+  // significados diferentes: RETORNO é um compromisso manual qualquer,
+  // ASSISTENCIA é sempre derivado de um chamado real).
+  function eventosDeAssistencia(a){
+    if(a.status==="CONCLUIDA" || a.status==="CANCELADA") return [];
+    const agendadas = M.Calc.visitasComStatus(a, "AGENDADA");
+    if(!agendadas.length) return [];
     const obra = a.obraId ? M.Store.getObra(a.obraId) : null;
     const status = a.status==="EM_EXECUCAO" ? "EM_ANDAMENTO" : "AGENDADO";
-    return {
-      id:"evt-asst-"+a.id, tipo:"ASSISTENCIA", titulo:(a.categoria||"Assistência")+" — "+(a.obraNome||a.cliente||""),
+    return agendadas.filter(v=>v.data).map(v=> ({
+      id:"evt-asst-"+a.id+"-"+v.id, tipo:"ASSISTENCIA", titulo:(a.categoria||"Assistência")+" — "+(a.obraNome||a.cliente||""),
       obraId:a.obraId||null, obraNome:a.obraNome||null, cliente:a.cliente||a.obraNome||null,
       endereco: obra ? (obra.endereco||"") : "",
-      data:a.prazo, horaInicio:null, horaFim:null,
-      equipe:a.responsavel||"", observacao:a.descricao||"",
-      origem:"ASSISTENCIA", origemRefId:a.id, status,
-      criadoPor:null, criadoEm:null, atualizadoPor:null, atualizadoEm:null,
-    };
+      data:v.data, horaInicio:v.horaInicio||null, horaFim:v.horaFim||null,
+      equipe:v.tecnico||a.responsavel||"", observacao:v.observacao||a.descricao||"",
+      origem:"ASSISTENCIA", origemRefId:a.id, origemVisitaId:v.id, status,
+      criadoPor:v.criadoPor||null, criadoEm:v.criadoEm||null, atualizadoPor:null, atualizadoEm:null,
+    }));
   }
 
-  // AJUSTE (§1): montagens/assistências entram aqui como OCORRÊNCIAS
-  // (uma por dia do período, todas em memória) — não mais um item único por
-  // obra/assistência. `ocorrenciasDeEventoBase` devolve [base] sem expandir
-  // quando não há período (ex.: Assistência, que só tem uma data), então o
-  // caminho antigo continua idêntico pra tudo que já era de um dia só.
+  // AJUSTE (§1, Fase 6): montagens entram aqui como OCORRÊNCIAS (uma por dia
+  // do período, todas em memória) — `ocorrenciasDeEventoBase` devolve [base]
+  // sem expandir quando não há período (Assistência, uma data só por visita),
+  // então o caminho antigo continua idêntico pra tudo que já era de um dia só.
+  // AJUSTE (Fase 7): assistência agora entra com `.flatMap` (cada assistência
+  // pode contribuir 0..N bases, uma por visita agendada — ver
+  // eventosDeAssistencia acima), não mais `.map(...).filter(Boolean)` de um
+  // evento só.
   function todosEventosBrutos(){
     const manuais = M.Store.state.eventos;
     const montagensBase = M.Store.state.obras.map(eventoMontagemDeObra).filter(Boolean);
-    const assistenciasBase = M.Store.state.assistencias.map(eventoDeAssistencia).filter(Boolean);
+    const assistenciasBase = M.Store.state.assistencias.flatMap(eventosDeAssistencia);
     const ocorrenciasDerivadas = montagensBase.concat(assistenciasBase).flatMap(ocorrenciasDeEventoBase);
     return manuais.concat(ocorrenciasDerivadas);
   }
@@ -246,7 +271,7 @@
 
   M.Agenda = {
     addDias, segundaFeiraDe,
-    eventoMontagemDeObra, eventoDeAssistencia, ocorrenciasDeEventoBase,
+    eventoMontagemDeObra, eventosDeAssistencia, ocorrenciasDeEventoBase,
     todosEventosRaw, eventosDoDia, eventosDoPeriodo, proximosEventos, aplicarFiltrosUI,
   };
 

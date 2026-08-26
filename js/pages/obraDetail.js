@@ -260,6 +260,47 @@
       </div>
 
       ${planejamentoMontagemCardHtml(o)}
+      ${assistenciasResumoObraCardHtml(o)}
+    `;
+  }
+
+  // FASE 7 (Assistências V2 — item 8 da aprovação): "não aprofundar
+  // dependência nem melhorar a aba legada 'Assistências' — o caminho de
+  // acesso primário novo vai por Visão Geral/Resumo → bloco compacto → link
+  // 'Ver atendimentos', SEM criar aba nova nem mexer nas 8 abas existentes."
+  // Por isso este bloco é ADITIVO na Visão Geral (mesmo padrão de
+  // planejamentoMontagemCardHtml acima — bloco contextual, sem aba nova) e
+  // tabAssistencias() (a aba legada, acima) continua 100% intocada — nem
+  // uma linha mudou nela nesta fase.
+  function assistenciasResumoObraCardHtml(o){
+    if(!M.Store.pode("assistencia.ver")) return "";
+    const todas = M.Store.state.assistencias.filter(a=>a.obraId===o.id);
+    if(!todas.length) return "";
+    const abertas = todas.filter(a=>a.status!=="CONCLUIDA" && a.status!=="CANCELADA");
+    const recentes = todas.slice().sort((x,y)=> (y.data||"").localeCompare(x.data||"")).slice(0,3);
+    return `
+      <div class="hr" style="margin:18px 0;"></div>
+      <div class="card pad">
+        <div class="flex-between">
+          <div class="card-title" style="margin:0;">${UI.icon('lifebuoy',13)}Assistências desta obra</div>
+          <span class="flex-gap" style="gap:6px;">
+            ${abertas.length? `<span class="chip warning">${abertas.length} em aberto</span>` : `<span class="chip good">${UI.icon('check',11)} Nenhuma em aberto</span>`}
+            <button class="btn sm ghost" onclick="Act.verAtendimentosDaObra('${o.id}')">Ver atendimentos</button>
+          </span>
+        </div>
+        <div style="margin-top:10px;">
+          ${recentes.map(a=>{
+            const proxima = C.proximaVisitaAgendada(a);
+            return `<div class="check-row" style="cursor:pointer;align-items:flex-start;" onclick="Act.go('#/assistencia/${a.id}')">
+              <span class="dot ${a.status==='CONCLUIDA'?'good':a.status==='CANCELADA'?'blocked':'warning'}" style="margin-top:6px;"></span>
+              <div class="label">
+                <b>${UI.esc(a.categoria)}</b> <span class="small muted">— ${UI.esc(a.descricao)}</span>
+                <div class="small muted" style="margin-top:2px;">${UI.assistenciaStatusChip(a.status)} ${UI.garantiaChip(a.garantia)}${proxima? ` · próxima visita ${C.fmtDate(proxima.data)}`:""}</div>
+              </div>
+            </div>`;
+          }).join("")}
+        </div>
+      </div>
     `;
   }
 

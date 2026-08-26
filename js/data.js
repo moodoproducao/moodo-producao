@@ -301,6 +301,60 @@ window.M = window.M || {};
   ];
   const garantiaDef = (key)=> GARANTIA_DEF.find(g=>g.key===key) || GARANTIA_DEF[2];
 
+  // ---------- Assistências V2 (Fase 7) — status, agrupamento visual e visita ----------
+  // Correção do usuário (item 1 da aprovação): "manter os 7 status já
+  // existentes sem mudança nenhuma... pode acrescentar CANCELADA... o
+  // agrupamento em blocos (Aberta/Agendada/Em atendimento/Aguardando/
+  // Concluída/Cancelada) é só uma camada de EXIBIÇÃO por cima do status já
+  // existente, nunca um status novo persistido no lugar do atual, nem
+  // renomeação de valor salvo."
+  // Movido pra cá (antes vivia só como const local em js/pages/assistencias.js)
+  // porque agora mais de uma tela (lista V2 desktop, Atendimentos mobile,
+  // detalhe, Hoje) precisa do mesmo vocabulário — centralizado em data.js
+  // como o resto dos catálogos de domínio (GARANTIA_DEF, TIPOS_EVENTO_AGENDA
+  // etc.), em vez de duplicado por tela. js/pages/assistencias.js (Fase 5,
+  // legado) passa a ler daqui também — nenhum valor mudou pra ele.
+  const STATUS_ASSISTENCIA_FLOW = ["ABERTA","EM_TRIAGEM","AGENDADA","EM_EXECUCAO","AGUARDANDO_MATERIAL","AGUARDANDO_CLIENTE","CONCLUIDA"];
+  const STATUS_ASSISTENCIA_LABEL = {
+    ABERTA:"Aberta", EM_TRIAGEM:"Em triagem", AGENDADA:"Agendada", EM_EXECUCAO:"Em execução",
+    AGUARDANDO_MATERIAL:"Aguard. material", AGUARDANDO_CLIENTE:"Aguard. cliente", CONCLUIDA:"Concluída",
+    // único acréscimo desta fase (item 1): não entra em STATUS_ASSISTENCIA_FLOW
+    // (o fluxo de "Avançar status" linear existente) porque cancelamento não é
+    // um passo do fluxo — é uma saída lateral, alcançável só por ação própria
+    // (Store.cancelarAssistencia, gateada por "assistencia.cancelar" — matriz
+    // decidida na rodada de ajustes finais; ver comentário perto de PERFIS).
+    CANCELADA:"Cancelada",
+  };
+  // agrupamento conceitual só de EXIBIÇÃO (item 1) — mapeia cada um dos 8
+  // valores de status persistidos pra um "bloco" visual da tela V2. Trocar
+  // esse mapeamento não migra nem reescreve nenhum dado salvo.
+  const GRUPO_ASSISTENCIA_LABEL = {ABERTA:"Aberta", AGENDADA:"Agendada", EM_ATENDIMENTO:"Em atendimento", AGUARDANDO:"Aguardando", CONCLUIDA:"Concluída", CANCELADA:"Cancelada"};
+  const STATUS_ASSISTENCIA_GRUPO = {
+    ABERTA:"ABERTA", EM_TRIAGEM:"ABERTA",
+    AGENDADA:"AGENDADA",
+    EM_EXECUCAO:"EM_ATENDIMENTO",
+    AGUARDANDO_MATERIAL:"AGUARDANDO", AGUARDANDO_CLIENTE:"AGUARDANDO",
+    CONCLUIDA:"CONCLUIDA",
+    CANCELADA:"CANCELADA",
+  };
+  const grupoAssistenciaDef = (status)=> STATUS_ASSISTENCIA_GRUPO[status] || "ABERTA";
+
+  // ---------- visita da assistência (Fase 7) ----------
+  // Correção do usuário (item 3): rejeitou explicitamente "resultado vazio =
+  // agendada" como único sinal de estado — cada visita PRECISA de um campo
+  // `status` próprio e explícito. Verificado antes de nomear: não existe
+  // nenhum vocabulário equivalente já pronto no app (STATUS_EVENTO_AGENDA é
+  // da Agenda, não da visita; STATUS_ASSISTENCIA_* acima é do chamado
+  // inteiro, não de uma visita individual) — por isso este é vocabulário
+  // novo, do jeito mais simples que cobre o pedido (3 valores, igual à
+  // sugestão do próprio usuário).
+  const VISITA_STATUS_DEF = [
+    {key:"AGENDADA",  label:"Agendada",  tone:"brand"},
+    {key:"REALIZADA", label:"Realizada", tone:"good"},
+    {key:"CANCELADA", label:"Cancelada", tone:"blocked"},
+  ];
+  const visitaStatusDef = (key)=> VISITA_STATUS_DEF.find(v=>v.key===key) || VISITA_STATUS_DEF[0];
+
   // ---------- Agenda V2 (Fase 6) — tipos de evento e status ----------
   // §3: "tipos aprovados... não inventar dezenas de tipos" — só estes 6.
   // MONTAGEM e ASSISTENCIA são as duas origens DERIVADAS (computadas ao vivo
@@ -415,6 +469,21 @@ window.M = window.M || {};
   // montagem. Ver Store.mergePermissoes: estado salvo antigo (sem essas
   // chaves) ganha os defaults abaixo automaticamente, sem perder nenhuma
   // customização já feita em outras ações.
+  //
+  // FASE 7 (ajustes finais antes do push, item 1) — "assistencia.cancelar" é
+  // chave NOVA e SEPARADA de "assistencia.editar": cancelar o chamado
+  // inteiro é uma ação de fechamento administrativo (mesmo peso de
+  // concluir), não uma edição de rotina — por isso não reaproveita
+  // assistencia.editar (que ASSISTENCIA/PCP/LIDERANCA já têm). Defaults
+  // definidos explicitamente pelo usuário: ADMIN e GESTOR = true; todos os
+  // demais (PCP, LIDERANCA, OPERADOR, MONTADOR, TV, ASSISTENCIA) = false.
+  // Nenhum perfil é checado por nome em Store.cancelarAssistencia — só
+  // Store.pode("assistencia.cancelar"), igual a qualquer outra ação. Como
+  // Store.mergePermissoes (js/store.js) já preenche toda chave nova de
+  // `fresh` que não existir em `saved` sem tocar nas que já existirem,
+  // qualquer conta com a matriz salva antes desta fase ganha o default
+  // abaixo automaticamente, sem perder nenhuma customização feita por um
+  // administrador em outras ações.
   const PERFIS = [
     {key:"ADMIN",     label:"Administrador",   descricao:"Acesso total, inclusive configurações e permissões.",
       pode:{verValores:true, verIndicadores:true, verDesempenho:true, verRanking:true, verAuditoria:true, verTodasObras:true, verConfiguracoes:true, liberarExcecao:true, editarProcesso:true, editarPermissoes:true,
@@ -422,7 +491,7 @@ window.M = window.M || {};
         "obra.verTodas":true, "obra.verAtribuidas":true, "obra.verContexto":true,
         "pendencia.ver":true, "pendencia.criar":true, "pendencia.editar":true, "pendencia.atribuir":true, "pendencia.resolver":true,
         "montagem.ver":true, "montagem.iniciar":true, "montagem.travar":true, "montagem.destravar":true, "montagem.marcarPronto":true, "montagem.aprovarFinalizacao":true, "montagem.finalizarComRessalva":true,
-        "assistencia.ver":true, "assistencia.criar":true, "assistencia.editar":true, "assistencia.concluir":true,
+        "assistencia.ver":true, "assistencia.criar":true, "assistencia.editar":true, "assistencia.concluir":true, "assistencia.cancelar":true,
         "agenda.ver":true, "agenda.criar":true, "agenda.editar":true,
         "admin.ver":true, "admin.indicadores":true, "admin.auditoria":true, "admin.equipe":true, "admin.configuracoes":true, "admin.usuarios":true,
         "producao.ver":true, "tv.configurar":true}},
@@ -432,7 +501,7 @@ window.M = window.M || {};
         "obra.verTodas":true, "obra.verAtribuidas":true, "obra.verContexto":true,
         "pendencia.ver":true, "pendencia.criar":true, "pendencia.editar":true, "pendencia.atribuir":true, "pendencia.resolver":true,
         "montagem.ver":true, "montagem.iniciar":true, "montagem.travar":true, "montagem.destravar":true, "montagem.marcarPronto":true, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":true,
-        "assistencia.ver":true, "assistencia.criar":true, "assistencia.editar":true, "assistencia.concluir":true,
+        "assistencia.ver":true, "assistencia.criar":true, "assistencia.editar":true, "assistencia.concluir":true, "assistencia.cancelar":false,
         "agenda.ver":true, "agenda.criar":true, "agenda.editar":true,
         "admin.ver":false, "admin.indicadores":false, "admin.auditoria":false, "admin.equipe":false, "admin.configuracoes":false, "admin.usuarios":false,
         "producao.ver":true, "tv.configurar":false}},
@@ -442,7 +511,7 @@ window.M = window.M || {};
         "obra.verTodas":true, "obra.verAtribuidas":true, "obra.verContexto":true,
         "pendencia.ver":true, "pendencia.criar":true, "pendencia.editar":true, "pendencia.atribuir":true, "pendencia.resolver":true,
         "montagem.ver":true, "montagem.iniciar":true, "montagem.travar":true, "montagem.destravar":true, "montagem.marcarPronto":true, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":true,
-        "assistencia.ver":true, "assistencia.criar":true, "assistencia.editar":true, "assistencia.concluir":true,
+        "assistencia.ver":true, "assistencia.criar":true, "assistencia.editar":true, "assistencia.concluir":true, "assistencia.cancelar":false,
         "agenda.ver":true, "agenda.criar":true, "agenda.editar":true,
         // AJUSTE (rodada 3, item 2): admin.indicadores era true — passa a
         // false. Indicadores/Desempenho saem do menu do Líder por padrão
@@ -460,7 +529,7 @@ window.M = window.M || {};
         "obra.verTodas":false, "obra.verAtribuidas":false, "obra.verContexto":true,
         "pendencia.ver":true, "pendencia.criar":true, "pendencia.editar":false, "pendencia.atribuir":false, "pendencia.resolver":false,
         "montagem.ver":false, "montagem.iniciar":false, "montagem.travar":false, "montagem.destravar":false, "montagem.marcarPronto":false, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":false,
-        "assistencia.ver":false, "assistencia.criar":false, "assistencia.editar":false, "assistencia.concluir":false,
+        "assistencia.ver":false, "assistencia.criar":false, "assistencia.editar":false, "assistencia.concluir":false, "assistencia.cancelar":false,
         "agenda.ver":false, "agenda.criar":false, "agenda.editar":false,
         "admin.ver":false, "admin.indicadores":false, "admin.auditoria":false, "admin.equipe":false, "admin.configuracoes":false, "admin.usuarios":false,
         "producao.ver":true, "tv.configurar":false}},
@@ -470,7 +539,7 @@ window.M = window.M || {};
         "obra.verTodas":false, "obra.verAtribuidas":true, "obra.verContexto":true,
         "pendencia.ver":true, "pendencia.criar":true, "pendencia.editar":false, "pendencia.atribuir":false, "pendencia.resolver":false,
         "montagem.ver":true, "montagem.iniciar":true, "montagem.travar":true, "montagem.destravar":true, "montagem.marcarPronto":true, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":false,
-        "assistencia.ver":false, "assistencia.criar":false, "assistencia.editar":false, "assistencia.concluir":false,
+        "assistencia.ver":false, "assistencia.criar":false, "assistencia.editar":false, "assistencia.concluir":false, "assistencia.cancelar":false,
         "agenda.ver":true, "agenda.criar":false, "agenda.editar":false,
         "admin.ver":false, "admin.indicadores":false, "admin.auditoria":false, "admin.equipe":false, "admin.configuracoes":false, "admin.usuarios":false,
         "producao.ver":true, "tv.configurar":false}},
@@ -480,7 +549,7 @@ window.M = window.M || {};
         "obra.verTodas":true, "obra.verAtribuidas":true, "obra.verContexto":true,
         "pendencia.ver":true, "pendencia.criar":false, "pendencia.editar":false, "pendencia.atribuir":false, "pendencia.resolver":false,
         "montagem.ver":true, "montagem.iniciar":false, "montagem.travar":false, "montagem.destravar":false, "montagem.marcarPronto":false, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":false,
-        "assistencia.ver":false, "assistencia.criar":false, "assistencia.editar":false, "assistencia.concluir":false,
+        "assistencia.ver":false, "assistencia.criar":false, "assistencia.editar":false, "assistencia.concluir":false, "assistencia.cancelar":false,
         "agenda.ver":false, "agenda.criar":false, "agenda.editar":false,
         "admin.ver":false, "admin.indicadores":true, "admin.auditoria":false, "admin.equipe":false, "admin.configuracoes":false, "admin.usuarios":false,
         "producao.ver":true, "tv.configurar":false}},
@@ -491,7 +560,7 @@ window.M = window.M || {};
         "obra.verTodas":true, "obra.verAtribuidas":true, "obra.verContexto":true,
         "pendencia.ver":true, "pendencia.criar":true, "pendencia.editar":true, "pendencia.atribuir":true, "pendencia.resolver":true,
         "montagem.ver":true, "montagem.iniciar":true, "montagem.travar":true, "montagem.destravar":true, "montagem.marcarPronto":true, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":true,
-        "assistencia.ver":true, "assistencia.criar":true, "assistencia.editar":true, "assistencia.concluir":true,
+        "assistencia.ver":true, "assistencia.criar":true, "assistencia.editar":true, "assistencia.concluir":true, "assistencia.cancelar":true,
         "agenda.ver":true, "agenda.criar":true, "agenda.editar":true,
         "admin.ver":true, "admin.indicadores":true, "admin.auditoria":true, "admin.equipe":true, "admin.configuracoes":false, "admin.usuarios":false,
         "producao.ver":true, "tv.configurar":false}},
@@ -501,7 +570,7 @@ window.M = window.M || {};
         "obra.verTodas":false, "obra.verAtribuidas":false, "obra.verContexto":true,
         "pendencia.ver":true, "pendencia.criar":true, "pendencia.editar":true, "pendencia.atribuir":false, "pendencia.resolver":true,
         "montagem.ver":false, "montagem.iniciar":false, "montagem.travar":false, "montagem.destravar":false, "montagem.marcarPronto":false, "montagem.aprovarFinalizacao":false, "montagem.finalizarComRessalva":false,
-        "assistencia.ver":true, "assistencia.criar":true, "assistencia.editar":true, "assistencia.concluir":true,
+        "assistencia.ver":true, "assistencia.criar":true, "assistencia.editar":true, "assistencia.concluir":true, "assistencia.cancelar":false,
         "agenda.ver":true, "agenda.criar":true, "agenda.editar":true,
         "admin.ver":false, "admin.indicadores":false, "admin.auditoria":false, "admin.equipe":false, "admin.configuracoes":false, "admin.usuarios":false,
         "producao.ver":false, "tv.configurar":false}},
@@ -1003,6 +1072,13 @@ window.M = window.M || {};
   M.CHECKLIST_ENCERRAMENTO_AMBIENTE = CHECKLIST_ENCERRAMENTO_AMBIENTE;
   M.GARANTIA_DEF = GARANTIA_DEF;
   M.garantiaDef = garantiaDef;
+  M.STATUS_ASSISTENCIA_FLOW = STATUS_ASSISTENCIA_FLOW;
+  M.STATUS_ASSISTENCIA_LABEL = STATUS_ASSISTENCIA_LABEL;
+  M.GRUPO_ASSISTENCIA_LABEL = GRUPO_ASSISTENCIA_LABEL;
+  M.STATUS_ASSISTENCIA_GRUPO = STATUS_ASSISTENCIA_GRUPO;
+  M.grupoAssistenciaDef = grupoAssistenciaDef;
+  M.VISITA_STATUS_DEF = VISITA_STATUS_DEF;
+  M.visitaStatusDef = visitaStatusDef;
   M.TIPOS_EVENTO_AGENDA = TIPOS_EVENTO_AGENDA;
   M.tipoEventoDef = tipoEventoDef;
   M.STATUS_EVENTO_AGENDA = STATUS_EVENTO_AGENDA;

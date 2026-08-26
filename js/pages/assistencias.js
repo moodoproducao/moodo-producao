@@ -10,23 +10,38 @@
   const M = window.M, UI = M.UI, C = M.Calc;
   M.Pages = M.Pages || {};
 
-  const STATUS_FLOW = ["ABERTA","EM_TRIAGEM","AGENDADA","EM_EXECUCAO","AGUARDANDO_MATERIAL","AGUARDANDO_CLIENTE","CONCLUIDA"];
-  const STATUS_LABEL = {ABERTA:"Aberta",EM_TRIAGEM:"Em triagem",AGENDADA:"Agendada",EM_EXECUCAO:"Em execução",
-    AGUARDANDO_MATERIAL:"Aguard. material",AGUARDANDO_CLIENTE:"Aguard. cliente",CONCLUIDA:"Concluída"};
+  // FASE 7 (Assistências V2): STATUS_FLOW/STATUS_LABEL passam a viver em
+  // js/data.js (M.STATUS_ASSISTENCIA_FLOW/M.STATUS_ASSISTENCIA_LABEL) —
+  // centralizado, porque agora mais telas além desta (V2 desktop/mobile,
+  // Hoje) precisam do mesmo vocabulário. Aliases locais mantidos só pra não
+  // reescrever toda referência abaixo neste arquivo legado.
+  const STATUS_FLOW = M.STATUS_ASSISTENCIA_FLOW;
+  const STATUS_LABEL = M.STATUS_ASSISTENCIA_LABEL;
 
+  // FASE 7 (item 3 — visita ganha status próprio): usa
+  // M.Calc.statusEfetivoVisita em vez de inferir na mão aqui — cobre visita
+  // legada sem `status` gravado e visita nova (AGENDADA/REALIZADA/CANCELADA)
+  // com a mesma regra, em qualquer tela que precise mostrar o histórico.
   function visitasHtml(a){
     if(!a.visitas || !a.visitas.length) return `<p class="small muted">Nenhuma visita registrada ainda.</p>`;
-    return `<div style="margin:8px 0;">${a.visitas.map((v,i)=>`
+    return `<div style="margin:8px 0;">${a.visitas.map((v,i)=>{
+      const statusV = M.Calc.statusEfetivoVisita(v);
+      const def = M.visitaStatusDef(statusV);
+      return `
       <div class="check-row" style="align-items:flex-start;">
-        <span class="dot ${v.desfecho==='RESOLVIDA'?'good':'warning'}" style="margin-top:6px;"></span>
+        <span class="dot ${def.tone}" style="margin-top:6px;"></span>
         <div class="label">
-          <b>Visita ${i+1}</b> <span class="small muted">· ${C.fmtDate(v.data)} · ${UI.esc(v.tecnico||"—")}</span>
+          <b>Visita ${i+1}</b> <span class="small muted">· ${C.fmtDate(v.data)}${v.horaInicio?" "+v.horaInicio:""} · ${UI.esc(v.tecnico||"—")}</span>
           ${v.diagnostico? `<div class="small muted" style="margin-top:2px;">${UI.esc(v.diagnostico)}</div>`:""}
-          <div style="margin-top:4px;">${v.desfecho==='RESOLVIDA'? `<span class="chip good">${UI.icon('check',11)} Resolvida</span>` : `<span class="chip warning">Retorno necessário</span>`}
-            ${v.pendenciaGeradaId? ` <a href="#/pendencias" onclick="event.stopPropagation()" class="small">gerou pendência →</a>`:""}</div>
+          <div style="margin-top:4px;">
+            <span class="chip ${def.tone}">${def.label}</span>
+            ${statusV==="REALIZADA"? (v.desfecho==='RESOLVIDA'? ` <span class="chip good">${UI.icon('check',11)} Resolvida</span>` : ` <span class="chip warning">Retorno necessário</span>`) : ""}
+            ${v.pendenciaGeradaId? ` <a href="#/pendencias" onclick="event.stopPropagation()" class="small">gerou pendência →</a>`:""}
+          </div>
           ${v.fotos&&v.fotos.length? UI.fotosGaleriaHtml(v.fotos) : ""}
         </div>
-      </div>`).join("")}</div>`;
+      </div>`;
+    }).join("")}</div>`;
   }
 
   // FASE 2 (Navegação V2): "Atendimentos" (rota nova "#/atendimentos", menu
@@ -76,7 +91,7 @@
         ${expandido? UI.fotosGaleriaHtml(a.fotos) : ""}
         ${expandido? `<div class="hr" style="margin:10px 0;"></div><label style="font-size:11.5px;font-weight:700;color:var(--ink-soft);">Visitas</label>${visitasHtml(a)}` : ""}
         ${expandido? `<div class="field" style="margin-top:6px;max-width:280px;" onclick="event.stopPropagation()">
-          <label>Garantia</label>
+          <label>Cobertura</label>
           <select onchange="Act.mudarGarantiaAssistencia('${a.id}', this.value)">
             ${M.GARANTIA_DEF.map(g=>`<option value="${g.key}" ${a.garantia===g.key?'selected':''}>${g.label}</option>`).join("")}
           </select>
@@ -142,7 +157,10 @@
           </div>
           <div class="field-row">
             <div class="field"><label>Prazo</label><input type="date" name="prazo"></div>
-            <div class="field"><label>Garantia</label><select name="garantia">${M.GARANTIA_DEF.map(g=>`<option value="${g.key}" ${g.key==='EM_ANALISE'?'selected':''}>${g.label}</option>`).join("")}</select></div>
+            <!-- FASE 7 (item 2, aprovado): rótulo na tela vira "Cobertura" —
+                 o campo salvo continua exatamente igual a garantia (M.GARANTIA_DEF),
+                 nenhum campo paralelo cobertura foi criado. -->
+            <div class="field"><label>Cobertura</label><select name="garantia">${M.GARANTIA_DEF.map(g=>`<option value="${g.key}" ${g.key==='EM_ANALISE'?'selected':''}>${g.label}</option>`).join("")}</select></div>
           </div>
           ${UI.fotoFieldHtml("fotos")}
         </div>
@@ -151,32 +169,50 @@
   };
 
   // ---------- registrar visita (Fase 5 — handoff: N visitas por chamado) ----------
-  M.Pages.registrarVisitaHtml = function(assistId){
+  // FASE 7 (item 3 e item 9): agora aceita um `visitaId` opcional — quando
+  // vem preenchido (visita já estava AGENDADA), o modal COMPLETA aquela
+  // visita em vez de anunciar uma "visita nº N+1" nova; sem visitaId,
+  // comportamento 100% igual ao de sempre (cria e já realiza no mesmo passo).
+  // Copy do desfecho "Resolvida" mudou (item 9/§12 — regra dura mantida):
+  // resolver uma visita NUNCA conclui a assistência sozinho mais — quem
+  // conclui é sempre uma ação própria e explícita (ver
+  // M.Pages.concluirAssistenciaHtml). A opção antiga "já tenho a próxima
+  // visita agendada" saiu deste formulário — agendar visita agora é sua
+  // própria ação (Act.abrirAgendarVisita/M.Pages.agendarVisitaHtml),
+  // não mais um valor escondido dentro do formulário de registro de visita.
+  M.Pages.registrarVisitaHtml = function(assistId, visitaId){
     const a = M.Store.state.assistencias.find(x=>x.id===assistId); if(!a) return "";
-    const nVisitas = (a.visitas||[]).length;
+    const visitas = a.visitas||[];
+    const visitaAgendada = visitaId ? visitas.find(v=>v.id===visitaId) : null;
+    const nVisitas = visitas.length;
+    const numeroDaVisita = visitaAgendada ? visitas.indexOf(visitaAgendada)+1 : nVisitas+1;
+    const tituloPasso = visitaAgendada
+      ? `Completar visita agendada de ${C.fmtDate(visitaAgendada.data)}${visitaAgendada.horaInicio?" às "+visitaAgendada.horaInicio:""}`
+      : (nVisitas? `${nVisitas} visita(s) anterior(es) — esta será a visita nº ${numeroDaVisita}.` : "");
     return `
       <div class="modal-head"><div><h2>Registrar visita</h2><div class="meta">${UI.esc(a.descricao)} · ${UI.esc(a.obraNome||a.cliente||"")}</div></div><button class="modal-close" data-close>✕</button></div>
-      <form id="formRegistrarVisita" data-assist-id="${a.id}">
+      <form id="formRegistrarVisita" data-assist-id="${a.id}" ${visitaAgendada?`data-visita-id="${visitaAgendada.id}"`:""}>
         <div class="modal-body">
-          ${nVisitas? `<div class="small muted" style="margin-bottom:10px;">${nVisitas} visita(s) anterior(es) — esta será a visita nº ${nVisitas+1}.</div>${visitasHtml(a)}<div class="hr" style="margin:10px 0;"></div>` : ""}
+          ${tituloPasso? `<div class="small muted" style="margin-bottom:10px;">${UI.esc(tituloPasso)}</div>`:""}
+          ${nVisitas? `${visitasHtml(a)}<div class="hr" style="margin:10px 0;"></div>` : ""}
           <div class="field-row">
-            <div class="field"><label>Data da visita</label><input type="date" name="data" value="${M.todayISO()}"></div>
-            <div class="field"><label>Técnico</label><select name="tecnico">${M.COLABORADORES.map(c=>`<option ${c.nome===M.Store.state.usuarioAtual?'selected':''}>${c.nome}</option>`).join("")}</select></div>
+            <div class="field"><label>Data da visita</label><input type="date" name="data" value="${(visitaAgendada&&visitaAgendada.data)||M.todayISO()}"></div>
+            <div class="field"><label>Técnico</label><select name="tecnico">${M.COLABORADORES.map(c=>`<option ${(visitaAgendada?visitaAgendada.tecnico===c.nome:c.nome===M.Store.state.usuarioAtual)?'selected':''}>${c.nome}</option>`).join("")}</select></div>
           </div>
-          <div class="field"><label>Diagnóstico / o que foi feito</label><textarea name="diagnostico" placeholder="Descreva o que foi encontrado e/ou executado nesta visita"></textarea></div>
+          <div class="field"><label>Diagnóstico / o que foi feito</label><textarea name="diagnostico" placeholder="Descreva o que foi encontrado e/ou executado nesta visita">${UI.esc((visitaAgendada&&visitaAgendada.diagnostico)||"")}</textarea></div>
           ${UI.fotoFieldHtml("fotosVisita")}
           <div class="field" style="margin-top:6px;">
             <label>Resultado desta visita</label>
-            <label class="check-row"><input type="radio" name="desfecho" value="RESOLVIDA" style="width:auto;" onchange="document.getElementById('retornoFields').style.display='none'"> Resolvida — encerra a assistência</label>
-            <label class="check-row"><input type="radio" name="desfecho" value="RETORNO_NECESSARIO" style="width:auto;" checked onchange="document.getElementById('retornoFields').style.display='block'"> Retorno necessário — mantém aberta e agenda a próxima</label>
+            <label class="check-row"><input type="radio" name="desfecho" value="RESOLVIDA" style="width:auto;" onchange="document.getElementById('retornoFields').style.display='none'"> Resolvida — nenhum retorno necessário</label>
+            <label class="check-row"><input type="radio" name="desfecho" value="RETORNO_NECESSARIO" style="width:auto;" checked onchange="document.getElementById('retornoFields').style.display='block'"> Retorno necessário — mantém aberta</label>
           </div>
           <div id="retornoFields">
             <div class="field"><label>O que falta agora?</label>
               <select name="proximoStatus">
                 <option value="AGUARDANDO_MATERIAL">Aguardando peça/fornecedor</option>
                 <option value="AGUARDANDO_CLIENTE">Aguardando cliente</option>
-                <option value="AGENDADA">Já tenho a próxima visita agendada</option>
               </select>
+              <p class="small muted" style="margin-top:4px;">Pra agendar a próxima visita, use "Agendar visita" depois de salvar esta.</p>
             </div>
             <div class="field">
               <label><input type="checkbox" id="chkPeca" style="width:auto;margin-right:6px;" onchange="document.getElementById('pecaFields').style.display=this.checked?'block':'none'">Precisa de peça nova? (abre pendência tipo Assistência)</label>
@@ -191,6 +227,92 @@
         <div class="modal-foot">
           <button type="button" class="btn" data-close>Cancelar</button>
           <button type="submit" class="btn primary">Salvar visita</button>
+        </div>
+      </form>
+    `;
+  };
+
+  // ---------- agendar visita (Fase 7 — novo) ----------
+  M.Pages.agendarVisitaHtml = function(assistId){
+    const a = M.Store.state.assistencias.find(x=>x.id===assistId); if(!a) return "";
+    return `
+      <div class="modal-head"><div><h2>Agendar visita</h2><div class="meta">${UI.esc(a.descricao)} · ${UI.esc(a.obraNome||a.cliente||"")}</div></div><button class="modal-close" data-close>✕</button></div>
+      <form id="formAgendarVisita" data-assist-id="${a.id}">
+        <div class="modal-body">
+          <div class="field-row">
+            <div class="field"><label>Data</label><input type="date" name="data" required value="${M.todayISO()}"></div>
+            <div class="field"><label>Horário (opcional)</label><input type="time" name="horaInicio"></div>
+          </div>
+          <div class="field"><label>Técnico/responsável</label><select name="tecnico">${M.COLABORADORES.map(c=>`<option ${c.nome===a.responsavel?'selected':''}>${c.nome}</option>`).join("")}</select></div>
+          <div class="field"><label>Observação (opcional)</label><textarea name="observacao" placeholder="Combinado com o cliente, ponto de referência, etc."></textarea></div>
+        </div>
+        <div class="modal-foot">
+          <button type="button" class="btn" data-close>Cancelar</button>
+          <button type="submit" class="btn primary">Agendar visita</button>
+        </div>
+      </form>
+    `;
+  };
+
+  // ---------- concluir assistência (Fase 7 — novo; gate em Store.concluirAssistencia) ----------
+  M.Pages.concluirAssistenciaHtml = function(assistId){
+    const a = M.Store.state.assistencias.find(x=>x.id===assistId); if(!a) return "";
+    return `
+      <div class="modal-head"><div><h2>Concluir assistência</h2><div class="meta">${UI.esc(a.descricao)} · ${UI.esc(a.obraNome||a.cliente||"")}</div></div><button class="modal-close" data-close>✕</button></div>
+      <form id="formConcluirAssistencia" data-assist-id="${a.id}">
+        <div class="modal-body">
+          <div class="field"><label>Cobertura definida</label>
+            <select name="garantia">${M.GARANTIA_DEF.map(g=>`<option value="${g.key}" ${a.garantia===g.key?'selected':''}>${g.label}</option>`).join("")}</select>
+            <p class="small muted" style="margin-top:4px;">Precisa estar diferente de "Em análise" pra concluir.</p>
+          </div>
+          <div class="field"><label>Resultado final</label><textarea name="resultado" required placeholder="O que foi resolvido / entregue ao cliente">${UI.esc(a.resultado||"")}</textarea></div>
+        </div>
+        <div class="modal-foot">
+          <button type="button" class="btn" data-close>Cancelar</button>
+          <button type="submit" class="btn primary">Concluir</button>
+        </div>
+      </form>
+    `;
+  };
+
+  // ---------- cancelar VISITA agendada (ajustes finais, item 4 — motivo obrigatório) ----------
+  M.Pages.cancelarVisitaHtml = function(assistId, visitaId){
+    const a = M.Store.state.assistencias.find(x=>x.id===assistId); if(!a) return "";
+    const v = (a.visitas||[]).find(x=>x.id===visitaId); if(!v) return "";
+    return `
+      <div class="modal-head"><div><h2>Cancelar visita agendada</h2><div class="meta">${UI.esc(a.descricao)} · ${C.fmtDate(v.data)}${v.horaInicio?" "+v.horaInicio:""}</div></div><button class="modal-close" data-close>✕</button></div>
+      <form id="formCancelarVisita" data-assist-id="${a.id}" data-visita-id="${v.id}">
+        <div class="modal-body">
+          <p class="small muted">A assistência continua com o status atual — só esta visita deixa de aparecer na Agenda.</p>
+          <div class="field"><label>Motivo do cancelamento</label><textarea name="motivo" required placeholder="Ex.: cliente remarcou, técnico indisponível..."></textarea></div>
+        </div>
+        <div class="modal-foot">
+          <button type="button" class="btn" data-close>Voltar</button>
+          <button type="submit" class="btn danger">Cancelar visita</button>
+        </div>
+      </form>
+    `;
+  };
+
+  // ---------- cancelar ASSISTÊNCIA inteira (ajustes finais, itens 1/2/3) ----------
+  // Gate real fica 100% em Store.cancelarAssistencia (permissão
+  // "assistencia.cancelar" + motivo obrigatório) — este modal só é alcançável
+  // por quem já vê o botão "Cancelar assistência" (o próprio template do
+  // detalhe checa Store.pode("assistencia.cancelar") antes de renderizar o
+  // botão — ver js/pages/assistenciasV2.js), então não existe um caminho de
+  // UI que chegue aqui sem a permissão — o Store recusa de qualquer forma.
+  M.Pages.cancelarAssistenciaHtml = function(assistId){
+    const a = M.Store.state.assistencias.find(x=>x.id===assistId); if(!a) return "";
+    return `
+      <div class="modal-head"><div><h2>Cancelar assistência</h2><div class="meta">${UI.esc(a.descricao)} · ${UI.esc(a.obraNome||a.cliente||"")}</div></div><button class="modal-close" data-close>✕</button></div>
+      <form id="formCancelarAssistencia" data-assist-id="${a.id}">
+        <div class="modal-body">
+          <p class="small muted">Isso encerra o chamado inteiro (status → Cancelada). Nenhuma visita, foto, pendência ou histórico é apagado — tudo continua registrado. Esta ação não pode ser desfeita pela tela.</p>
+          <div class="field"><label>Motivo do cancelamento</label><textarea name="motivo" required placeholder="Ex.: cliente desistiu, chamado duplicado, item fora de garantia recusado pelo cliente..."></textarea></div>
+        </div>
+        <div class="modal-foot">
+          <button type="button" class="btn" data-close>Voltar</button>
+          <button type="submit" class="btn danger">Cancelar assistência</button>
         </div>
       </form>
     `;

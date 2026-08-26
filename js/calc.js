@@ -571,19 +571,61 @@
   // ---------- assistências (seção 44-47) ----------
   function assistenciasResumo(){
     const all = M.Store.state.assistencias;
-    const abertas = all.filter(a=>a.status!=="CONCLUIDA");
+    // Fase 7 (item 1): CANCELADA (novo valor) não é "aberta" — mesmo
+    // raciocínio de CONCLUIDA, uma assistência cancelada não "precisa de
+    // ação" nem entra em nenhum dos sub-totais abaixo.
+    const abertas = all.filter(a=>a.status!=="CONCLUIDA" && a.status!=="CANCELADA");
+    const canceladas = all.filter(a=>a.status==="CANCELADA");
     const vencidas = abertas.filter(a=> a.prazo && diasAte(a.prazo)<0);
     // Fase 5 (handoff, wireframe "3c Assistência — painel pós-entrega"):
     // "14 solicitações abertas / 3 atrasadas / 4 aguardando peça / 5 agendadas
     // esta semana" e "6 chamados ativos · 2 com retorno necessário".
     const aguardandoPeca = abertas.filter(a=>a.status==="AGUARDANDO_MATERIAL").length;
     const agendadas = abertas.filter(a=>a.status==="AGENDADA").length;
-    const comRetorno = abertas.filter(a=>{
-      const v = a.visitas && a.visitas.length? a.visitas[a.visitas.length-1] : null;
-      return v && v.desfecho==="RETORNO_NECESSARIO";
-    }).length;
-    return {total:all.length, abertas:abertas.length, vencidas:vencidas.length, concluidas: all.length-abertas.length,
+    const comRetorno = abertas.filter(assistenciaComRetornoPendente).length;
+    return {total:all.length, abertas:abertas.length, vencidas:vencidas.length,
+      concluidas: all.length-abertas.length-canceladas.length, canceladas:canceladas.length,
       aguardandoPeca, agendadas, comRetorno};
+  }
+
+  // ---------- Assistências V2 (Fase 7) ----------
+  // Leitura EFETIVA do status de uma visita — cobre visitas legadas (Fase 5,
+  // seed/produção) que ainda não têm o campo `status` novo: se já tem
+  // desfecho registrado, ela já aconteceu (REALIZADA); sem desfecho e sem
+  // status, nunca foi nem agendada explicitamente nem realizada — trata como
+  // AGENDADA (mesmo raciocínio "sem dado = estado inicial" já usado em
+  // outros defaults do sistema). Usar esta função em vez de ler `v.status`
+  // direto em qualquer lugar novo — assim nenhuma visita antiga precisa ser
+  // reescrita/migrada fisicamente pra continuar aparecendo certo.
+  function statusEfetivoVisita(v){
+    if(!v) return null;
+    if(v.status) return v.status;
+    return v.desfecho ? "REALIZADA" : "AGENDADA";
+  }
+  function visitasComStatus(a, status){
+    return (a && a.visitas || []).filter(v=> statusEfetivoVisita(v)===status);
+  }
+  // próxima visita AGENDADA (a mais próxima no tempo) — fonte única usada
+  // tanto pela derivação da Agenda (M.Agenda.eventosDeAssistencia) quanto
+  // pela lista/detalhe V2 e por Hoje, pra nunca ter duas contas diferentes
+  // de "qual é a próxima visita".
+  function proximaVisitaAgendada(a){
+    const agendadas = visitasComStatus(a,"AGENDADA").slice().sort((x,y)=> (x.data||"").localeCompare(y.data||""));
+    return agendadas[0] || null;
+  }
+  // última visita REALIZADA (a mais recente por data) — usada pra "retorno
+  // necessário" e pra mostrar o último diagnóstico/resultado no resumo.
+  function ultimaVisitaRealizada(a){
+    const realizadas = visitasComStatus(a,"REALIZADA").slice().sort((x,y)=> (x.data||"").localeCompare(y.data||""));
+    return realizadas.length ? realizadas[realizadas.length-1] : null;
+  }
+  // "este chamado tem um retorno necessário ainda não agendado?" — última
+  // visita REALIZADA terminou em RETORNO_NECESSARIO e ninguém agendou a
+  // próxima visita ainda. Se já tem uma AGENDADA no futuro, o retorno já
+  // está tratado (deixa de contar aqui, passa a contar como "agendada").
+  function assistenciaComRetornoPendente(a){
+    const ultima = ultimaVisitaRealizada(a);
+    return !!(ultima && ultima.desfecho==="RETORNO_NECESSARIO" && !proximaVisitaAgendada(a));
   }
 
   // ---------- auditoria (seção 48-52) ----------
@@ -883,6 +925,7 @@
     paraFinalizar, paraFinalizarTotal, alertasGlobais,
     indiceDesempenho, pendenciasDoColaborador, rankingColaboradores,
     assistenciasResumo, auditoriaResumo, metaMensalProgresso, origemProblemaResumo,
+    statusEfetivoVisita, visitasComStatus, proximaVisitaAgendada, ultimaVisitaRealizada, assistenciaComRetornoPendente,
     producaoHoje, tvResumoProducao, tvAtencaoItens,
   };
 })();

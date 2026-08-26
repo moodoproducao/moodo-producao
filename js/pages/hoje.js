@@ -187,8 +187,12 @@
     // deixando de fora IMPEDE_FINALIZAR vencido/envelhecido; a função
     // compartilhada já cobre os dois casos).
     const excecoes = ctx.pendAbertas.filter(C.pendenciaCritica).sort(C.compararPrioridadePendencia);
-    const assistCriticas = M.Store.state.assistencias.filter(a=> a.status!=="CONCLUIDA" &&
-      ((a.prazo && C.diasAte(a.prazo)<0) || (a.visitas&&a.visitas.length && a.visitas[a.visitas.length-1].desfecho==="RETORNO_NECESSARIO")));
+    // FASE 7 (Assistências V2): critério trocado de "prazo vencido" (campo
+    // solto, sem relação com visita real) pra "retorno necessário sem
+    // próxima visita já agendada" (C.assistenciaComRetornoPendente — mesma
+    // função usada pela tela V2/Hoje-Assistência, nenhuma regra paralela).
+    const assistCriticas = M.Store.state.assistencias.filter(a=> a.status!=="CONCLUIDA" && a.status!=="CANCELADA"
+      && (a.prazo && C.diasAte(a.prazo)<0 || C.assistenciaComRetornoPendente(a)));
 
     // REFINO VISUAL V2 (ajustes finais, §1): faixa de KPI — responde "qual a
     // escala do que precisa de mim agora", nunca um dashboard administrativo.
@@ -466,14 +470,21 @@
   }
 
   // ---- ASSISTÊNCIA: atendimentos do dia, pendências dos atendimentos,
-  // retornos, próximos compromissos. Assistência V2 completa não é desta
-  // fase — aqui é só a fila do dia.
+  // retornos, próximos compromissos.
+  // FASE 7 (Assistências V2, §20): consome o modelo novo — próxima visita
+  // AGENDADA em vez de `prazo` solto, C.assistenciaComRetornoPendente em vez
+  // de reler `visitas[última].desfecho` na mão — nenhuma regra duplicada em
+  // relação à tela V2/Agenda. Links agora vão pro Atendimentos V2
+  // (#/atendimentos) e pro detalhe (#/assistencia/:id), não mais a lista V1.
   function grupoAssistencia(ctx){
-    const meusAtendimentos = M.Store.state.assistencias.filter(a=> a.responsavel===ctx.nome && a.status!=="CONCLUIDA")
-      .sort((a,b)=> C.diasAte(a.prazo||"2099-01-01") - C.diasAte(b.prazo||"2099-01-01"));
+    const meusAtendimentos = M.Store.state.assistencias.filter(a=> a.responsavel===ctx.nome && a.status!=="CONCLUIDA" && a.status!=="CANCELADA")
+      .sort((a,b)=>{
+        const da = C.proximaVisitaAgendada(a), db = C.proximaVisitaAgendada(b);
+        return (da?da.data:"9999") < (db?db.data:"9999") ? -1 : 1;
+      });
     const pendAtendimentos = ctx.pendAbertas.filter(p=>p.tipo==="Assistência").sort(C.compararPrioridadePendencia);
-    const retornos = M.Store.state.assistencias.filter(a=> a.status!=="CONCLUIDA" && a.visitas && a.visitas.length
-      && a.visitas[a.visitas.length-1].desfecho==="RETORNO_NECESSARIO" && (!ctx.restrito || a.responsavel===ctx.nome));
+    const retornos = M.Store.state.assistencias.filter(a=> a.status!=="CONCLUIDA" && a.status!=="CANCELADA"
+      && C.assistenciaComRetornoPendente(a) && (!ctx.restrito || a.responsavel===ctx.nome));
 
     const kpis = UI.kpiRow([
       UI.kpiTile({icon:'calendar', label:'Atendimentos do dia', value:meusAtendimentos.length}),
@@ -485,22 +496,25 @@
     return `
       ${kpis}
       <div class="card pad">
-        <div class="card-title"><span style="flex:1;">Atendimentos do dia</span><a href="#/assistencias" class="btn ghost sm">ver todos</a></div>
-        ${meusAtendimentos.length ? meusAtendimentos.slice(0,6).map(a=>`
-          <div class="alert-item" style="cursor:pointer;" onclick="Act.go('#/assistencias')">
+        <div class="card-title"><span style="flex:1;">Atendimentos do dia</span><a href="#/atendimentos" class="btn ghost sm">ver todos</a></div>
+        ${meusAtendimentos.length ? meusAtendimentos.slice(0,6).map(a=>{
+          const proxima = C.proximaVisitaAgendada(a);
+          return `
+          <div class="alert-item" style="cursor:pointer;" onclick="Act.go('#/assistencia/${a.id}')">
             ${UI.assistenciaStatusChip(a.status)}
             <div><div>${esc(a.categoria)} — ${esc(a.obraNome||a.cliente||"")}</div>
-            <div class="alert-sub">${a.prazo? (C.diasAte(a.prazo)<=0?"vencida":"prazo "+C.fmtDate(a.prazo)) : "sem prazo"}</div></div>
-          </div>`).join("") : `<p class="small muted">Nenhum atendimento seu em aberto.</p>`}
+            <div class="alert-sub">${proxima? "próxima visita "+C.fmtDate(proxima.data) : "sem visita agendada"}</div></div>
+          </div>`;
+        }).join("") : `<p class="small muted">Nenhum atendimento seu em aberto.</p>`}
       </div>
       <div class="hr"></div>
       <div class="grid-2">
         ${blocoLista({titulo:"Pendências dos atendimentos", icon:"alert", total:pendAtendimentos.length, href:"#/pendencias",
           itens:pendAtendimentos.slice(0,6).map(alertItemPendenciaHtml), vazio:"Nenhuma pendência de assistência em aberto."})}
         ${blocoLista({titulo:"Retornos necessários", icon:"clock", tone:"warning", total:retornos.length,
-          itens:retornos.slice(0,6).map(a=>`<div class="alert-item" style="cursor:pointer;" onclick="Act.go('#/assistencias')">
+          itens:retornos.slice(0,6).map(a=>`<div class="alert-item" style="cursor:pointer;" onclick="Act.go('#/assistencia/${a.id}')">
             <div><div>${esc(a.categoria)} — ${esc(a.obraNome||a.cliente||"")}</div>
-            <div class="alert-sub">retorno necessário</div></div></div>`),
+            <div class="alert-sub">retorno necessário — sem visita agendada</div></div></div>`),
           vazio:"Nenhum retorno pendente."})}
       </div>
       <div class="hr"></div>

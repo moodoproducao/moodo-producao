@@ -34,6 +34,11 @@
     auditoriaFiltro: {periodo:30, categoria:"", somenteExcecoes:false, area:"", usuario:"", obraId:"", view:"cronologico"},
     assistFiltro: {status:"", garantia:""},
     assistExpandido: null,
+    // FASE 7 (Assistências V2) — filtro/expansão da tela nova (desktop lista
+    // + detalhe, mobile Atendimentos). Efêmero, mesmo padrão de assistFiltro
+    // acima — nunca persistido em localStorage/Supabase.
+    atendFiltro: {status:"", garantia:"", grupo:"", obraId:"", busca:""},
+    atendExpandidoId: null,
     tvWidgets: null, // preenchido a partir de M.Store.state se necessário
     fluxoDraft: null, // {tipo, passos:[]} — rascunho em edição do editor de fluxo padrão de pendência (item 12)
     // FASE 2 (Navegação V2 — ajuste pós-aprovação, checagem de mobile
@@ -546,14 +551,27 @@
         UI.closeModal(); UI.toast("Assistência registrada.");
       });
     },
+    // FASE 7 (item 9): CONCLUIDA não passa mais por aqui (Store.atualizarAssistencia
+    // recusa essa transição — ver Store.concluirAssistencia/Act.abrirConcluirAssistencia).
     setAssistenciaStatus(id, status){
       const r = M.Store.atualizarAssistencia(id,{status});
-      if(!r.ok){ UI.toast("Seu perfil não tem permissão para alterar esta assistência."); Act.rerender(); return; }
+      if(!r.ok){
+        UI.toast(r.motivo==="USE_CONCLUIR_ASSISTENCIA" ? "Use \"Concluir\" pra encerrar esta assistência." : "Seu perfil não tem permissão para alterar esta assistência.");
+        Act.rerender(); return;
+      }
       UI.toast("Status da assistência atualizado.");
     },
     setAssistFiltro(campo,val){ M.UIState.assistFiltro[campo]=val; Act.rerender(); },
     toggleAssistExpandido(id){ M.UIState.assistExpandido = (M.UIState.assistExpandido===id)?null:id; Act.rerender(); },
-    // ---------- N visitas por chamado + garantia (Fase 5 — handoff) ----------
+    // ---------- Assistências V2 (Fase 7) — filtros/expansão da tela nova ----------
+    setAtendFiltro(campo,val){ M.UIState.atendFiltro[campo]=val; Act.rerender(); },
+    limparAtendFiltro(){ M.UIState.atendFiltro = {status:"", garantia:"", grupo:"", obraId:"", busca:""}; Act.rerender(); },
+    toggleAtendExpandido(id){ M.UIState.atendExpandidoId = (M.UIState.atendExpandidoId===id)?null:id; Act.rerender(); },
+    verAtendimentosDaObra(obraId){
+      M.UIState.atendFiltro = Object.assign({status:"", garantia:"", grupo:"", busca:""}, {obraId});
+      Act.go("#/assistencias");
+    },
+    // ---------- N visitas por chamado + garantia (Fase 5 — handoff; Fase 7 — Cobertura) ----------
     mudarGarantiaAssistencia(id, garantia){
       const r = M.Store.definirGarantiaAssistencia(id, garantia);
       if(!r.ok){
@@ -561,10 +579,148 @@
         Act.rerender(); // desfaz visualmente a troca no <select>, já que o estado não mudou
         return;
       }
-      UI.toast("Garantia atualizada.");
+      UI.toast("Cobertura atualizada.");
     },
-    abrirRegistrarVisita(assistId){
-      UI.openModal(M.Pages.registrarVisitaHtml(assistId), {});
+    // FASE 7 (item 3/4): abre uma visita já AGENDADA pra ser realizada — o
+    // form vem PREENCHIDO com data/técnico já combinados (ver
+    // M.Pages.registrarVisitaHtml(assistId, visitaId)).
+    abrirAgendarVisita(assistId){
+      UI.openModal(M.Pages.agendarVisitaHtml(assistId), {});
+      const form = document.getElementById("formAgendarVisita");
+      form.addEventListener("submit", (e)=>{
+        e.preventDefault();
+        const fd = new FormData(form);
+        if(!fd.get("data")){ UI.toast("Escolha a data da visita."); return; }
+        const r = M.Store.agendarVisitaAssistencia(assistId, {
+          data: fd.get("data"), horaInicio: fd.get("horaInicio")||null,
+          tecnico: fd.get("tecnico"), observacao: fd.get("observacao"),
+        });
+        if(!r.ok){ UI.toast("Seu perfil não tem permissão para agendar esta visita."); return; }
+        UI.closeModal(); UI.toast("Visita agendada — já aparece na Agenda.");
+      });
+    },
+    // AJUSTES FINAIS (item 4): motivo passou a ser obrigatório em
+    // Store.cancelarVisitaAssistencia — UI.confirm (só sim/não) não coleta
+    // texto, por isso trocado por um modal próprio com textarea required
+    // (M.Pages.cancelarVisitaHtml), mesmo padrão dos outros forms desta fase.
+    abrirCancelarVisita(assistId, visitaId){
+      const html = M.Pages.cancelarVisitaHtml(assistId, visitaId);
+      if(!html) return;
+      UI.openModal(html, {});
+      const form = document.getElementById("formCancelarVisita");
+      form.addEventListener("submit", (e)=>{
+        e.preventDefault();
+        const fd = new FormData(form);
+        const motivo = (fd.get("motivo")||"").trim();
+        if(!motivo){ UI.toast("Descreva o motivo do cancelamento."); return; }
+        const r = M.Store.cancelarVisitaAssistencia(assistId, visitaId, motivo);
+        if(!r.ok){
+          const msgs = {
+            SEM_PERMISSAO:"Seu perfil não tem permissão para cancelar esta visita.",
+            MOTIVO_OBRIGATORIO:"Descreva o motivo do cancelamento.",
+            VISITA_NAO_ESTA_AGENDADA:"Esta visita não está mais agendada.",
+          };
+          UI.toast(msgs[r.motivo] || "Não foi possível cancelar esta visita.");
+          return;
+        }
+        UI.closeModal(); UI.toast("Visita cancelada.");
+      });
+    },
+    // AJUSTES FINAIS (itens 1/2): abre o formulário de cancelamento da
+    // ASSISTÊNCIA INTEIRA (não a visita). O botão que chama isto só é
+    // renderizado quando Store.pode("assistencia.cancelar") já é true (ver
+    // js/pages/assistenciasV2.js) — mas o gate de verdade é sempre o do
+    // Store, nunca a UI.
+    abrirCancelarAssistencia(assistId){
+      const html = M.Pages.cancelarAssistenciaHtml(assistId);
+      if(!html) return;
+      UI.openModal(html, {});
+      const form = document.getElementById("formCancelarAssistencia");
+      form.addEventListener("submit", (e)=>{
+        e.preventDefault();
+        const fd = new FormData(form);
+        const motivo = (fd.get("motivo")||"").trim();
+        if(!motivo){ UI.toast("Descreva o motivo do cancelamento."); return; }
+        const r = M.Store.cancelarAssistencia(assistId, {motivo});
+        if(!r.ok){
+          const msgs = {
+            SEM_PERMISSAO:"Seu perfil não tem permissão para cancelar esta assistência.",
+            MOTIVO_OBRIGATORIO:"Descreva o motivo do cancelamento.",
+            ASSISTENCIA_CONCLUIDA:"Esta assistência já foi concluída — não é possível cancelar uma assistência concluída.",
+          };
+          UI.toast(msgs[r.motivo] || "Não foi possível cancelar esta assistência.");
+          return;
+        }
+        UI.closeModal();
+        UI.toast(r.jaCancelada ? "Esta assistência já estava cancelada." : "Assistência cancelada.");
+        Act.rerender();
+      });
+    },
+    // FASE 7 (item 9/§12): "Concluir" agora abre um passo próprio — pede
+    // resultado final + confirma a cobertura (Store.concluirAssistencia
+    // recusa se cobertura ainda estiver "Em análise", se houver visita
+    // AGENDADA pendente, ou pendência bloqueante vinculada ao chamado).
+    abrirConcluirAssistencia(assistId){
+      UI.openModal(M.Pages.concluirAssistenciaHtml(assistId), {});
+      const form = document.getElementById("formConcluirAssistencia");
+      form.addEventListener("submit", (e)=>{
+        e.preventDefault();
+        const fd = new FormData(form);
+        const garantia = fd.get("garantia");
+        const resultado = (fd.get("resultado")||"").trim();
+        if(!resultado){ UI.toast("Descreva o resultado final."); return; }
+        if(garantia !== M.Store.state.assistencias.find(x=>x.id===assistId).garantia){
+          const rg = M.Store.definirGarantiaAssistencia(assistId, garantia);
+          if(!rg.ok){ UI.toast(rg.motivo==="SEM_PERMISSAO" ? "Só PCP, Liderança ou Administrador podem marcar \"Cortesia\"." : "Não foi possível salvar a cobertura."); return; }
+        }
+        const r = M.Store.concluirAssistencia(assistId, {resultado});
+        if(!r.ok){
+          const msgs = {
+            SEM_PERMISSAO:"Seu perfil não tem permissão para concluir esta assistência.",
+            COBERTURA_NAO_DEFINIDA:"Defina a cobertura (não pode ficar \"Em análise\") antes de concluir.",
+            RESULTADO_OBRIGATORIO:"Descreva o resultado final.",
+            VISITA_AGENDADA_PENDENTE:"Ainda existe uma visita agendada pendente — realize ou cancele antes de concluir.",
+            PENDENCIA_BLOQUEANTE:"Existe uma pendência vinculada que bloqueia o fechamento — resolva antes de concluir.",
+          };
+          UI.toast(msgs[r.motivo] || "Não foi possível concluir esta assistência.");
+          return;
+        }
+        UI.closeModal(); UI.toast("Assistência concluída.");
+      });
+    },
+    // FASE 7 (item 6, aprovado): "Abrir pendência" a partir de uma
+    // assistência precisa HERDAR o contexto (obra/ambiente/móvel — os que
+    // existirem) e marcar origem="ASSISTENCIA" + assistenciaId — nenhuma das
+    // duas coisas o formulário genérico de pendência (Act.openPendenciaForm)
+    // faz sozinho, por isso este wrapper próprio em vez de reusar aquele
+    // direto (o MODAL/HTML é o mesmo — M.Pages.pendenciaFormHtml — só o
+    // submit ganha os 2 campos extras).
+    abrirPendenciaDeAssistencia(assistId){
+      const a = M.Store.state.assistencias.find(x=>x.id===assistId); if(!a) return;
+      UI.openModal(M.Pages.pendenciaFormHtml(a.obraId||null, null, null), {});
+      const form = document.getElementById("formPendencia");
+      form.addEventListener("submit", async (e)=>{
+        e.preventDefault();
+        const fd = new FormData(form);
+        const mv = fd.get("movelId");
+        const f = mv ? M.Store.findMovel(mv) : null;
+        const fotos = await uploadArquivos(fd.getAll("fotos").filter(x=>x && x.size), (fd.get("obraId")||a.obraId||"avulsas")+"/pendencias");
+        const r = M.Store.criarPendencia({
+          obraId: fd.get("obraId")||a.obraId||null,
+          ambienteId: fd.get("ambienteId")||null, movelId: mv||null,
+          obraNome: (f? f.o.cliente : (M.Store.getObra(fd.get("obraId"))||{}).cliente) || a.obraNome,
+          ambienteNome: f? f.a.nome : (a.ambienteNome||""), movelNome: f? f.m.nome : (fd.get("descricaoLivre")||a.movelNome||"Item avulso"),
+          categoria: fd.get("categoria"), tipo: fd.get("tipo")||null, impacto: fd.get("impacto")||null,
+          descricao: fd.get("descricao"), responsavel: fd.get("responsavel")||a.responsavel,
+          fornecedor: fd.get("fornecedor"), prazo: fd.get("prazo")||null, prioridade: fd.get("prioridade"),
+          origem:"ASSISTENCIA", assistenciaId: a.id, fotos,
+        });
+        if(!r.ok){ UI.toast("Seu perfil não tem permissão para criar pendência."); return; }
+        UI.closeModal(); UI.toast("Pendência criada e vinculada a esta assistência.");
+      });
+    },
+    abrirRegistrarVisita(assistId, visitaId){
+      UI.openModal(M.Pages.registrarVisitaHtml(assistId, visitaId), {});
       const form = document.getElementById("formRegistrarVisita");
       form.addEventListener("submit", async (e)=>{
         e.preventDefault();
@@ -576,6 +732,7 @@
           ? {categoria: fd.get("pecaCategoria"), descricao: fd.get("pecaDescricao"), prazo: fd.get("pecaPrazo")||null}
           : null;
         const r = M.Store.registrarVisitaAssistencia(assistId, {
+          visitaId: form.dataset.visitaId || undefined,
           data: fd.get("data")||M.todayISO(), tecnico: fd.get("tecnico"), diagnostico: fd.get("diagnostico"),
           fotos: fotosVisita, desfecho, proximoStatus: fd.get("proximoStatus"), pecaNecessaria,
         });
@@ -584,7 +741,7 @@
           return;
         }
         UI.closeModal();
-        UI.toast(r.pendenciaGerada? "Visita registrada — pendência de peça criada." : (desfecho==="RESOLVIDA"? "Assistência resolvida!" : "Visita registrada — retorno necessário."));
+        UI.toast(r.pendenciaGerada? "Visita registrada — pendência de peça criada." : (desfecho==="RESOLVIDA"? "Visita registrada como resolvida." : "Visita registrada — retorno necessário."));
       });
     },
 
@@ -911,9 +1068,12 @@
     },
     // "Editar" de evento derivado leva ao contexto de origem (§15) — nunca
     // edita dado de Montagem/Assistência a partir da Agenda.
+    // FASE 7 (item 9 — "abrir atendimento" aponta pro detalhe V2): antes
+    // levava pra lista V1 já expandida (#/assistencias + assistExpandido);
+    // agora leva direto pro detalhe do chamado (Resumo/Visitas/Pendências/
+    // Fotos/Histórico — M.Pages.assistenciaDetail).
     abrirAssistenciaDaAgenda(assistId){
-      M.UIState.assistExpandido = assistId;
-      Act.go("#/assistencias");
+      Act.go("#/assistencia/"+assistId);
     },
 
     // ---------- lotes ----------

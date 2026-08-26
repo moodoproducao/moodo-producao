@@ -33,10 +33,12 @@
     pendencias:   {label:"Pendências",   icon:"alert",    route:"#/pendencias"},
     montagem:     {label:"Montagem",     icon:"wrench",   route:"#/montagem",     perm:"montagem.ver"},
     assistencias: {label:"Assistências", icon:"lifebuoy", route:"#/assistencias", perm:"assistencia.ver"},
-    // "Atendimentos" (Assistência): alias/recorte de rótulo sobre a MESMA
-    // tela/rota de Assistências de hoje, mesma permissão — NÃO é o fluxo
-    // final de Assistência V2/mobile (isso é fase própria, ainda não
-    // iniciada). Ver aviso completo em js/pages/assistencias.js.
+    // "Atendimentos" (Assistência): FASE 7 — deixa de ser alias/recorte de
+    // rótulo sobre a tela de Assistências de hoje (ver aviso antigo, agora
+    // superado, em js/pages/assistencias.js) e passa a apontar pra tela
+    // mobile-first própria de Assistência V2 (M.Pages.atendimentos, novo
+    // arquivo js/pages/assistenciasV2.js). Mesma permissão de sempre
+    // (assistencia.ver — nenhuma nova).
     atendimentos: {label:"Atendimentos", icon:"lifebuoy", route:"#/atendimentos", perm:"assistencia.ver"},
     // "Agenda": Fase 6 — Agenda V2 de verdade (M.Pages.agenda, js/pages/
     // agenda.js), mesma permissão de sempre (agenda.ver, nenhuma nova). O
@@ -107,6 +109,12 @@
     "montagem": "montagem.ver",
     "para-finalizar": "montagem.ver",
     "assistencias": "assistencia.ver",
+    // FASE 7 (Assistências V2) — detalhe de UM chamado ("assistencia/:id").
+    // Mesma permissão de base (assistencia.ver); o escopo de QUAL chamado
+    // pode ser aberto (só o das obras do próprio contexto, sem
+    // verTodasObras) é decidido por Store.assistenciasVisiveis(), a mesma
+    // lógica já usada pra montar a lista — não um guard novo/paralelo.
+    "assistencia": "assistencia.ver",
     "indicadores": "admin.indicadores",
     "desempenho": "admin.indicadores",
     "auditoria": "admin.auditoria",
@@ -147,7 +155,14 @@
     "calendario": ()=> M.Pages.calendario(),
     "lotes": ()=> M.Pages.lotes(),
     "montagem": ()=> M.Pages.montagem(),
-    "assistencias": ()=> M.Pages.assistencias(),
+    // FASE 7 (Assistências V2) — a rota principal desktop passa a servir a
+    // tela V2 nova (KPIs compactos + 3 colunas + lista filtrável — ver
+    // js/pages/assistenciasV2.js). js/pages/assistencias.js (Fase 5) e sua
+    // M.Pages.assistencias() continuam no repo, intocadas — só deixam de
+    // ser alcançadas por este link/rota principal (ver relatório de entrega).
+    "assistencias": ()=> M.Pages.assistenciasV2(),
+    // FASE 7 — detalhe de um chamado (Resumo/Visitas/Pendências/Fotos/Histórico).
+    "assistencia": (p)=> M.Pages.assistenciaDetail(p[0]),
     "chao-de-fabrica": ()=> M.Pages.chaoDeFabrica(),
     "tv": ()=> M.Pages.tv(),
     "equipe": ()=> M.Pages.equipe(),
@@ -157,7 +172,10 @@
     // que já existia (ver comentário em MENU_ITEMS acima e nos respectivos
     // js/pages/*.js — nenhuma tabela nem tela nova foi criada):
     "minhas-obras": ()=> M.Pages.obras(true),
-    "atendimentos": ()=> M.Pages.assistencias(true),
+    // FASE 7 — mobile-first de verdade (cards, filtros rápidos, botões de
+    // ação grandes — ver js/pages/assistenciasV2.js), não mais o alias de
+    // rótulo sobre a tela V1 que era até a Fase 6.
+    "atendimentos": ()=> M.Pages.atendimentos(),
     // FASE 6 — Agenda V2 (M.Pages.agenda). "calendario" continua respondendo
     // por compatibilidade de link antigo, agora apontando pro mesmo
     // M.Pages.calendario() de sempre (nada mudou nele nesta fase).

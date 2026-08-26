@@ -292,7 +292,13 @@
   function assistenciaStatusChip(s){
     const map = {ABERTA:["critical","Aberta"], EM_TRIAGEM:["warning","Em triagem"], AGENDADA:["brand","Agendada"],
       EM_EXECUCAO:["warning","Em execução"], AGUARDANDO_MATERIAL:["warning","Aguard. material"],
-      AGUARDANDO_CLIENTE:["neutral","Aguard. cliente"], CONCLUIDA:["good","Concluída"]};
+      AGUARDANDO_CLIENTE:["neutral","Aguard. cliente"], CONCLUIDA:["good","Concluída"],
+      // AJUSTES FINAIS (item 2) — CANCELADA já existia como valor de dado
+      // (data.js, Fase 7) mas nunca tinha chip próprio porque nenhuma tela
+      // ainda produzia esse status; sem esta entrada o chip caía no
+      // fallback ["neutral", s] e mostrava a chave crua "CANCELADA" em vez
+      // do rótulo. Agora que Store.cancelarAssistencia existe, corrigido.
+      CANCELADA:["blocked","Cancelada"]};
     const [cls,label] = map[s]||["neutral",s];
     return `<span class="chip ${cls}">${label}</span>`;
   }

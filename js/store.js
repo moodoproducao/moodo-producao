@@ -1284,7 +1284,7 @@
       emit();
     },
 
-    // ---------- assistências (seção 44-47) ----------
+    // ---------- assistências (seção 44-47; V2 — Fase 7) ----------
     // FASE 1 (V2 — permissões por ação, rodada 2): "criar/editar/concluir
     // assistência" do inventário pedido — mesmo raciocínio de pendência:
     // guard no próprio Store, contrato {ok,...} igual ao resto.
@@ -1298,42 +1298,129 @@
       state.assistencias.unshift(item);
       Store.audit({categoria:"QUALIDADE", tipo:"ASSISTENCIA_ABERTA", obraId:a.obraId,
         descricao:`Assistência aberta — ${a.categoria}: ${a.descricao}`, motivo:a.origem||"-"});
+      // FASE 7 (item 9 da aprovação — fechar a lacuna disclosed no design):
+      // Store.log alimenta o Histórico DA OBRA (aba Histórico do detalhe de
+      // obra) — mecanismo diferente de Store.audit (site-wide, Admin>
+      // Auditoria). Até aqui só o audit existia; abertura/atendimento de
+      // assistência nunca aparecia no histórico da própria obra. Só loga
+      // quando há obra vinculada (cliente avulso não tem histórico de obra).
+      if(a.obraId) Store.log(a.obraId, "ASSISTENCIA_ABERTA", `Assistência aberta — ${a.categoria}: ${a.descricao}`, {assistenciaId:item.id});
       emit();
       return {ok:true, assistencia:item};
     },
+    // FASE 7 (item 9): conclusão passa a ter REGRA PRÓPRIA (ver
+    // Store.concluirAssistencia abaixo) — nunca mais um `Object.assign`
+    // direto pra CONCLUIDA sem checar nada. atualizarAssistencia continua
+    // servindo pra qualquer OUTRA transição de status/campo (triagem,
+    // agendada→execução, aguardando peça/cliente etc.), mas recusa
+    // explicitamente a transição pra CONCLUIDA — quem tenta isso precisa
+    // passar por concluirAssistencia, que aplica o gate.
+    //
+    // AJUSTES FINAIS (item 3): mesmo raciocínio agora vale pra CANCELADA —
+    // só Store.cancelarAssistencia (abaixo) pode gravar esse status, com sua
+    // própria permissão ("assistencia.cancelar", separada de
+    // "assistencia.editar") e seu próprio gate (motivo obrigatório, não pode
+    // cancelar já concluída). Sem essa checagem aqui, qualquer perfil com
+    // "assistencia.editar" (ASSISTENCIA/PCP/LIDERANCA/GESTOR/ADMIN) poderia
+    // contornar a trava de permissão nova só chamando
+    // atualizarAssistencia(id,{status:"CANCELADA"}) direto — testado
+    // explicitamente (ver "bypass" na suíte).
     atualizarAssistencia(id, patch){
-      // concluir é mais sensível que só editar status/campos — ganha
-      // permissão própria ("assistencia.concluir"), igual ao par
-      // pendencia.editar/pendencia.resolver acima.
-      const acaoNecessaria = patch.status==="CONCLUIDA" ? "assistencia.concluir" : "assistencia.editar";
-      if(!Store.pode(acaoNecessaria)) return {ok:false, motivo:"SEM_PERMISSAO"};
+      if(patch && patch.status==="CONCLUIDA") return {ok:false, motivo:"USE_CONCLUIR_ASSISTENCIA"};
+      if(patch && patch.status==="CANCELADA") return {ok:false, motivo:"USE_CANCELAR_ASSISTENCIA"};
+      if(!Store.pode("assistencia.editar")) return {ok:false, motivo:"SEM_PERMISSAO"};
       const a = state.assistencias.find(x=>x.id===id); if(!a) return {ok:false, motivo:"NAO_ENCONTRADA"};
       Object.assign(a, patch);
-      if(patch.status==="CONCLUIDA"){
-        Store.audit({categoria:"QUALIDADE", tipo:"ASSISTENCIA_CONCLUIDA", obraId:a.obraId, descricao:`Assistência concluída — ${a.categoria}: ${a.descricao}`});
-      }
       emit();
       return {ok:true};
     },
-    // ---------- assistência: N visitas por chamado (Fase 5 — handoff) ----------
+    // ---------- assistência: N visitas por chamado (Fase 5 — handoff; Fase 7 — status próprio da visita) ----------
     // "N visitas por assistência; cada visita termina em resolvida ou retorno
     // necessário." "Retorno necessário → volta para Aguardando (peça,
     // fornecedor, cliente) e agenda a próxima visita." "Peça necessária vira
-    // pendência tipo Assistência." Aditivo: não mexe em criarAssistencia/
-    // atualizarAssistencia acima, só acrescenta o histórico de visitas.
+    // pendência tipo Assistência."
+    //
+    // FASE 7 (item 3 da aprovação — rejeitado "resultado vazio = agendada"):
+    // toda visita agora carrega um `status` PRÓPRIO e explícito (AGENDADA/
+    // REALIZADA/CANCELADA — M.VISITA_STATUS_DEF, js/data.js), nunca inferido
+    // só pela presença/ausência de `desfecho`. Duas entradas agora existem
+    // pro histórico de visitas de um chamado:
+    //   - Store.agendarVisitaAssistencia — cria a visita já como AGENDADA,
+    //     sem resultado nenhum ainda (marca só quando/quem vai atender).
+    //   - Store.registrarVisitaAssistencia — comportamento 100%
+    //     RETROCOMPATÍVEL quando chamado SEM opts.visitaId (cria e já
+    //     REALIZA uma visita no mesmo passo, exatamente como a Fase 5
+    //     sempre fez); COM opts.visitaId, em vez de empurrar uma visita
+    //     nova, COMPLETA a visita pré-agendada correspondente (transição
+    //     AGENDADA→REALIZADA), sem duplicar a mesma visita.
+    agendarVisitaAssistencia(assistId, opts){
+      opts = opts || {};
+      if(!Store.pode("assistencia.editar")) return {ok:false, motivo:"SEM_PERMISSAO"};
+      const a = state.assistencias.find(x=>x.id===assistId); if(!a) return {ok:false, motivo:"NAO_ENCONTRADA"};
+      if(!opts.data) return {ok:false, motivo:"DATA_OBRIGATORIA"};
+      a.visitas = a.visitas || [];
+      const agora = M.todayISO();
+      const usuario = state.usuarioAtual || null;
+      const visita = {
+        id:M.uid("visit"), status:"AGENDADA",
+        data:opts.data, horaInicio:opts.horaInicio||null, horaFim:opts.horaFim||null,
+        tecnico:opts.tecnico||null, diagnostico:"", fotos:[], desfecho:null,
+        observacao:opts.observacao||"",
+        criadoPor:usuario, criadoEm:agora,
+      };
+      a.visitas.push(visita);
+      // §4 (correção 4, aprovada): agendar uma visita É o sinal de que o
+      // chamado está "Agendada" — mesmo status legado de sempre, só que
+      // agora a fonte de verdade de QUANDO é a própria visita, não mais um
+      // `prazo` solto sem relação com nenhuma visita real.
+      a.status = "AGENDADA";
+      const nomeAtual = usuario ? usuario.split(" ")[0] : "Alguém";
+      Store.audit({categoria:"QUALIDADE", tipo:"ASSISTENCIA_VISITA_AGENDADA", obraId:a.obraId,
+        descricao:`${nomeAtual} agendou visita de assistência para ${visita.data}${visita.horaInicio? " às "+visita.horaInicio:""}`});
+      if(a.obraId) Store.log(a.obraId, "ASSISTENCIA_VISITA_AGENDADA", `Visita de assistência agendada para ${visita.data} — ${a.categoria}: ${a.descricao}`, {assistenciaId:a.id, visitaId:visita.id});
+      emit();
+      return {ok:true, visita};
+    },
     registrarVisitaAssistencia(assistId, opts){
       opts = opts || {};
-      // mesma régua de atualizarAssistencia: visita que resolve = "concluir";
+      // mesma régua de antes: visita que resolve = "concluir" a VISITA (não
+      // a assistência — ver item 9/gate de conclusão em concluirAssistencia);
       // visita que só registra retorno necessário = "editar". Checado antes
-      // de tudo (mesmo de achar a assistência) igual ao resto do arquivo.
+      // de tudo, igual ao resto do arquivo.
       const acaoNecessaria = opts.desfecho==="RESOLVIDA" ? "assistencia.concluir" : "assistencia.editar";
       if(!Store.pode(acaoNecessaria)) return {ok:false, motivo:"SEM_PERMISSAO"};
-      const a = state.assistencias.find(x=>x.id===assistId); if(!a) return {ok:false};
+      const a = state.assistencias.find(x=>x.id===assistId); if(!a) return {ok:false, motivo:"NAO_ENCONTRADA"};
       if(!opts.desfecho) return {ok:false, motivo:"DESFECHO_OBRIGATORIO"};
       a.visitas = a.visitas || [];
-      const numero = a.visitas.length + 1;
-      const visita = {id:M.uid("visit"), data: opts.data||M.todayISO(), tecnico: opts.tecnico||state.usuarioAtual||null,
-        diagnostico: opts.diagnostico||"", fotos: opts.fotos||[], desfecho: opts.desfecho, registradoEm:M.todayISO()};
+      const agora = M.todayISO();
+      const usuario = state.usuarioAtual || null;
+      let visita, numero, criandoNova;
+      if(opts.visitaId){
+        // completa uma visita PRÉ-AGENDADA (Fase 7) — nunca cria uma segunda
+        // entrada pra mesma visita.
+        visita = a.visitas.find(v=>v.id===opts.visitaId);
+        if(!visita) return {ok:false, motivo:"VISITA_NAO_ENCONTRADA"};
+        if(M.Calc.statusEfetivoVisita(visita)!=="AGENDADA") return {ok:false, motivo:"VISITA_NAO_ESTA_AGENDADA"};
+        numero = a.visitas.indexOf(visita)+1;
+        criandoNova = false;
+      } else {
+        // caminho 100% retrocompatível (Fase 5): cria e já realiza no mesmo passo.
+        numero = a.visitas.length + 1;
+        visita = {id:M.uid("visit"), criadoPor:usuario, criadoEm:agora};
+        a.visitas.push(visita);
+        criandoNova = true;
+      }
+      visita.status = "REALIZADA";
+      visita.data = opts.data || visita.data || agora;
+      if(opts.horaInicio!==undefined) visita.horaInicio = opts.horaInicio||null;
+      if(opts.horaFim!==undefined) visita.horaFim = opts.horaFim||null;
+      visita.tecnico = opts.tecnico || visita.tecnico || usuario || null;
+      visita.diagnostico = opts.diagnostico || "";
+      visita.fotos = opts.fotos || visita.fotos || [];
+      visita.desfecho = opts.desfecho;
+      visita.registradoEm = agora; // mantido por compatibilidade — "quando este registro foi salvo"
+      visita.realizadoPor = opts.tecnico || usuario || null;
+      visita.realizadoEm = agora;
       let pendenciaGerada = null;
       if(opts.pecaNecessaria && opts.pecaNecessaria.descricao){
         pendenciaGerada = Store.criarPendencia({
@@ -1341,42 +1428,182 @@
           tipo:"Assistência", categoria: opts.pecaNecessaria.categoria || "Peça para refazer",
           descricao: opts.pecaNecessaria.descricao, responsavel: opts.tecnico||a.responsavel,
           prazo: opts.pecaNecessaria.prazo||null, prioridade:"ALTA", impacto:"IMPEDE_FINALIZAR",
+          // FASE 7 (item 6, aprovado): pendência nascida de uma assistência
+          // herda origem="ASSISTENCIA" (campo já existia, sempre null até
+          // aqui) e o novo campo assistenciaId (necessário pra achar "quais
+          // pendências bloqueiam ESTE chamado" no gate de conclusão — ver
+          // concluirAssistencia). `impacto` continua sendo a ÚNICA fonte de
+          // verdade de bloqueio (M.bloqueiaFechamento) — nenhum booleano novo.
+          origem:"ASSISTENCIA", assistenciaId:a.id,
         });
-        visita.pendenciaGeradaId = pendenciaGerada.id;
+        // ACHADO (pré-existente à Fase 7, corrigido de passagem aqui):
+        // Store.criarPendencia devolve {ok, pendencia}, não a pendência
+        // direto — o código antigo (Fase 5) lia `.id` do objeto errado
+        // (`{ok,pendencia}.id`, sempre undefined), então `pendenciaGeradaId`
+        // nunca era gravado de verdade e o link "gerou pendência →" da
+        // visita nunca aparecia. Corrigido aqui; guard extra pro caso raro
+        // de pendencia.criar estar desligado pra este perfil (não deve
+        // acontecer hoje — os perfis com assistencia.editar/concluir também
+        // têm pendencia.criar=true na matriz atual — mas não trava a visita
+        // inteira se acontecer).
+        if(pendenciaGerada.ok) { pendenciaGerada = pendenciaGerada.pendencia; visita.pendenciaGeradaId = pendenciaGerada.id; }
+        else pendenciaGerada = null;
       }
-      a.visitas.push(visita);
       a.ultimaVisitaEm = visita.data;
-      if(opts.desfecho==="RESOLVIDA"){
-        a.status = "CONCLUIDA";
-        a.resolvidoPor = state.usuarioAtual||null; a.resolvidoEm = M.todayISO();
-        Store.audit({categoria:"QUALIDADE", tipo:"ASSISTENCIA_CONCLUIDA", obraId:a.obraId,
-          descricao:`Assistência concluída — ${a.categoria}: ${a.descricao}`});
-      } else {
-        // "retorno necessário" — volta pra Aguardando (peça/fornecedor/
-        // cliente) ou já agenda a próxima visita, conforme o que faltar.
-        a.status = opts.proximoStatus || "AGUARDANDO_MATERIAL";
+      // FASE 7 (item 9/§12 — regra dura mantida do pedido original):
+      // registrar uma visita RESOLVIDA nunca conclui a assistência
+      // sozinha — quem decide "está concluída" é sempre uma ação própria e
+      // explícita (Store.concluirAssistencia, com resultado final e
+      // cobertura decididos, e sem bloqueio pendente). Aqui a visita só
+      // sai da lista de "precisa de retorno"; se não sobrar nenhuma
+      // visita AGENDADA nem pendência bloqueante, a assistência fica livre
+      // pra ser concluída (mas alguém ainda precisa concluir de verdade).
+      if(opts.desfecho!=="RESOLVIDA"){
+        // "retorno necessário" sem já ter a próxima visita agendada — volta
+        // pra Aguardando (peça/fornecedor/cliente); se quem registrou já
+        // informou a próxima visita (opts.proximoStatus==="AGENDADA"), quem
+        // agenda de fato é sempre agendarVisitaAssistencia (aqui só guarda o
+        // status "aguardando" mais adequado, nunca finge que já agendou).
+        a.status = (opts.proximoStatus && opts.proximoStatus!=="AGENDADA") ? opts.proximoStatus : "AGUARDANDO_MATERIAL";
+      } else if(a.status!=="CONCLUIDA"){
+        // resolvida, mas ainda não é "Concluída" enquanto ninguém confirmar
+        // pelo gate — fica "Em execução" pra deixar claro que falta o passo
+        // final, em vez de continuar mostrando "Agendada" ou "Aguardando".
+        a.status = "EM_EXECUCAO";
       }
       // formato do evento de auditoria segue a citação literal do handoff:
       // "Elias registrou a 2ª visita de assistência · resultado: retorno necessário"
-      const nomeAtual = state.usuarioAtual ? state.usuarioAtual.split(" ")[0] : "Alguém";
+      const nomeAtual = usuario ? usuario.split(" ")[0] : "Alguém";
       Store.audit({categoria:"QUALIDADE", tipo:"ASSISTENCIA_VISITA_REGISTRADA", obraId:a.obraId, ambienteId:a.ambienteId||null,
         descricao:`${nomeAtual} registrou a ${numero}ª visita de assistência · resultado: ${opts.desfecho==="RESOLVIDA"?"resolvida":"retorno necessário"}`,
         motivo: pendenciaGerada? `Gerou pendência ${pendenciaGerada.id}` : undefined});
+      if(a.obraId) Store.log(a.obraId, "ASSISTENCIA_VISITA_REGISTRADA",
+        `${nomeAtual} registrou a ${numero}ª visita de assistência · resultado: ${opts.desfecho==="RESOLVIDA"?"resolvida":"retorno necessário"}`,
+        {assistenciaId:a.id, visitaId:visita.id});
       emit();
-      return {ok:true, visita, pendenciaGerada};
+      return {ok:true, visita, pendenciaGerada, criandoNova};
+    },
+    // FASE 7 (item 3 — "não criar entidade paralela"; confirmado na rodada
+    // de ajustes finais, item 4): cancelar uma VISITA agendada (ex.: cliente
+    // remarcou) é uma ação bem menor que cancelar a assistência inteira —
+    // usuário decidiu explicitamente MANTER "assistencia.editar" como gate
+    // (não criar uma terceira permissão só pra isso). Cancelar uma visita
+    // NUNCA cancela a assistência — só remove aquele compromisso específico
+    // (a assistência continua com o status que já tinha).
+    //
+    // AJUSTES FINAIS (item 4): motivo agora é OBRIGATÓRIO (antes era
+    // opcional) — mesmo padrão de exigência que Store.cancelarAssistencia.
+    cancelarVisitaAssistencia(assistId, visitaId, motivo){
+      if(!Store.pode("assistencia.editar")) return {ok:false, motivo:"SEM_PERMISSAO"};
+      if(!motivo || !String(motivo).trim()) return {ok:false, motivo:"MOTIVO_OBRIGATORIO"};
+      const a = state.assistencias.find(x=>x.id===assistId); if(!a) return {ok:false, motivo:"NAO_ENCONTRADA"};
+      const visita = (a.visitas||[]).find(v=>v.id===visitaId); if(!visita) return {ok:false, motivo:"VISITA_NAO_ENCONTRADA"};
+      if(M.Calc.statusEfetivoVisita(visita)!=="AGENDADA") return {ok:false, motivo:"VISITA_NAO_ESTA_AGENDADA"};
+      visita.status = "CANCELADA";
+      visita.canceladoPor = state.usuarioAtual||null; visita.canceladoEm = M.todayISO();
+      visita.motivoCancelamento = motivo;
+      Store.audit({categoria:"QUALIDADE", tipo:"ASSISTENCIA_VISITA_CANCELADA", obraId:a.obraId,
+        descricao:`Visita de assistência de ${visita.data} cancelada — ${a.categoria}: ${a.descricao}`, motivo});
+      if(a.obraId) Store.log(a.obraId, "ASSISTENCIA_VISITA_CANCELADA", `Visita de assistência de ${visita.data} cancelada — motivo: ${motivo}`, {assistenciaId:a.id, visitaId:visita.id});
+      emit();
+      return {ok:true, visita};
+    },
+    // AJUSTES FINAIS (itens 1/2/3) — cancelamento da ASSISTÊNCIA INTEIRA.
+    // Permissão PRÓPRIA ("assistencia.cancelar", nunca "assistencia.editar")
+    // — nenhum perfil é checado por nome aqui, só Store.pode(...). Regras,
+    // na ordem:
+    //   - exige "assistencia.cancelar" (SEM_PERMISSAO);
+    //   - exige opts.motivo não-vazio (MOTIVO_OBRIGATORIO) — cancelar um
+    //     chamado sem dizer por quê não é aceitável nesta ação;
+    //   - já CANCELADA → retorno idempotente {ok:true, jaCancelada:true}
+    //     (chamar de novo não é erro, mesmo padrão do gate de conclusão);
+    //   - já CONCLUIDA → recusa (ASSISTENCIA_CONCLUIDA) — não existe
+    //     "desfazer conclusão" cancelando por cima;
+    //   - senão grava status=CANCELADA + canceladoPor/canceladoEm/
+    //     motivoCancelamento, audita e loga no histórico da obra.
+    // Nunca toca faseMacro da obra, nunca mexe em Produção/Montagem, nunca
+    // remove/apaga visitas, fotos, histórico ou pendências vinculadas — só
+    // muda o status da própria assistência (Object.assign não é usado de
+    // propósito; só os 4 campos abaixo são gravados).
+    cancelarAssistencia(assistId, opts){
+      opts = opts || {};
+      if(!Store.pode("assistencia.cancelar")) return {ok:false, motivo:"SEM_PERMISSAO"};
+      const motivo = opts.motivo && String(opts.motivo).trim();
+      if(!motivo) return {ok:false, motivo:"MOTIVO_OBRIGATORIO"};
+      const a = state.assistencias.find(x=>x.id===assistId); if(!a) return {ok:false, motivo:"NAO_ENCONTRADA"};
+      if(a.status==="CANCELADA") return {ok:true, jaCancelada:true};
+      if(a.status==="CONCLUIDA") return {ok:false, motivo:"ASSISTENCIA_CONCLUIDA"};
+      a.status = "CANCELADA";
+      a.canceladoPor = state.usuarioAtual||null;
+      a.canceladoEm = M.todayISO();
+      a.motivoCancelamento = motivo;
+      Store.audit({categoria:"QUALIDADE", tipo:"ASSISTENCIA_CANCELADA", obraId:a.obraId,
+        descricao:`Assistência cancelada — ${a.categoria}: ${a.descricao}`, motivo});
+      if(a.obraId) Store.log(a.obraId, "ASSISTENCIA_CANCELADA", `Assistência cancelada — ${a.categoria}: ${a.descricao} — motivo: ${motivo}`, {assistenciaId:a.id});
+      emit();
+      return {ok:true};
     },
     // "Cortesia" é decisão comercial da Moodo — gate de permissão igual ao
     // usado pra ressalva (Fase 4) e pra impacto "bloqueia" (Fase 2): reaproveita
     // M.Store.pode("liberarExcecao") como proxy simplificado de "Líder ou acima".
     definirGarantiaAssistencia(assistId, garantia){
-      const a = state.assistencias.find(x=>x.id===assistId); if(!a) return {ok:false};
+      const a = state.assistencias.find(x=>x.id===assistId); if(!a) return {ok:false, motivo:"NAO_ENCONTRADA"};
       if(garantia==="CORTESIA" && !Store.pode("liberarExcecao")) return {ok:false, motivo:"SEM_PERMISSAO"};
       const anterior = a.garantia;
       a.garantia = garantia;
       Store.audit({categoria:"QUALIDADE", tipo:"ASSISTENCIA_GARANTIA_DEFINIDA", obraId:a.obraId,
         descricao:`Garantia de "${a.descricao}" definida como ${M.garantiaDef(garantia).label}`, motivo: anterior!==garantia? `Era: ${M.garantiaDef(anterior).label}`:undefined});
+      if(a.obraId) Store.log(a.obraId, "ASSISTENCIA_GARANTIA_DEFINIDA", `Cobertura de "${a.descricao}" definida como ${M.garantiaDef(garantia).label}`, {assistenciaId:a.id});
       emit();
       return {ok:true};
+    },
+    // FASE 7 (item 9/§12 — regras de conclusão): conclusão passa a ser um
+    // GATE explícito, nunca um Object.assign cego pra CONCLUIDA. Bloqueia
+    // quando:
+    //   - a cobertura (garantia) ainda não foi decidida (EM_ANALISE — "ainda
+    //     sem definição", pela própria descrição de M.GARANTIA_DEF);
+    //   - não veio um resultado final (opts.resultado, nem já tinha um
+    //     a.resultado salvo antes);
+    //   - existe visita AGENDADA pendente (retorno obrigatório ainda não
+    //     atendido);
+    //   - existe pendência vinculada a este chamado (assistenciaId) cujo
+    //     impacto BLOQUEIA fechamento (M.bloqueiaFechamento, a MESMA função
+    //     usada por toda regra de bloqueio de ambiente/obra no resto do
+    //     app) e que ainda não foi resolvida.
+    concluirAssistencia(assistId, opts){
+      opts = opts || {};
+      if(!Store.pode("assistencia.concluir")) return {ok:false, motivo:"SEM_PERMISSAO"};
+      const a = state.assistencias.find(x=>x.id===assistId); if(!a) return {ok:false, motivo:"NAO_ENCONTRADA"};
+      if(a.status==="CONCLUIDA") return {ok:true, jaConcluida:true};
+      if(a.status==="CANCELADA") return {ok:false, motivo:"ASSISTENCIA_CANCELADA"};
+      if(!a.garantia || a.garantia==="EM_ANALISE") return {ok:false, motivo:"COBERTURA_NAO_DEFINIDA"};
+      const resultado = opts.resultado || a.resultado;
+      if(!resultado) return {ok:false, motivo:"RESULTADO_OBRIGATORIO"};
+      const visitaAgendadaPendente = M.Calc.proximaVisitaAgendada(a);
+      if(visitaAgendadaPendente) return {ok:false, motivo:"VISITA_AGENDADA_PENDENTE", visita:visitaAgendadaPendente};
+      const pendenciasBloqueantes = state.pendencias.filter(p=> p.assistenciaId===assistId && p.status!=="RESOLVIDA" && M.bloqueiaFechamento(p.impacto));
+      if(pendenciasBloqueantes.length) return {ok:false, motivo:"PENDENCIA_BLOQUEANTE", pendencias:pendenciasBloqueantes};
+      a.status = "CONCLUIDA";
+      a.resultado = resultado;
+      a.resolvidoPor = state.usuarioAtual||null; a.resolvidoEm = M.todayISO();
+      Store.audit({categoria:"QUALIDADE", tipo:"ASSISTENCIA_CONCLUIDA", obraId:a.obraId,
+        descricao:`Assistência concluída — ${a.categoria}: ${a.descricao}`, motivo:resultado});
+      if(a.obraId) Store.log(a.obraId, "ASSISTENCIA_CONCLUIDA", `Assistência concluída — ${a.categoria}: ${a.descricao}`, {assistenciaId:a.id});
+      emit();
+      return {ok:true};
+    },
+    // FASE 7 (item 5, aprovado): reaproveita o MESMO vínculo já usado por
+    // Store.obraIdsDoColaborador (nenhuma regra nova de escopo) — espelha o
+    // padrão de Store.pendenciasVisiveis (Fase 4). Sem verTodasObras, só
+    // enxerga assistências das obras onde a pessoa já tem algo atribuído.
+    assistenciasVisiveis(){
+      const nome = state.usuarioAtual;
+      let out = state.assistencias;
+      if(!Store.pode("verTodasObras")){
+        const meuObraIds = Store.obraIdsDoColaborador(nome);
+        out = out.filter(a=> a.obraId && meuObraIds.has(a.obraId));
+      }
+      return out;
     },
 
     // ---------- agenda (Fase 6 — Agenda V2) ----------

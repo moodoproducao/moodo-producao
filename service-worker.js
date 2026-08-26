@@ -5,7 +5,7 @@
    evolução futura — aqui o objetivo é permitir abrir o app e ver a
    última tela mesmo sem internet, e sinalizar quando há versão nova.
    ============================================================ */
-const CACHE_NAME = "moodo-producao-v3.13.2";
+const CACHE_NAME = "moodo-producao-v3.14.0";
 const SHELL_FILES = [
   "./",
   "./index.html",
@@ -39,6 +39,7 @@ const SHELL_FILES = [
   "./js/pages/configuracoes.js",
   "./js/pages/meuPainel.js",
   "./js/pages/assistencias.js",
+  "./js/pages/assistenciasV2.js",
   "./js/pages/auditoria.js",
   "./js/pages/adminHub.js",
   "./icons/icon-192.png",

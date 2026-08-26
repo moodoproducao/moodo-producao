@@ -716,6 +716,20 @@ assert.equal(permMigradas.ASSISTENCIA["pendencia.ver"], true);
 appMigracao.M.Store.setUsuarioAtual("Paulo Henrique");
 assert.equal(appMigracao.M.Store.pode("obra.criar"), true);
 
+// AJUSTES FINAIS (item 1) — "assistencia.cancelar" é chave NOVA nesta
+// rodada; o estado simulado acima (`estadoAntigoSimulado`) foi salvo antes
+// dela existir (nem em ADMIN, nem em nenhum perfil) E já carrega uma
+// customização real do ADMIN em OUTRA chave (verValores:false). O merge de
+// verdade (Store.mergePermissoes, chamado dentro de js/store.js na carga
+// acima — não uma reimplementação local) precisa: preencher o default novo
+// SEM apagar a customização preexistente.
+assert.equal(permMigradas.ADMIN["assistencia.cancelar"], true, "ADMIN ganha o default novo (true) mesmo vindo de um estado salvo sem essa chave");
+assert.equal(permMigradas.ADMIN.verValores, false, "...sem apagar a customização (verValores:false) que já estava salva em outra chave — mesmo objeto, mesma migração");
+assert.equal(permMigradas.OPERADOR["assistencia.cancelar"], false, "OPERADOR ganha o default novo (false)");
+assert.equal(permMigradas.MONTADOR["assistencia.cancelar"], false, "MONTADOR ganha o default novo (false)");
+assert.ok(permMigradas.GESTOR, "GESTOR (perfil novo, ausente do estado salvo) precisa existir de qualquer forma...");
+assert.equal(permMigradas.GESTOR["assistencia.cancelar"], true, "...e já vir com assistencia.cancelar=true (perfil inteiro é novo, não só a chave)");
+
 // ==================================================================
 // FASE 3 — faseMacro + regra de risco formal ("FASE 3 — DECISÕES
 // APROVADAS COM AJUSTES"). Contexto isolado, com FIXTURES próprias — não
@@ -2074,21 +2088,106 @@ const ADMIN6="Paulo Henrique", PCP6="Beatriz Nogueira", MONTADOR6="Roberto Diniz
   assert.ok(appFase6.M.Agenda.todosEventosRaw(["MONTAGEM"]).some(e=>e.obraId===o.id && e.data===appFase6.M.dOff(9)), "todosEventosRaw precisa incluir o compromisso de Montagem derivado");
 }
 
-// ---- assistência deriva de state.assistencias (mesma regra do Calendário
-// legado: não concluída + prazo definido), nunca duplicada ----
+// ---- FASE 7 (Assistências V2) — assistência deriva das VISITAS AGENDADAS
+// (não mais de `prazo` solto), e pode gerar MÚLTIPLOS eventos por chamado —
+// substitui o teste equivalente da Fase 6 (eventoDeAssistencia singular,
+// baseado em `prazo`), que deixou de existir por decisão explícita do
+// usuário (correção 4 da aprovação da Fase 7). Nunca duplicada em
+// state.eventos (mesmo princípio "derivado, nunca persistido" de sempre).
 {
   const o = obraFixture6();
   appFase6.M.Store.state.obras.push(o);
   const assist = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarAssistencia({
     obraId:o.id, obraNome:o.cliente, descricao:"teste assistência agenda", categoria:"Porta",
-    responsavel:"Fernanda Costa", prazo: appFase6.M.dOff(3), prioridade:"MEDIA",
+    responsavel:"Fernanda Costa", prioridade:"MEDIA",
   })).assistencia;
-  const evtAsst = appFase6.M.Agenda.eventoDeAssistencia(assist);
-  assert.ok(evtAsst, "assistência não concluída com prazo precisa gerar compromisso na Agenda");
-  assert.equal(evtAsst.origem, "ASSISTENCIA");
-  assert.equal(evtAsst.data, assist.prazo);
-  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.atualizarAssistencia(assist.id, {status:"CONCLUIDA"}));
-  assert.equal(appFase6.M.Agenda.eventoDeAssistencia(assist), null, "assistência concluída não é mais compromisso ativo na Agenda");
+  // sem nenhuma visita agendada ainda — nenhum evento derivado.
+  // NOTA: comparar por .length em vez de assert.deepEqual(...,[]) — arrays
+  // criados dentro do contexto vm/ isolado de outro "realm" que o array
+  // literal do próprio arquivo de teste, e o deepStrictEqual do Node não
+  // trata dois arrays vazios de realms diferentes como iguais (confirmado
+  // isoladamente) — não é bug do código, é uma pegadinha do harness vm.
+  assert.equal(appFase6.M.Agenda.eventosDeAssistencia(assist).length, 0, "sem visita AGENDADA, nenhum compromisso derivado na Agenda");
+
+  const v1 = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.agendarVisitaAssistencia(assist.id, {data: appFase6.M.dOff(3), tecnico:"Fernanda Costa"})).visita;
+  const v2 = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.agendarVisitaAssistencia(assist.id, {data: appFase6.M.dOff(9), tecnico:"Fernanda Costa"})).visita;
+  const eventos = appFase6.M.Agenda.eventosDeAssistencia(assist);
+  assert.equal(eventos.length, 2, "UMA assistência com 2 visitas AGENDADAS precisa gerar 2 compromissos na Agenda (§4 da aprovação)");
+  assert.ok(eventos.every(e=>e.tipo==="ASSISTENCIA" && e.origem==="ASSISTENCIA"), "tipo/origem sempre ASSISTENCIA, nunca RETORNO");
+  assert.equal(eventos.map(e=>e.data).sort().join(","), [v1.data, v2.data].sort().join(","));
+  assert.ok(eventos.every(e=>e.id==="evt-asst-"+assist.id+"-"+eventos.find(x=>x.data===e.data && x.origemVisitaId===e.origemVisitaId).origemVisitaId), "id determinístico assistenciaId+visitaId");
+
+  // mudar a data da visita reflete automaticamente na próxima leitura, sem edição duplicada (§4).
+  v1.data = appFase6.M.dOff(4);
+  const eventosApos = appFase6.M.Agenda.eventosDeAssistencia(assist);
+  assert.ok(eventosApos.some(e=>e.data===appFase6.M.dOff(4) && e.origemVisitaId===v1.id), "mudar a data da visita reflete na Agenda sem tocar em nenhum evento");
+
+  // realizar uma visita (REALIZADA) tira ELA da Agenda — a outra continua.
+  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.registrarVisitaAssistencia(assist.id, {visitaId:v1.id, desfecho:"RESOLVIDA"}));
+  const eventosPosRealizada = appFase6.M.Agenda.eventosDeAssistencia(assist);
+  assert.equal(eventosPosRealizada.length, 1, "visita REALIZADA para de aparecer como compromisso futuro (regra já existente da Agenda)");
+  assert.equal(eventosPosRealizada[0].origemVisitaId, v2.id);
+
+  // concluir a assistência (gate: cobertura decidida + resultado + sem
+  // visita AGENDADA pendente + sem pendência bloqueante vinculada) tira o
+  // chamado inteiro da Agenda.
+  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.registrarVisitaAssistencia(assist.id, {visitaId:v2.id, desfecho:"RESOLVIDA"}));
+  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.definirGarantiaAssistencia(assist.id, "COBERTO"));
+  const rConcluir = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.concluirAssistencia(assist.id, {resultado:"Porta regulada e funcionando."}));
+  assert.equal(rConcluir.ok, true, "sem visita AGENDADA pendente e sem pendência bloqueante, concluir precisa funcionar: "+JSON.stringify(rConcluir));
+  assert.equal(assist.status, "CONCLUIDA");
+  assert.equal(appFase6.M.Agenda.eventosDeAssistencia(assist).length, 0, "assistência concluída não é mais compromisso ativo na Agenda");
+}
+
+// ---- FASE 7 — regra dura: registrar uma visita RESOLVIDA NUNCA conclui a
+// assistência sozinha (auto-conclusão removida de propósito — §12/correção
+// 9); Store.atualizarAssistencia recusa a transição direta pra CONCLUIDA
+// (precisa passar por concluirAssistencia, com o gate); o gate bloqueia
+// cobertura "Em análise", visita AGENDADA pendente e pendência bloqueante
+// vinculada via assistenciaId. ----
+{
+  const o = obraFixture6();
+  appFase6.M.Store.state.obras.push(o);
+  const assist = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarAssistencia({
+    obraId:o.id, obraNome:o.cliente, descricao:"teste gate de conclusão", categoria:"Porta",
+    responsavel:"Fernanda Costa", prioridade:"MEDIA",
+  })).assistencia;
+
+  const rDireto = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.atualizarAssistencia(assist.id, {status:"CONCLUIDA"}));
+  assert.equal(rDireto.ok, false); assert.equal(rDireto.motivo, "USE_CONCLUIR_ASSISTENCIA");
+  assert.notEqual(assist.status, "CONCLUIDA");
+
+  const rVisita = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.registrarVisitaAssistencia(assist.id, {desfecho:"RESOLVIDA", diagnostico:"Regulado."}));
+  assert.equal(rVisita.ok, true);
+  assert.notEqual(assist.status, "CONCLUIDA", "resolver UMA visita nunca conclui a assistência sozinha — regra dura mantida (§12)");
+
+  const rSemCobertura = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.concluirAssistencia(assist.id, {resultado:"Feito."}));
+  assert.equal(rSemCobertura.ok, false); assert.equal(rSemCobertura.motivo, "COBERTURA_NAO_DEFINIDA", "cobertura ainda 'Em análise' (default) precisa bloquear a conclusão");
+
+  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.definirGarantiaAssistencia(assist.id, "COBERTO"));
+  const rSemResultado = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.concluirAssistencia(assist.id, {}));
+  assert.equal(rSemResultado.ok, false); assert.equal(rSemResultado.motivo, "RESULTADO_OBRIGATORIO");
+
+  const visitaFutura = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.agendarVisitaAssistencia(assist.id, {data: appFase6.M.dOff(5), tecnico:"Fernanda Costa"})).visita;
+  const rComVisitaAgendada = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.concluirAssistencia(assist.id, {resultado:"Feito."}));
+  assert.equal(rComVisitaAgendada.ok, false); assert.equal(rComVisitaAgendada.motivo, "VISITA_AGENDADA_PENDENTE", "visita AGENDADA pendente precisa bloquear a conclusão");
+
+  // AJUSTES FINAIS (item 4): motivo passou a ser obrigatório em
+  // cancelarVisitaAssistencia — esta chamada (pré-existente, Fase 6/7)
+  // precisou ganhar o 3º argumento pra continuar cancelando de verdade.
+  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.cancelarVisitaAssistencia(assist.id, visitaFutura.id, "não é mais necessária pro teste"));
+  const pend = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.criarPendencia({
+    obraId:o.id, obraNome:o.cliente, categoria:"Peça para refazer", descricao:"peça bloqueante do teste",
+    responsavel:"Fernanda Costa", prioridade:"ALTA", impacto:"IMPEDE_FINALIZAR", origem:"ASSISTENCIA", assistenciaId:assist.id,
+  })).pendencia;
+  const rComPendenciaBloqueante = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.concluirAssistencia(assist.id, {resultado:"Feito."}));
+  assert.equal(rComPendenciaBloqueante.ok, false); assert.equal(rComPendenciaBloqueante.motivo, "PENDENCIA_BLOQUEANTE", "pendência vinculada com impacto bloqueante precisa impedir a conclusão");
+
+  comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.atualizarStatusPendencia(pend.id, "RESOLVIDA"));
+  const rFinal = comoUsuarioFase6(ADMIN6, ()=> appFase6.M.Store.concluirAssistencia(assist.id, {resultado:"Feito."}));
+  assert.equal(rFinal.ok, true, "resolvida a pendência bloqueante e sem visita agendada, concluir precisa funcionar: "+JSON.stringify(rFinal));
+  assert.equal(assist.status, "CONCLUIDA");
+  assert.ok(appFase6.M.Store.state.historico.some(h=>h.assistenciaId===assist.id && h.tipo==="ASSISTENCIA_CONCLUIDA"), "conclusão precisa deixar rastro no histórico DA OBRA (Store.log, não só Store.audit)");
 }
 
 // ---- 10/11) conflito simples por sobreposição — mesma pessoa, mesmo dia,
@@ -2171,10 +2270,15 @@ const ADMIN6="Paulo Henrique", PCP6="Beatriz Nogueira", MONTADOR6="Roberto Diniz
   try{
     const obraPropria = obraFixture6(), obraAlheia = obraFixture6();
     appFase6.M.Store.state.obras.push(obraPropria, obraAlheia);
+    // FASE 7: a Agenda deriva de VISITA AGENDADA, não mais de `prazo` solto
+    // (correção 4) — fixture precisa de uma visita com status AGENDADA pra
+    // gerar o compromisso que este teste de escopo verifica.
     appFase6.M.Store.state.assistencias.push({id:"fx6-asst-propria", obraId:obraPropria.id, obraNome:obraPropria.cliente,
-      status:"ABERTA", descricao:"minha", categoria:"Porta", responsavel:"Ana Ferreira", prazo: appFase6.M.dOff(2), garantia:"EM_ANALISE", visitas:[]});
+      status:"AGENDADA", descricao:"minha", categoria:"Porta", responsavel:"Ana Ferreira", garantia:"EM_ANALISE",
+      visitas:[{id:"fx6-visit-propria", status:"AGENDADA", data:appFase6.M.dOff(2), tecnico:"Ana Ferreira"}]});
     appFase6.M.Store.state.assistencias.push({id:"fx6-asst-alheia", obraId:obraAlheia.id, obraNome:obraAlheia.cliente,
-      status:"ABERTA", descricao:"de outra pessoa", categoria:"Porta", responsavel:"Fernanda Costa", prazo: appFase6.M.dOff(2), garantia:"EM_ANALISE", visitas:[]});
+      status:"AGENDADA", descricao:"de outra pessoa", categoria:"Porta", responsavel:"Fernanda Costa", garantia:"EM_ANALISE",
+      visitas:[{id:"fx6-visit-alheia", status:"AGENDADA", data:appFase6.M.dOff(2), tecnico:"Fernanda Costa"}]});
 
     const visiveis = comoUsuarioFase6("Ana Ferreira", ()=> appFase6.M.Agenda.todosEventosRaw(["ASSISTENCIA"])).map(e=>e.origemRefId);
     assert.ok(visiveis.includes("fx6-asst-propria"), "Assistência vê o próprio atendimento");
@@ -2536,6 +2640,531 @@ const SEG = "2030-01-07", TER="2030-01-08", QUA="2030-01-09", QUI="2030-01-10",
 console.log("Fase 6 — último ajuste antes do push (unidade dias_uteis/semanas/dias_corridos): OK");
 
 console.log("Fase 6 (Agenda V2): OK");
+
+// ==================================================================
+// FASE 7 — ASSISTÊNCIAS V2. Contexto isolado com fixtures próprias (mesmo
+// padrão das fases anteriores). Carrega a cadeia REAL de arquivos, incluindo
+// js/ui.js de verdade (não um stub mínimo) — as funções de ui.js não tocam
+// DOM na hora de serem DEFINIDAS, só quando chamadas (openModal/toast/etc.,
+// nada disso é exercitado por render puro de HTML), então dá pra validar o
+// HTML de verdade das 3 telas novas (V2 desktop/mobile/detalhe) sem precisar
+// stubar chip-a-chip. Cobre exatamente a lista de testes obrigatórios do
+// pedido original (§30): criar assistência; obra concluída aceita sem
+// side-effect em faseMacro; as 4 coberturas + log de mudança; N visitas;
+// visita→Agenda (mudança de data reflete, nunca duplica, nunca vira registro
+// próprio); Pendência herda contexto+origem; bloqueante impede
+// conclusão/não-bloqueante não impede; visita RESOLVIDA isolada não conclui
+// sozinha; conclusão registra resultado/autor/data/cobertura; concluída sai
+// de "precisa de ação"; escopo por perfil Assistência; Produção sem acesso;
+// Hoje consome o modelo novo; desktop/mobile/detalhe renderizam sem lançar.
+// ==================================================================
+{
+  const appFase7 = contextoBase();
+  executar(appFase7, "js/data.js");
+  appFase7.M.Pages = {};
+  appFase7.M.UIState = {
+    obraTab:{}, obraFoco:{},
+    atendFiltro:{status:"", garantia:"", grupo:"", obraId:"", busca:""}, atendExpandidoId:null,
+    assistFiltro:{status:"", garantia:""}, assistExpandido:null,
+    expandSections:new Set(),
+    calFiltros:new Set(["PRODUCAO","ENTREGAS","MONTAGENS","PENDENCIAS","FORNECEDORES","ASSISTENCIAS"]),
+  };
+  executar(appFase7, "js/store.js");
+  executar(appFase7, "js/calc.js");
+  executar(appFase7, "js/ui.js");
+  executar(appFase7, "js/pages/agenda.js");
+  executar(appFase7, "js/pages/assistenciasV2.js");
+  executar(appFase7, "js/pages/obraDetail.js");
+  executar(appFase7, "js/pages/hoje.js");
+  appFase7.M.UIState.agendaAno = appFase7.M.TODAY.getFullYear();
+  appFase7.M.UIState.agendaMes = appFase7.M.TODAY.getMonth();
+  appFase7.M.UIState.agendaDia = appFase7.M.todayISO();
+  appFase7.M.UIState.agendaSemanaInicio = appFase7.M.Agenda.segundaFeiraDe(appFase7.M.todayISO());
+
+  function comoUsuarioFase7(nome, fn){
+    const original = appFase7.M.Store.state.usuarioAtual;
+    appFase7.M.Store.setUsuarioAtual(nome);
+    try{ return fn(); } finally { appFase7.M.Store.setUsuarioAtual(original); }
+  }
+  let _fx7Seq = 0;
+  function obraFixture7(over){
+    _fx7Seq++;
+    return Object.assign({
+      id:"fx7-obra-"+_fx7Seq, numeroOS:"OS FX7/"+_fx7Seq, cliente:"Cliente Fixture 7 #"+_fx7Seq,
+      dataOS:appFase7.M.todayISO(), criadaEm:appFase7.M.todayISO(), dataEntregaPrevista:appFase7.M.dOff(30), dataEntregaReal:null,
+      valorBruto:1000, valorLiquido:1000, status:"AGUARDANDO_INICIO", responsavel:"Teste", endereco:"Rua Fixture, 7",
+      ambientes:[{id:"fx7-amb-"+_fx7Seq, nome:"Ambiente", moveis:[{id:"fx7-mov-"+_fx7Seq, nome:"Móvel", etapa:"CORTE", componentesCriticos:[]}]}],
+    }, over);
+  }
+  const ADMIN7 = "Paulo Henrique";
+
+  // ---- 1) criar assistência: defaults corretos (garantia "Em análise",
+  // status ABERTA, visitas vazio) — mesmo contrato desde a Fase 5, não mudou ----
+  {
+    const o = obraFixture7();
+    appFase7.M.Store.state.obras.push(o);
+    const r = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.criarAssistencia({
+      obraId:o.id, obraNome:o.cliente, descricao:"vazamento no rodapé", categoria:"Acabamento", responsavel:"Fernanda Costa", prioridade:"MEDIA",
+    }));
+    assert.equal(r.ok, true);
+    assert.equal(r.assistencia.status, "ABERTA");
+    assert.equal(r.assistencia.garantia, "EM_ANALISE");
+    assert.equal((r.assistencia.visitas||[]).length, 0);
+    assert.ok(appFase7.M.Store.state.historico.some(h=>h.assistenciaId===r.assistencia.id && h.tipo==="ASSISTENCIA_ABERTA"), "abertura precisa aparecer no Histórico DA OBRA (Store.log), não só na Auditoria site-wide");
+  }
+
+  // ---- 2) obra CONCLUÍDA (faseMacro) aceita assistência sem nenhum
+  // side-effect — criar/editar/agendar/registrar visita NUNCA tocam
+  // faseMacro nem reabrem Produção/Montagem (correção 5 da aprovação:
+  // CONCLUIDA ≠ "arquivada", conceito adiado, não simulado aqui) ----
+  {
+    const o = obraFixture7({faseMacro:"CONCLUIDA"});
+    appFase7.M.Store.state.obras.push(o);
+    const r = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.criarAssistencia({
+      obraId:o.id, obraNome:o.cliente, descricao:"ajuste pós-entrega", categoria:"Regulagem", responsavel:"Fernanda Costa", prioridade:"BAIXA",
+    }));
+    assert.equal(r.ok, true, "obra com faseMacro CONCLUIDA precisa aceitar nova assistência normalmente");
+    assert.equal(o.faseMacro, "CONCLUIDA", "criar assistência não pode alterar faseMacro da obra");
+    comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.agendarVisitaAssistencia(r.assistencia.id, {data: appFase7.M.dOff(2), tecnico:"Fernanda Costa"}));
+    assert.equal(o.faseMacro, "CONCLUIDA", "agendar visita também não pode alterar faseMacro (nunca reabre Produção/Montagem)");
+    comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.atualizarAssistencia(r.assistencia.id, {status:"EM_EXECUCAO"}));
+    assert.equal(o.faseMacro, "CONCLUIDA", "editar status da assistência também não pode alterar faseMacro");
+  }
+
+  // ---- 3) as 4 coberturas (garantia) + cada mudança loga no Histórico da obra ----
+  {
+    const o = obraFixture7();
+    appFase7.M.Store.state.obras.push(o);
+    const a = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.criarAssistencia({
+      obraId:o.id, obraNome:o.cliente, descricao:"teste cobertura", categoria:"Outro", responsavel:"Fernanda Costa", prioridade:"BAIXA",
+    })).assistencia;
+    ["COBERTO","NAO_COBERTO","EM_ANALISE","CORTESIA"].forEach(g=>{
+      const r = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.definirGarantiaAssistencia(a.id, g));
+      assert.equal(r.ok, true, "ADMIN precisa poder definir qualquer uma das 4 coberturas, inclusive Cortesia");
+      assert.equal(a.garantia, g);
+    });
+    const logsGarantia = appFase7.M.Store.state.historico.filter(h=>h.assistenciaId===a.id && h.tipo==="ASSISTENCIA_GARANTIA_DEFINIDA");
+    assert.equal(logsGarantia.length, 4, "cada uma das 4 mudanças de cobertura precisa deixar rastro no Histórico da obra");
+  }
+
+  // ---- 4) N visitas por chamado (mais de 2) — histórico completo preservado ----
+  {
+    const o = obraFixture7();
+    appFase7.M.Store.state.obras.push(o);
+    const a = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.criarAssistencia({
+      obraId:o.id, obraNome:o.cliente, descricao:"porta empenada", categoria:"Porta", responsavel:"Fernanda Costa", prioridade:"MEDIA",
+    })).assistencia;
+    comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.registrarVisitaAssistencia(a.id, {desfecho:"RETORNO_NECESSARIO", diagnostico:"1ª visita — identificou a peça"}));
+    comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.registrarVisitaAssistencia(a.id, {desfecho:"RETORNO_NECESSARIO", diagnostico:"2ª visita — peça ainda não chegou"}));
+    comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.registrarVisitaAssistencia(a.id, {desfecho:"RESOLVIDA", diagnostico:"3ª visita — instalada e resolvida"}));
+    assert.equal(a.visitas.length, 3, "3 visitas distintas precisam ter sido preservadas, nenhuma sobrescrita");
+    assert.equal(a.visitas[0].diagnostico, "1ª visita — identificou a peça");
+    assert.equal(a.visitas[2].diagnostico, "3ª visita — instalada e resolvida");
+    assert.notEqual(a.status, "CONCLUIDA", "resolver a 3ª visita ainda não conclui a assistência sozinha (§12)");
+  }
+
+  // ---- 5) Pendência gerada a partir de uma visita herda contexto e ganha
+  // origem="ASSISTENCIA"+assistenciaId (correção 6); visita.pendenciaGeradaId
+  // precisa apontar pro id de verdade (bug pré-existente da Fase 5,
+  // corrigido de passagem nesta fase — ver comentário em Store.js) ----
+  {
+    const o = obraFixture7();
+    appFase7.M.Store.state.obras.push(o);
+    const a = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.criarAssistencia({
+      obraId:o.id, obraNome:o.cliente, ambienteNome:"Cozinha", movelNome:"Armário", descricao:"puxador quebrado", categoria:"Ferragem",
+      responsavel:"Fernanda Costa", prioridade:"MEDIA",
+    })).assistencia;
+    const r = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.registrarVisitaAssistencia(a.id, {
+      desfecho:"RETORNO_NECESSARIO", diagnostico:"precisa de puxador novo",
+      pecaNecessaria:{categoria:"Peça para refazer", descricao:"puxador novo", prazo: appFase7.M.dOff(7)},
+    }));
+    assert.equal(r.ok, true);
+    assert.ok(r.pendenciaGerada, "visita com peça necessária precisa gerar uma pendência real");
+    assert.equal(r.pendenciaGerada.origem, "ASSISTENCIA");
+    assert.equal(r.pendenciaGerada.assistenciaId, a.id);
+    assert.equal(r.pendenciaGerada.obraId, a.obraId, "pendência precisa herdar obraId do contexto da assistência");
+    assert.equal(r.pendenciaGerada.ambienteNome, "Cozinha", "pendência precisa herdar ambienteNome do contexto da assistência");
+    assert.equal(r.visita.pendenciaGeradaId, r.pendenciaGerada.id, "visita.pendenciaGeradaId precisa apontar pro id real da pendência (bug da Fase 5 corrigido)");
+  }
+
+  // ---- 6) bloqueante impede conclusão / não-bloqueante NÃO impede — usa
+  // M.bloqueiaFechamento (mesma função de sempre, nenhum booleano paralelo) ----
+  {
+    const o = obraFixture7();
+    appFase7.M.Store.state.obras.push(o);
+    const a = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.criarAssistencia({
+      obraId:o.id, obraNome:o.cliente, descricao:"teste bloqueio", categoria:"Outro", responsavel:"Fernanda Costa", prioridade:"BAIXA",
+    })).assistencia;
+    comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.definirGarantiaAssistencia(a.id, "COBERTO"));
+    const pendInformativa = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.criarPendencia({
+      obraId:o.id, obraNome:o.cliente, categoria:"Outro", descricao:"observação sem impacto", responsavel:"Fernanda Costa",
+      prioridade:"BAIXA", impacto:"INFORMATIVO", origem:"ASSISTENCIA", assistenciaId:a.id,
+    })).pendencia;
+    const rComNaoBloqueante = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.concluirAssistencia(a.id, {resultado:"Resolvido, observação registrada."}));
+    assert.equal(rComNaoBloqueante.ok, true, "pendência vinculada com impacto INFORMATIVO (não bloqueia fechamento) NÃO pode impedir a conclusão");
+    assert.equal(a.status, "CONCLUIDA");
+    assert.equal(pendInformativa.status, "ABERTA", "concluir a assistência não precisa nem deve mexer numa pendência informativa não-bloqueante");
+  }
+
+  // ---- 7) conclusão registra resultado + autor + data + cobertura ----
+  {
+    const o = obraFixture7();
+    appFase7.M.Store.state.obras.push(o);
+    const a = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.criarAssistencia({
+      obraId:o.id, obraNome:o.cliente, descricao:"teste registro de conclusão", categoria:"Outro", responsavel:"Fernanda Costa", prioridade:"BAIXA",
+    })).assistencia;
+    comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.definirGarantiaAssistencia(a.id, "NAO_COBERTO"));
+    const r = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.concluirAssistencia(a.id, {resultado:"Explicado ao cliente, fora da garantia."}));
+    assert.equal(r.ok, true);
+    assert.equal(a.resultado, "Explicado ao cliente, fora da garantia.");
+    assert.equal(a.resolvidoPor, ADMIN7);
+    assert.ok(a.resolvidoEm);
+    assert.equal(a.garantia, "NAO_COBERTO");
+
+    // ---- 8) concluída sai de "precisa de ação" (mesmo critério da tela V2/Hoje) ----
+    assert.notEqual(a.status, "ABERTA");
+    assert.equal(appFase7.M.Calc.assistenciaComRetornoPendente(a), false, "assistência concluída não pode contar como 'retorno pendente'");
+  }
+
+  // ---- 9) escopo por perfil Assistência (Store.assistenciasVisiveis) — só
+  // o atendimento das obras do próprio contexto, mesmo raciocínio de
+  // pendenciasVisiveis (Fase 4) ----
+  {
+    const alvo = appFase7.M.COLABORADORES.find(c=>c.nome==="Ana Ferreira");
+    const perfilOriginal = alvo.perfil;
+    alvo.perfil = "ASSISTENCIA";
+    try{
+      const oPropria = obraFixture7(), oAlheia = obraFixture7();
+      appFase7.M.Store.state.obras.push(oPropria, oAlheia);
+      const aPropria = comoUsuarioFase7("Ana Ferreira", ()=> appFase7.M.Store.criarAssistencia({
+        obraId:oPropria.id, obraNome:oPropria.cliente, descricao:"minha", categoria:"Outro", responsavel:"Ana Ferreira", prioridade:"BAIXA",
+      })).assistencia;
+      const aAlheia = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.criarAssistencia({
+        obraId:oAlheia.id, obraNome:oAlheia.cliente, descricao:"de outra pessoa", categoria:"Outro", responsavel:"Fernanda Costa", prioridade:"BAIXA",
+      })).assistencia;
+      const visiveis = comoUsuarioFase7("Ana Ferreira", ()=> appFase7.M.Store.assistenciasVisiveis()).map(a=>a.id);
+      assert.ok(visiveis.includes(aPropria.id), "Assistência vê o próprio atendimento");
+      assert.ok(!visiveis.includes(aAlheia.id), "Assistência NÃO vê atendimento de outra pessoa sem vínculo — mesmo escopo de pendenciasVisiveis");
+      // Admin (verTodasObras) continua vendo tudo.
+      const visiveisAdmin = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.assistenciasVisiveis()).map(a=>a.id);
+      assert.ok(visiveisAdmin.includes(aPropria.id) && visiveisAdmin.includes(aAlheia.id));
+    } finally { alvo.perfil = perfilOriginal; }
+  }
+
+  // ---- 10) Produção (OPERADOR) — zero acesso (assistencia.criar=false
+  // continua negando no Store, não só escondendo botão na tela) ----
+  {
+    const o = obraFixture7();
+    appFase7.M.Store.state.obras.push(o);
+    const r = comoUsuarioFase7("Roberto Diniz", ()=> appFase7.M.Store.criarAssistencia({obraId:o.id, obraNome:o.cliente, descricao:"teste", categoria:"Outro"}));
+    assert.equal(r.ok, false); assert.equal(r.motivo, "SEM_PERMISSAO");
+  }
+
+  // ---- 11) Hoje (perfil Assistência) consome o modelo novo — smoke real,
+  // sem lançar, com fixture com visita agendada aparecendo no bloco certo ----
+  {
+    const alvo = appFase7.M.COLABORADORES.find(c=>c.nome==="Ana Ferreira");
+    const perfilOriginal = alvo.perfil;
+    alvo.perfil = "ASSISTENCIA";
+    try{
+      const o = obraFixture7();
+      appFase7.M.Store.state.obras.push(o);
+      const a = comoUsuarioFase7("Ana Ferreira", ()=> appFase7.M.Store.criarAssistencia({
+        obraId:o.id, obraNome:o.cliente, descricao:"FX7HOJE atendimento do dia", categoria:"Outro", responsavel:"Ana Ferreira", prioridade:"MEDIA",
+      })).assistencia;
+      comoUsuarioFase7("Ana Ferreira", ()=> appFase7.M.Store.agendarVisitaAssistencia(a.id, {data: appFase7.M.dOff(1), tecnico:"Ana Ferreira"}));
+      const resultado = comoUsuarioFase7("Ana Ferreira", ()=> appFase7.M.Pages.hoje());
+      assert.ok(resultado && typeof resultado.html === "string" && resultado.html.length>0, "M.Pages.hoje() renderiza sem lançar pro perfil Assistência");
+      // o card do bloco "Atendimentos do dia" mostra categoria+obraNome (não
+      // a descrição) — confere pelo nome da obra fixture, que é único.
+      assert.ok(resultado.html.includes(o.cliente), "atendimento do dia (responsável = usuário atual) precisa aparecer no bloco 'Atendimentos do dia'");
+    } finally { alvo.perfil = perfilOriginal; }
+  }
+
+  // ---- 12) desktop/mobile/detalhe renderizam sem lançar (smoke, mesmo
+  // padrão já usado pra Agenda/Montagem) ----
+  {
+    const o = obraFixture7();
+    appFase7.M.Store.state.obras.push(o);
+    const a = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.criarAssistencia({
+      obraId:o.id, obraNome:o.cliente, descricao:"smoke render", categoria:"Outro", responsavel:"Fernanda Costa", prioridade:"MEDIA",
+    })).assistencia;
+    comoUsuarioFase7(ADMIN7, ()=>{
+      const rDesktop = appFase7.M.Pages.assistenciasV2();
+      assert.ok(rDesktop && rDesktop.html.length>0, "M.Pages.assistenciasV2() (desktop) renderiza sem lançar");
+      const rMobile = appFase7.M.Pages.atendimentos();
+      assert.ok(rMobile && rMobile.html.length>0, "M.Pages.atendimentos() (mobile) renderiza sem lançar");
+      const rDetail = appFase7.M.Pages.assistenciaDetail(a.id);
+      assert.ok(rDetail && rDetail.html.length>0, "M.Pages.assistenciaDetail() renderiza sem lançar");
+      const rObra = appFase7.M.Pages.obraDetail(o.id);
+      assert.ok(rObra && rObra.html.includes("Ver atendimentos"), "Visão Geral da obra precisa ter o bloco novo com o link 'Ver atendimentos' (correção 8)");
+    });
+  }
+
+  // ---- 13) evento derivado de assistência NUNCA vira registro próprio em
+  // state.eventos (mesma defesa em profundidade da Montagem, Fase 6) ----
+  {
+    const o = obraFixture7();
+    appFase7.M.Store.state.obras.push(o);
+    const a = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.criarAssistencia({
+      obraId:o.id, obraNome:o.cliente, descricao:"teste nunca persiste", categoria:"Outro", responsavel:"Fernanda Costa", prioridade:"BAIXA",
+    })).assistencia;
+    comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.agendarVisitaAssistencia(a.id, {data: appFase7.M.dOff(2), tecnico:"Fernanda Costa"}));
+    assert.ok(!appFase7.M.Store.state.eventos.some(e=>e.origemRefId===a.id || e.obraId===a.obraId && e.tipo==="ASSISTENCIA"), "visita agendada NUNCA pode virar registro próprio em state.eventos — só derivada em memória");
+  }
+
+  // ==================================================================
+  // AJUSTES FINAIS (rodada de fechamento antes do push) — permissão
+  // "assistencia.cancelar" + Store.cancelarAssistencia + bypass fechado +
+  // motivo obrigatório em cancelarVisitaAssistencia. Cobre item a item a
+  // lista de testes exigida pelo usuário nesta rodada.
+  // ==================================================================
+  function reassignPerfil7(nomeColab, novoPerfil, fn){
+    const alvo = appFase7.M.COLABORADORES.find(c=>c.nome===nomeColab);
+    const original = alvo.perfil;
+    alvo.perfil = novoPerfil;
+    try{ return fn(); } finally { alvo.perfil = original; }
+  }
+
+  // ---- 14) Admin cancela assistência — sucesso, com todos os campos
+  // gravados corretamente e nada mais tocado (visitas/fotos/pendências/
+  // faseMacro preservados) ----
+  {
+    const o = obraFixture7();
+    appFase7.M.Store.state.obras.push(o);
+    const a = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.criarAssistencia({
+      obraId:o.id, obraNome:o.cliente, descricao:"FX7CANC admin cancela", categoria:"Outro", responsavel:"Fernanda Costa", prioridade:"MEDIA",
+    })).assistencia;
+    comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.agendarVisitaAssistencia(a.id, {data: appFase7.M.dOff(3), tecnico:"Fernanda Costa"}));
+    const visitaId = a.visitas[0].id;
+    const r = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.cancelarAssistencia(a.id, {motivo:"Cliente desistiu do reparo"}));
+    assert.equal(r.ok, true, "ADMIN precisa poder cancelar (matriz: ADMIN=true)");
+    assert.equal(a.status, "CANCELADA");
+    assert.equal(a.canceladoPor, ADMIN7);
+    assert.ok(a.canceladoEm);
+    assert.equal(a.motivoCancelamento, "Cliente desistiu do reparo");
+    assert.equal(o.faseMacro, undefined, "cancelar assistência não pode criar/alterar faseMacro da obra (obra fixture nasce sem faseMacro)");
+    assert.equal(a.visitas.length, 1, "cancelar a assistência NÃO remove a visita já registrada");
+    assert.equal(a.visitas[0].id, visitaId, "a visita continua a mesma, intacta");
+    assert.ok(appFase7.M.Store.state.historico.some(h=>h.assistenciaId===a.id && h.tipo==="ASSISTENCIA_CANCELADA"), "cancelamento precisa aparecer no Histórico da obra");
+  }
+
+  // ---- 15) Gestor cancela — sucesso (matriz: GESTOR=true; perfil sem
+  // colaborador fixo hoje, reatribuído só pro teste, restaurado depois) ----
+  {
+    const o = obraFixture7();
+    appFase7.M.Store.state.obras.push(o);
+    const a = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.criarAssistencia({
+      obraId:o.id, obraNome:o.cliente, descricao:"FX7CANC gestor cancela", categoria:"Outro", responsavel:"Pedro Rocha", prioridade:"MEDIA",
+    })).assistencia;
+    const r = reassignPerfil7("Pedro Rocha", "GESTOR", ()=> comoUsuarioFase7("Pedro Rocha", ()=> appFase7.M.Store.cancelarAssistencia(a.id, {motivo:"Duplicado — já existe outro chamado pro mesmo item"})));
+    assert.equal(r.ok, true, "GESTOR precisa poder cancelar (matriz: GESTOR=true)");
+    assert.equal(a.status, "CANCELADA");
+  }
+
+  // ---- 16/17/18/19/20) todos os perfis SEM assistencia.cancelar recusam,
+  // mesmo tendo assistencia.editar (ASSISTENCIA/PCP/LIDERANCA) ou não
+  // (MONTADOR/OPERADOR) — status permanece intocado em todos os casos ----
+  {
+    const casos = [
+      {nome:"Ana Ferreira",   perfilTemp:"ASSISTENCIA", label:"Assistência"},
+      {nome:"Beatriz Nogueira", perfilTemp:null,          label:"PCP"},          // já é PCP por padrão
+      {nome:"Juliana Prado",  perfilTemp:null,          label:"Líder"},          // já é LIDERANCA por padrão
+      {nome:"Roberto Diniz",  perfilTemp:null,          label:"Montador"},       // já é MONTADOR por padrão
+      {nome:"Willian Souza",  perfilTemp:null,          label:"Produção/Operador"}, // já é OPERADOR por padrão
+    ];
+    casos.forEach(({nome,perfilTemp,label})=>{
+      const o = obraFixture7();
+      appFase7.M.Store.state.obras.push(o);
+      const a = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.criarAssistencia({
+        obraId:o.id, obraNome:o.cliente, descricao:"FX7CANC "+label+" não cancela", categoria:"Outro", responsavel:nome, prioridade:"MEDIA",
+      })).assistencia;
+      const run = ()=> comoUsuarioFase7(nome, ()=> appFase7.M.Store.cancelarAssistencia(a.id, {motivo:"tentativa sem permissão"}));
+      const r = perfilTemp ? reassignPerfil7(nome, perfilTemp, run) : run();
+      assert.equal(r.ok, false, label+" NÃO pode cancelar assistência (matriz: "+label+"=false)");
+      assert.equal(r.motivo, "SEM_PERMISSAO");
+      assert.equal(a.status, "ABERTA", label+" tentando cancelar não pode ter mudado o status de jeito nenhum");
+    });
+  }
+
+  // ---- 21) bypass fechado: mesmo um perfil com assistencia.editar (ex.:
+  // ADMIN, que também tem editar) NUNCA consegue gravar CANCELADA via
+  // atualizarAssistencia — só passando por Store.cancelarAssistencia ----
+  {
+    const o = obraFixture7();
+    appFase7.M.Store.state.obras.push(o);
+    const a = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.criarAssistencia({
+      obraId:o.id, obraNome:o.cliente, descricao:"FX7CANC bypass", categoria:"Outro", responsavel:"Fernanda Costa", prioridade:"MEDIA",
+    })).assistencia;
+    const r = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.atualizarAssistencia(a.id, {status:"CANCELADA"}));
+    assert.equal(r.ok, false, "atualizarAssistencia nunca pode gravar CANCELADA, mesmo pra quem tem assistencia.editar");
+    assert.equal(r.motivo, "USE_CANCELAR_ASSISTENCIA");
+    assert.equal(a.status, "ABERTA", "status não pode ter mudado — bypass tem que falhar ANTES de tocar o dado");
+    // ASSISTENCIA/PCP/LIDERANCA têm assistencia.editar=true e
+    // assistencia.cancelar=false — o cenário de bypass mais realista é
+    // justamente um desses tentando contornar a permissão que não têm.
+    const rAssist = reassignPerfil7("Ana Ferreira", "ASSISTENCIA", ()=> comoUsuarioFase7("Ana Ferreira", ()=> appFase7.M.Store.atualizarAssistencia(a.id, {status:"CANCELADA"})));
+    assert.equal(rAssist.ok, false);
+    assert.equal(rAssist.motivo, "USE_CANCELAR_ASSISTENCIA", "perfil Assistência (editar=true, cancelar=false) também não contorna via patch direto");
+    assert.equal(a.status, "ABERTA");
+  }
+
+  // ---- 22) motivo obrigatório — ADMIN com permissão, mas sem motivo, é
+  // recusado; status não muda ----
+  {
+    const o = obraFixture7();
+    appFase7.M.Store.state.obras.push(o);
+    const a = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.criarAssistencia({
+      obraId:o.id, obraNome:o.cliente, descricao:"FX7CANC sem motivo", categoria:"Outro", responsavel:"Fernanda Costa", prioridade:"MEDIA",
+    })).assistencia;
+    const r1 = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.cancelarAssistencia(a.id, {}));
+    assert.equal(r1.ok, false); assert.equal(r1.motivo, "MOTIVO_OBRIGATORIO");
+    const r2 = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.cancelarAssistencia(a.id, {motivo:"   "}));
+    assert.equal(r2.ok, false, "motivo só com espaços em branco também é recusado"); assert.equal(r2.motivo, "MOTIVO_OBRIGATORIO");
+    assert.equal(a.status, "ABERTA");
+  }
+
+  // ---- 23) CONCLUIDA não pode ser cancelada; CANCELADA cancelada de novo é
+  // idempotente (mesmo padrão do gate de conclusão) ----
+  {
+    const o = obraFixture7();
+    appFase7.M.Store.state.obras.push(o);
+    const a = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.criarAssistencia({
+      obraId:o.id, obraNome:o.cliente, descricao:"FX7CANC já concluída", categoria:"Outro", responsavel:"Fernanda Costa", prioridade:"BAIXA",
+    })).assistencia;
+    comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.definirGarantiaAssistencia(a.id, "COBERTO"));
+    comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.concluirAssistencia(a.id, {resultado:"Resolvido"}));
+    assert.equal(a.status, "CONCLUIDA");
+    const r = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.cancelarAssistencia(a.id, {motivo:"tentando cancelar depois de concluída"}));
+    assert.equal(r.ok, false); assert.equal(r.motivo, "ASSISTENCIA_CONCLUIDA");
+    assert.equal(a.status, "CONCLUIDA", "status continua CONCLUIDA — não pode virar CANCELADA por cima");
+
+    const o2 = obraFixture7();
+    appFase7.M.Store.state.obras.push(o2);
+    const a2 = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.criarAssistencia({
+      obraId:o2.id, obraNome:o2.cliente, descricao:"FX7CANC cancelar 2x", categoria:"Outro", responsavel:"Fernanda Costa", prioridade:"BAIXA",
+    })).assistencia;
+    const rc1 = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.cancelarAssistencia(a2.id, {motivo:"primeira vez"}));
+    assert.equal(rc1.ok, true);
+    const rc2 = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.cancelarAssistencia(a2.id, {motivo:"segunda vez"}));
+    assert.equal(rc2.ok, true, "cancelar uma assistência já CANCELADA é idempotente, não erro");
+    assert.equal(rc2.jaCancelada, true);
+    assert.equal(a2.motivoCancelamento, "primeira vez", "a 2ª tentativa não pode sobrescrever o motivo já gravado da 1ª");
+  }
+
+  // ---- 24) CANCELADA não aparece em "Precisa de ação" — prova ponta a
+  // ponta: uma assistência SEM visita e SEM próximo passo aparece na coluna
+  // "Precisa de ação" enquanto ABERTA; ao cancelar, o mesmo texto (único)
+  // some de dentro daquela coluna especificamente (não só da contagem) ----
+  {
+    const o = obraFixture7();
+    appFase7.M.Store.state.obras.push(o);
+    const marcador = "FX7CANC-marcador-unico-precisa-de-acao";
+    const a = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.criarAssistencia({
+      obraId:o.id, obraNome:o.cliente, descricao:marcador, categoria:"Outro", responsavel:"Fernanda Costa", prioridade:"MEDIA",
+    })).assistencia;
+    // "Precisa de ação" aparece 2x no HTML (tile do KPI e cabeçalho da
+    // coluna) — o marcador único de conteúdo só pode estar DENTRO da coluna
+    // de verdade (corpoColunas, depois de "cols-3-tight"), nunca no KPI.
+    const htmlAntes = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Pages.assistenciasV2()).html;
+    const colunasAntes = htmlAntes.indexOf("cols-3-tight");
+    const iniAntes = htmlAntes.indexOf("Precisa de ação", colunasAntes);
+    const fimAntes = htmlAntes.indexOf("Agendadas hoje", iniAntes);
+    const colunaPrecisaAcaoAntes = htmlAntes.slice(iniAntes, fimAntes);
+    assert.ok(colunaPrecisaAcaoAntes.includes(marcador), "assistência ABERTA sem visita/próximo passo precisa aparecer na coluna 'Precisa de ação'");
+
+    comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.cancelarAssistencia(a.id, {motivo:"cancelada pra sair de precisa de ação"}));
+    const htmlDepois = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Pages.assistenciasV2()).html;
+    const colunasDepois = htmlDepois.indexOf("cols-3-tight");
+    const iniDepois = htmlDepois.indexOf("Precisa de ação", colunasDepois);
+    const fimDepois = htmlDepois.indexOf("Agendadas hoje", iniDepois);
+    const colunaPrecisaAcaoDepois = htmlDepois.slice(iniDepois, fimDepois);
+    assert.ok(!colunaPrecisaAcaoDepois.includes(marcador), "depois de CANCELADA, o mesmo item não pode mais aparecer na coluna 'Precisa de ação'");
+  }
+
+  // ---- 25) CANCELADA não gera evento de Agenda; visita CANCELADA some da
+  // Agenda mas as OUTRAS visitas agendadas da mesma assistência continuam
+  // (cancelar 1 visita não derruba as demais nem a assistência) ----
+  {
+    const o = obraFixture7();
+    appFase7.M.Store.state.obras.push(o);
+    const a = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.criarAssistencia({
+      obraId:o.id, obraNome:o.cliente, descricao:"FX7CANC agenda", categoria:"Outro", responsavel:"Fernanda Costa", prioridade:"MEDIA",
+    })).assistencia;
+    comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.agendarVisitaAssistencia(a.id, {data: appFase7.M.dOff(2), tecnico:"Fernanda Costa"}));
+    comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.agendarVisitaAssistencia(a.id, {data: appFase7.M.dOff(4), tecnico:"Fernanda Costa"}));
+    assert.equal(appFase7.M.Agenda.eventosDeAssistencia(a).length, 2, "2 visitas agendadas → 2 eventos derivados");
+
+    const visitaCancelada = a.visitas[0];
+    comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.cancelarVisitaAssistencia(a.id, visitaCancelada.id, "cliente remarcou"));
+    const eventosAposCancelarVisita = appFase7.M.Agenda.eventosDeAssistencia(a);
+    assert.equal(eventosAposCancelarVisita.length, 1, "visita cancelada some da Agenda — a OUTRA visita agendada continua");
+    assert.ok(!eventosAposCancelarVisita.some(e=>e.origemVisitaId===visitaCancelada.id), "o evento da visita cancelada especificamente não pode mais existir");
+    assert.equal(a.status, "AGENDADA", "cancelar 1 visita não cancela a assistência (status inalterado)");
+
+    // agora cancela a assistência inteira — a visita restante também some.
+    comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.cancelarAssistencia(a.id, {motivo:"cancelando tudo"}));
+    assert.equal(appFase7.M.Agenda.eventosDeAssistencia(a).length, 0, "assistência CANCELADA não pode gerar nenhum evento de Agenda, mesmo com visita ainda formalmente AGENDADA na visita");
+  }
+
+  // ---- 26) cancelar visita — gate correto (assistencia.editar, não
+  // assistencia.cancelar), motivo obrigatório, histórico registra ----
+  {
+    const o = obraFixture7();
+    appFase7.M.Store.state.obras.push(o);
+    const a = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.criarAssistencia({
+      obraId:o.id, obraNome:o.cliente, descricao:"FX7CANC visita", categoria:"Outro", responsavel:"Fernanda Costa", prioridade:"MEDIA",
+    })).assistencia;
+    comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.agendarVisitaAssistencia(a.id, {data: appFase7.M.dOff(2), tecnico:"Fernanda Costa"}));
+    const visitaId = a.visitas[0].id;
+
+    // sem motivo → recusa
+    const rSemMotivo = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.cancelarVisitaAssistencia(a.id, visitaId, ""));
+    assert.equal(rSemMotivo.ok, false); assert.equal(rSemMotivo.motivo, "MOTIVO_OBRIGATORIO");
+    assert.equal(appFase7.M.Calc.statusEfetivoVisita(a.visitas[0]), "AGENDADA", "sem motivo, a visita continua AGENDADA");
+
+    // perfil ASSISTENCIA tem assistencia.editar=true (não precisa de
+    // assistencia.cancelar pra isso — item 4, decisão mantida) e consegue.
+    const r = reassignPerfil7("Ana Ferreira", "ASSISTENCIA", ()=> comoUsuarioFase7("Ana Ferreira", ()=> appFase7.M.Store.cancelarVisitaAssistencia(a.id, visitaId, "cliente remarcou pra semana que vem")));
+    assert.equal(r.ok, true, "perfil ASSISTENCIA (assistencia.editar=true) consegue cancelar uma visita, sem precisar de assistencia.cancelar");
+    assert.equal(appFase7.M.Calc.statusEfetivoVisita(a.visitas[0]), "CANCELADA");
+    assert.equal(a.visitas[0].motivoCancelamento, "cliente remarcou pra semana que vem");
+    assert.equal(a.visitas[0].canceladoPor, "Ana Ferreira");
+    assert.ok(a.visitas[0].canceladoEm);
+    assert.ok(appFase7.M.Store.state.historico.some(h=>h.assistenciaId===a.id && h.visitaId===visitaId && h.tipo==="ASSISTENCIA_VISITA_CANCELADA"), "cancelamento de visita precisa aparecer no Histórico da obra");
+
+    // perfil sem assistencia.editar (Produção/Operador) não consegue, nem
+    // com motivo.
+    comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.agendarVisitaAssistencia(a.id, {data: appFase7.M.dOff(5), tecnico:"Fernanda Costa"}));
+    const visitaId2 = a.visitas[1].id;
+    const rSemPermissao = comoUsuarioFase7("Willian Souza", ()=> appFase7.M.Store.cancelarVisitaAssistencia(a.id, visitaId2, "motivo válido"));
+    assert.equal(rSemPermissao.ok, false); assert.equal(rSemPermissao.motivo, "SEM_PERMISSAO");
+  }
+
+  // ---- 27) faseMacro permanece intacto também nas duas ações novas
+  // (cancelar assistência inteira e cancelar 1 visita) numa obra CONCLUIDA ----
+  {
+    const o = obraFixture7({faseMacro:"CONCLUIDA"});
+    appFase7.M.Store.state.obras.push(o);
+    const a = comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.criarAssistencia({
+      obraId:o.id, obraNome:o.cliente, descricao:"FX7CANC obra concluida", categoria:"Outro", responsavel:"Fernanda Costa", prioridade:"BAIXA",
+    })).assistencia;
+    comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.agendarVisitaAssistencia(a.id, {data: appFase7.M.dOff(2), tecnico:"Fernanda Costa"}));
+    comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.cancelarVisitaAssistencia(a.id, a.visitas[0].id, "motivo qualquer"));
+    assert.equal(o.faseMacro, "CONCLUIDA", "cancelar 1 visita não pode alterar faseMacro");
+    comoUsuarioFase7(ADMIN7, ()=> appFase7.M.Store.cancelarAssistencia(a.id, {motivo:"motivo qualquer"}));
+    assert.equal(o.faseMacro, "CONCLUIDA", "cancelar a assistência inteira também não pode alterar faseMacro — obra concluída não vira 'arquivada' nem reabre nada");
+  }
+
+  // ---- 28) regressão de compatibilidade da migração de permissões
+  // (mergePermissoes de verdade, não reimplementada aqui) — coberta como
+  // extensão do teste de migração já existente da Fase 1, logo depois de
+  // `appMigracao` ser carregado (ver acima, antes da seção "FASE 3"). Não
+  // duplicado aqui de propósito — mesmo estado simulado, mesma chamada real
+  // a js/store.js, sem reescrever a lógica de merge à mão num teste.
+}
+
+console.log("Fase 7 (Assistências V2): OK");
 
 // ==================================================================
 // HOTFIX 3.1 — persistSupabase() não pode chamar Supa.salvarEstado() com
