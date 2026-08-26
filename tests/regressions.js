@@ -3756,6 +3756,69 @@ console.log("Fase 7.5 — Correções pós-entrega (OS duplicada em rascunho ret
 }
 console.log("Fase 7.5 — Hotfix Act.setObrasFiltroStatus (toggle Ativas/Rascunhos): OK");
 
+// ------------------------------------------------------------------
+// FASE 7.5 — HOTFIX PÓS-PUBLICAÇÃO 2: M.Pages.novaObra('id') renderizava
+// "Início" na PRIMEIRA chamada ao retomar um rascunho, mesmo com o estado
+// já hidratado certo. Causa: `const w = M.UIState.novaObra` era capturado
+// ANTES de hidratarWizardComRascunho(o) rodar — e essa função SUBSTITUI o
+// objeto (M.UIState.novaObra = {...}), não muta o existente, então o `w`
+// local ficava apontando pro objeto antigo (step:"inicio") pelo resto
+// daquela mesma renderização. Um segundo render qualquer (F5, outro clique)
+// já mostrava certo, o que mascarava o bug em teste manual descuidado —
+// achado só ao simular o clique de verdade em produção, isolado, numa aba
+// nova (sem nenhum render anterior "por acidente" corrigindo o quadro).
+// Este teste chama M.Pages.novaObra(id) UMA ÚNICA VEZ (a chamada que o
+// router faz de verdade ao navegar) e exige que o HTML já venha certo.
+{
+  const app75e = contextoBase();
+  executar(app75e, "js/data.js");
+  executar(app75e, "js/pdf-import.js");
+  app75e.M.UI = { toast(){}, esc:(s)=>String(s==null?"":s), icon:(k)=>k?`<i>${k}</i>`:"" };
+  app75e.M.render = function(){};
+  app75e.location = {hash:""};
+  app75e.M.Pages = {};
+  app75e.M.UIState = {novaObra:{
+    obraId:null, step:"inicio", modo:null, osFileObj:null, osFileName:null, orcFileObj:null, orcFileName:null,
+    lendo:false, lido:false, erro:null, dados:null, ambientesAjuste:{},
+    nomeManual:"", numeroOSManual:"", clienteManual:"", responsavelProducao:"",
+    enderecoManual:"", observacoesManual:"", dataEntregaPrevistaManual:"", componentesSelecionados:{},
+    ambientesManual:[], osDuplicadaConfirmada:false, estruturaImportadaSincronizada:false,
+  }};
+  executar(app75e, "js/store.js");
+  executar(app75e, "js/calc.js");
+  executar(app75e, "js/pages/novaObra.js");
+  executar(app75e, "js/actions.js");
+  app75e.M.Store.setUsuarioAtual("Paulo Henrique"); // ADMIN, tem obra.criar
+
+  // cria e salva um rascunho (como no fluxo real: preencher Dados, Salvar rascunho).
+  const w = app75e.M.UIState.novaObra;
+  w.clienteManual = "Cliente FX75 Retomada"; w.nomeManual = "Obra FX75 Retomada";
+  w.numeroOSManual = "OS 7500/RETOMA-RENDER"; w.responsavelProducao = "Willian Souza";
+  app75e.Act.novaObraSalvarRascunho();
+  const rascunho = app75e.M.Store.state.obras.find(o=>o.cliente==="Cliente FX75 Retomada");
+  assert.ok(rascunho, "rascunho precisa ter sido salvo");
+
+  // simula uma ABA NOVA: UIState.novaObra volta ao estado inicial (é isso
+  // que uma aba/sessão de navegador nova de fato tem — nada em memória do
+  // wizard anterior), e então o router chama M.Pages.novaObra(id) UMA VEZ,
+  // exatamente como acontece ao clicar "Continuar" numa linha de rascunho.
+  app75e.M.UIState.novaObra = {
+    obraId:null, step:"inicio", modo:null, osFileObj:null, osFileName:null, orcFileObj:null, orcFileName:null,
+    lendo:false, lido:false, erro:null, dados:null, ambientesAjuste:{},
+    nomeManual:"", numeroOSManual:"", clienteManual:"", responsavelProducao:"",
+    enderecoManual:"", observacoesManual:"", dataEntregaPrevistaManual:"", componentesSelecionados:{},
+    ambientesManual:[], osDuplicadaConfirmada:false, estruturaImportadaSincronizada:false,
+  };
+  const pagina = app75e.M.Pages.novaObra(rascunho.id);
+  assert.equal(app75e.M.UIState.novaObra.step, "dados", "estado global precisa hidratar pra etapa Dados");
+  assert.ok(pagina && typeof pagina.html === "string" && pagina.html.length>0, "M.Pages.novaObra precisa retornar html");
+  assert.ok(!pagina.html.includes("Importar documentos"),
+    "BUG: primeira renderização ainda mostrando a etapa Início (html da etapa Início) mesmo com o estado já hidratado pra Dados");
+  assert.ok(pagina.html.includes(rascunho.nome) || pagina.html.includes("Obra FX75 Retomada"),
+    "html retornado precisa já conter os dados do rascunho retomado (etapa Dados), não a tela Início vazia");
+}
+console.log("Fase 7.5 — Hotfix M.Pages.novaObra (primeira renderização ao retomar rascunho já mostra Dados): OK");
+
 // ==================================================================
 // FASE 7.5 — DETALHE RÁPIDO (Parte C — Context Drawer) + Partes D/E
 // (Kanban e Hoje/Obra abrindo o MESMO drawer). Precisa de um `document`

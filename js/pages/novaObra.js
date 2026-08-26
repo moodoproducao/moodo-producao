@@ -569,12 +569,23 @@
   }
 
   M.Pages.novaObra = function(obraIdParam){
-    const w = M.UIState.novaObra;
+    let w = M.UIState.novaObra;
     if(obraIdParam && w.obraId!==obraIdParam){
       const o = M.Store.getObra(obraIdParam);
       if(!o){ UI.toast("Rascunho não encontrado."); location.hash = "#/obras"; return {title:"Nova Obra", crumb:"", html:""}; }
       if(o.status!=="RASCUNHO"){ location.hash = "#/obra/"+o.id; return {title:"Nova Obra", crumb:"", html:""}; }
+      // HOTFIX pós-publicação: hidratarWizardComRascunho SUBSTITUI o objeto
+      // (M.UIState.novaObra = {...}), não muta o existente — então `w`
+      // (capturado por referência ANTES desta chamada) continuava apontando
+      // pro objeto antigo/vazio pelo resto desta mesma renderização. Efeito
+      // visível: ao clicar "Continuar" num rascunho, o estado já hidratava
+      // certo (dado correto no Store/UIState), mas a TELA continuava
+      // mostrando a etapa "Início" até uma segunda ação qualquer forçar
+      // outro render — parecia que retomar rascunho "não fazia nada".
+      // Achado durante o smoke test em produção (Fase 7.5). Reatribuir `w`
+      // aqui garante que o resto desta função já enxerga o estado novo.
       hidratarWizardComRascunho(o);
+      w = M.UIState.novaObra;
     }
     if(!M.Store.pode("obra.criar")){
       return {title:"Nova Obra", crumb:"", html:`<div class="help-banner">${UI.icon('lock',13)} Seu perfil não tem permissão para criar obra.</div>`};
