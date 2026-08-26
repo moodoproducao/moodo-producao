@@ -3819,6 +3819,90 @@ console.log("Fase 7.5 — Hotfix Act.setObrasFiltroStatus (toggle Ativas/Rascunh
 }
 console.log("Fase 7.5 — Hotfix M.Pages.novaObra (primeira renderização ao retomar rascunho já mostra Dados): OK");
 
+// ------------------------------------------------------------------
+// HOTFIX 3.15.4 — Act.novaObraSetCampo (nome/OS/cliente/responsável/
+// endereço/observações/data da etapa Dados) nunca chamava Act.rerender(),
+// diferente de todo outro setter da mesma etapa (novaObraToggleComponente,
+// novaObraSetVendido, novaObraAjustarValor, novaObraConfirmarOsDuplicada —
+// todos chamam). O <input> do navegador mostrava o texto digitado
+// normalmente (é o próprio DOM guardando o que foi digitado), mas qualquer
+// coisa DERIVADA do estado — o banner de "já existe uma obra com esse
+// número de OS" e o aviso de "responsável não corresponde à equipe" —
+// ficava PARADA na tela com o valor de antes da edição, até algum outro
+// clique (Continuar/Voltar, etc.) forçar um re-render por fora. Achado no
+// smoke test em produção: corrigir o número da OS pra sair de uma
+// duplicidade real não fazia o aviso sumir da tela (o dado por trás já
+// estava certo — só a tela que não reagia). Reproduz exatamente isso:
+// conta os re-renders disparados por novaObraSetCampo, e confirma que uma
+// nova leitura da tela (M.Pages.novaObra) já reflete a duplicidade
+// aparecendo/sumindo sem precisar de nenhuma outra ação no meio. ----
+{
+  const app75f = contextoBase();
+  executar(app75f, "js/data.js");
+  executar(app75f, "js/pdf-import.js");
+  app75f.M.UI = { toast(){}, esc:(s)=>String(s==null?"":s), icon:(k)=>k?`<i>${k}</i>`:"" };
+  let renders = 0;
+  app75f.M.render = function(){ renders++; };
+  app75f.location = {hash:""};
+  app75f.M.Pages = {};
+  app75f.M.UIState = {novaObra:{
+    obraId:null, step:"dados", modo:"manual", osFileObj:null, osFileName:null, orcFileObj:null, orcFileName:null,
+    lendo:false, lido:false, erro:null, dados:null, ambientesAjuste:{},
+    nomeManual:"Obra Hotfix 3154", numeroOSManual:"", clienteManual:"Cliente Hotfix 3154", responsavelProducao:"",
+    enderecoManual:"", observacoesManual:"", dataEntregaPrevistaManual:"", componentesSelecionados:{},
+    ambientesManual:[], osDuplicadaConfirmada:false, estruturaImportadaSincronizada:false,
+  }};
+  executar(app75f, "js/store.js");
+  executar(app75f, "js/calc.js");
+  executar(app75f, "js/pages/novaObra.js");
+  executar(app75f, "js/actions.js");
+  app75f.M.Store.setUsuarioAtual("Paulo Henrique");
+
+  // obra real já existente com uma OS conhecida, pra colidir de propósito.
+  app75f.M.UIState.novaObra.nomeManual = "Obra Existente 3154";
+  app75f.M.UIState.novaObra.clienteManual = "Cliente Existente 3154";
+  app75f.M.UIState.novaObra.numeroOSManual = "OS 3154/EXISTENTE";
+  app75f.M.UIState.novaObra.responsavelProducao = "Willian Souza";
+  app75f.M.UIState.novaObra.ambientesManual = [{tid:"tmpamb-3154", nome:"Sala", moveis:[{tid:"tmpmov-3154", nome:"Painel"}]}];
+  const montadoExistente = app75f.M.Pages.novaObraMontarManual();
+  app75f.M.Store.criarObra(montadoExistente); // não precisa ativar — getObraByNumeroOS não filtra por status
+
+  // volta o wizard pro estado de quem está criando uma OBRA NOVA, digitando
+  // por acaso o mesmo número de OS da obra que acabou de ser criada acima.
+  app75f.M.UIState.novaObra = {
+    obraId:null, step:"dados", modo:"manual", osFileObj:null, osFileName:null, orcFileObj:null, orcFileName:null,
+    lendo:false, lido:false, erro:null, dados:null, ambientesAjuste:{},
+    nomeManual:"Obra Nova 3154", numeroOSManual:"OS 3154/EXISTENTE", clienteManual:"Cliente Novo 3154", responsavelProducao:"",
+    enderecoManual:"", observacoesManual:"", dataEntregaPrevistaManual:"", componentesSelecionados:{},
+    ambientesManual:[], osDuplicadaConfirmada:false, estruturaImportadaSincronizada:false,
+  };
+  renders = 0;
+
+  const paginaComDuplicata = app75f.M.Pages.novaObra();
+  assert.ok(paginaComDuplicata.html.includes("Já existe uma obra com esse número de OS"),
+    "pré-condição: com a OS colidindo, o banner de duplicidade precisa aparecer");
+
+  assert.doesNotThrow(()=>{
+    app75f.Act.novaObraSetCampo("numeroOSManual", "OS 3154/UNICA-NOVA");
+  }, "novaObraSetCampo não pode lançar");
+  assert.equal(app75f.M.UIState.novaObra.numeroOSManual, "OS 3154/UNICA-NOVA", "o campo precisa ter sido gravado no estado");
+  assert.equal(renders, 1,
+    "BUG: novaObraSetCampo precisa disparar Act.rerender() igual todo outro setter da etapa (novaObraToggleComponente/SetVendido/AjustarValor/ConfirmarOsDuplicada) — sem isso o banner de OS duplicada fica preso na tela com o valor antigo até outra ação forçar o re-render");
+
+  const paginaSemDuplicata = app75f.M.Pages.novaObra();
+  assert.ok(!paginaSemDuplicata.html.includes("Já existe uma obra com esse número de OS"),
+    "depois de corrigir a OS pra uma que não colide, uma nova leitura da tela não pode mais mostrar o banner de duplicidade");
+
+  // o inverso também precisa disparar o render: digitar uma OS que PASSA a
+  // colidir também precisa avisar sem esperar outra ação.
+  app75f.Act.novaObraSetCampo("numeroOSManual", "OS 3154/EXISTENTE");
+  assert.equal(renders, 2);
+  const paginaVoltouDuplicata = app75f.M.Pages.novaObra();
+  assert.ok(paginaVoltouDuplicata.html.includes("Já existe uma obra com esse número de OS"),
+    "digitar de volta uma OS que colide também precisa fazer o banner reaparecer sem precisar de outra ação no meio");
+}
+console.log("Hotfix 3.15.4 (Act.novaObraSetCampo sem rerender — banner de OS duplicada/responsável ficava preso na tela): OK");
+
 // ==================================================================
 // FASE 7.5 — DETALHE RÁPIDO (Parte C — Context Drawer) + Partes D/E
 // (Kanban e Hoje/Obra abrindo o MESMO drawer). Precisa de um `document`

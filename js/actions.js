@@ -1119,6 +1119,19 @@
       if(CAMPOS_VALIDOS.indexOf(campo)===-1) return;
       M.UIState.novaObra[campo] = valor;
       M.UIState.novaObra.osDuplicadaConfirmada = false; // qualquer edição de identificação reabre a confirmação de OS duplicada
+      // HOTFIX pós-publicação: faltava Act.rerender() aqui (todo outro
+      // setter da etapa Dados/Ambientes chama — novaObraToggleComponente,
+      // novaObraSetVendido, novaObraAjustarValor, novaObraConfirmarOsDuplicada
+      // — só este ficou de fora). O valor digitado aparecia certo porque é o
+      // próprio <input> do navegador guardando o texto, mas qualquer coisa
+      // DERIVADA do estado (o banner de OS duplicada e o aviso de
+      // "responsável não corresponde à equipe") ficava desatualizada na tela
+      // até algum outro clique forçar um re-render (ex.: Continuar/Voltar).
+      // Achado no smoke test em produção testando importação com uma OS que
+      // colidia com uma obra real: corrigir a OS no campo não fazia o aviso
+      // de duplicidade sumir da tela (o dado por trás já estava certo — só a
+      // tela que não avisava até sair e voltar da etapa).
+      Act.rerender();
     },
     novaObraToggleComponente(descricaoItem){
       const w = M.UIState.novaObra;
