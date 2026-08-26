@@ -483,6 +483,34 @@
     // FASE 7.5 — mesma defesa, mesmo motivo: estado remoto de antes desta
     // fase não tem `visualizacoesPendencia`.
     if(!Array.isArray(state.visualizacoesPendencia)) state.visualizacoesPendencia = [];
+    // HOTFIX 3.15.3 — achado no smoke test de produção da Fase 7.5: ativar a
+    // PRIMEIRA obra com faseMacro de verdade (Store.ativarObra grava
+    // faseMacro="AGUARDANDO_INICIO") quebrou a tela da obra com "Cannot read
+    // properties of undefined (reading 'find')" em Store.faseMacroById, que
+    // faz state.fasesMacro.find(...). Causa: load() (caminho local, linha
+    // ~236) já tinha a defesa certa pra isso desde a Fase 3 — "estado salvo
+    // de antes desta implementação não tem fasesMacro nenhum: usa a semente
+    // atual" — mas essa MESMA defesa nunca foi espelhada aqui em
+    // aplicarEstadoRemoto (caminho Supabase). O documento salvo na nuvem é
+    // de antes de fasesMacro existir (nenhuma das 9 obras legadas atuais
+    // tem faseMacro — por isso isto nunca quebrou até agora: NENHUMA obra
+    // real, em produção, jamais tinha lido este campo). Mesmo problema
+    // existia, silenciosamente, pra todo o resto da lista de migração de
+    // load() que nunca foi espelhada aqui — replicando TODAS agora (não só
+    // fasesMacro), pra fechar a classe inteira do bug, não só o sintoma
+    // que apareceu primeiro.
+    const fresh = seedState();
+    if(!state.assistencias) state.assistencias = fresh.assistencias;
+    if(!Array.isArray(state.auditoria)) state.auditoria = fresh.auditoria;
+    if(!state.tarefasPadrao) state.tarefasPadrao = fresh.tarefasPadrao;
+    if(!state.fluxosPadrao) state.fluxosPadrao = fresh.fluxosPadrao;
+    state.permissoes = mergePermissoes(state.permissoes, fresh.permissoes);
+    if(!state.pesosDesempenho) state.pesosDesempenho = fresh.pesosDesempenho;
+    if(!state.notificacoes) state.notificacoes = fresh.notificacoes;
+    if(!state.metaMensal) state.metaMensal = fresh.metaMensal;
+    if(!Array.isArray(state.etapas) || !state.etapas.length) state.etapas = fresh.etapas;
+    if(!Array.isArray(state.fasesMacro) || !state.fasesMacro.length) state.fasesMacro = fresh.fasesMacro;
+    if(!state.requisitosPorEtapa) state.requisitosPorEtapa = fresh.requisitosPorEtapa;
     // estado vindo da nuvem pode ter sido salvo por uma versão anterior do
     // app (antes da Fase 2) — mesma migração leve do boot local.
     migrarPendenciasParaModeloHandoff();

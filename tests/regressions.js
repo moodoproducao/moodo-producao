@@ -4298,8 +4298,117 @@ async function rodarTestesHotfix(){
     assert.equal(ctx.app.M.Store.state.eventos[0].id, "evt-1");
   }
 
+  // ---- 11 (HOTFIX 3.15.3): estado vindo da nuvem de ANTES da Fase 3
+  // (Fases Macro) não tem a chave `fasesMacro` — aplicarEstadoRemoto()
+  // precisa reidratar o catálogo (semente), nunca deixar state.fasesMacro
+  // undefined, senão Store.faseMacroById (`state.fasesMacro.find(...)`)
+  // quebra assim que QUALQUER obra com faseMacro real é lida (ex.:
+  // riscoObra -> situacaoObra -> tela de detalhe da obra). Isso é
+  // pré-existente (não é bug da Fase 7.5 em si) mas só foi exposto agora
+  // porque Fase 7.5 é a primeira feature a gravar faseMacro de verdade numa
+  // obra de produção (as 9 obras legadas nunca tinham faseMacro, então
+  // sempre caíam no fallback _LEGADO_SEM_FASE sem nunca chamar
+  // faseMacroById). Reproduz o crash de produção encontrado no smoke test
+  // pós-push (#/obra/obra-252 depois de ativar). Aproveita pra testar
+  // também os outros campos que aplicarEstadoRemoto() passou a defender
+  // junto (etapas/requisitosPorEtapa/tarefasPadrao/fluxosPadrao/
+  // pesosDesempenho/notificacoes/metaMensal/auditoria/assistencias/
+  // permissoes), mirrorando as mesmas defesas que load() já tinha. ----
+  {
+    const ctx = criarContextoHotfix({semSincronizacaoNoBoot:false});
+    ctx.resolverPronto(true);
+    await esperar(50);
+    ctx.chamadasSalvar.length = 0; // baseline limpo
+
+    // completa o contexto com Calc/Pages.novaObra pra poder criar+ativar
+    // uma obra de verdade (ganha faseMacro="AGUARDANDO_INICIO" real de
+    // Store.criarObra) e depois reproduzir a leitura real que quebrava em
+    // produção (riscoObra -> faseMacroDeObra -> faseMacroById).
+    ctx.app.M.UI = Object.assign({}, ctx.app.M.UI, {
+      esc:(s)=> String(s==null?"":s), icon:()=>"", toast:()=>{},
+    });
+    ctx.app.M.Pages = ctx.app.M.Pages || {};
+    executar(ctx.app, "js/calc.js");
+    executar(ctx.app, "js/pages/novaObra.js");
+
+    ctx.app.M.UIState = {novaObra:{
+      obraId:null, step:"inicio", modo:"manual", osFileObj:null, osFileName:null, orcFileObj:null, orcFileName:null,
+      lendo:false, lido:false, erro:null, dados:null, ambientesAjuste:{},
+      nomeManual:"Obra Hotfix 3.15.3", numeroOSManual:"OS HOTFIX-3153", clienteManual:"Cliente Hotfix", responsavelProducao:"Willian Souza",
+      enderecoManual:"", observacoesManual:"", dataEntregaPrevistaManual:"", componentesSelecionados:{},
+      ambientesManual:[{tid:"tmpamb-hf1", nome:"Sala", moveis:[{tid:"tmpmov-hf1", nome:"Painel ripado"}]}],
+      osDuplicadaConfirmada:false, estruturaImportadaSincronizada:false,
+    }};
+    const montado = ctx.app.M.Pages.novaObraMontarManual();
+    const criada = ctx.app.M.Store.criarObra(montado);
+    const ativacao = ctx.app.M.Store.ativarObra(criada.id);
+    assert.equal(ativacao.ok, true, "pré-condição: obra de teste precisa ativar com sucesso");
+    assert.equal(criada.faseMacro, "AGUARDANDO_INICIO", "pré-condição: obra de teste precisa ter faseMacro real setado (não legado)");
+
+    // com fasesMacro presente (sincronização normal), a leitura já funciona
+    // — confirma que o teste está reproduzindo o cenário certo antes de
+    // simular o estado quebrado.
+    assert.doesNotThrow(()=>{
+      ctx.app.M.Calc.situacaoObra(criada);
+    }, "pré-condição: leitura normal (fasesMacro presente) não pode lançar");
+
+    const cb = ctx.obterMudancaCb();
+    assert.ok(cb, "assinarMudancas precisa ter sido registrado no boot (sincronizarComSupabase)");
+
+    // estado remoto real de ANTES da Fase 3: sem a chave `fasesMacro` (nunca
+    // foi salva na nuvem por uma versão anterior do app) — mas com a MESMA
+    // obra (já ativada, com faseMacro="AGUARDANDO_INICIO") que acabamos de
+    // criar, pra reproduzir exatamente o que aconteceu em produção: uma
+    // sincronização real trazendo um snapshot antigo por cima do estado que
+    // tinha acabado de ativar a obra.
+    const remotoSemFasesMacro = JSON.parse(JSON.stringify(ctx.app.M.Store.state));
+    delete remotoSemFasesMacro.fasesMacro;
+    delete remotoSemFasesMacro.etapas;
+    delete remotoSemFasesMacro.requisitosPorEtapa;
+    assert.equal(Object.prototype.hasOwnProperty.call(remotoSemFasesMacro, "fasesMacro"), false, "pré-condição: o remoto simulado não pode ter a chave fasesMacro");
+
+    assert.doesNotThrow(()=>{
+      cb(remotoSemFasesMacro, "carimbo-sem-fasesmacro");
+    }, "aplicarEstadoRemoto() não pode lançar quando o remoto não tem `fasesMacro`");
+
+    assert.ok(Array.isArray(ctx.app.M.Store.state.fasesMacro) && ctx.app.M.Store.state.fasesMacro.length>0, "state.fasesMacro precisa se reidratar com o catálogo (semente), nunca ficar undefined/vazio");
+    assert.ok(Array.isArray(ctx.app.M.Store.state.etapas) && ctx.app.M.Store.state.etapas.length>0, "state.etapas também precisa se reidratar (mesma defesa)");
+    assert.ok(ctx.app.M.Store.state.requisitosPorEtapa, "state.requisitosPorEtapa também precisa se reidratar (mesma defesa)");
+
+    const obraNoStateAtual = ctx.app.M.Store.state.obras.find(o=>o.id===criada.id);
+    assert.ok(obraNoStateAtual, "a obra criada precisa continuar existindo depois da sincronização (não é sobre perder dado, é sobre o catálogo de fases)");
+    assert.equal(obraNoStateAtual.faseMacro, "AGUARDANDO_INICIO", "faseMacro da própria obra não pode ter sido alterado pela defesa");
+
+    // esta é a leitura real que quebrava em produção: abrir a página de
+    // detalhe de uma obra recém-ativada chamava riscoObra -> faseMacroDeObra
+    // -> faseMacroById, que lançava "Cannot read properties of undefined
+    // (reading 'find')" porque state.fasesMacro tinha acabado de virar
+    // undefined vindo da sincronização.
+    assert.doesNotThrow(()=>{
+      ctx.app.M.Store.faseMacroDeObra(obraNoStateAtual);
+    }, "Store.faseMacroDeObra não pode lançar depois de um estado remoto sem `fasesMacro`");
+    assert.doesNotThrow(()=>{
+      ctx.app.M.Calc.situacaoObra(obraNoStateAtual);
+    }, "leitura real da tela de obra (Calc.situacaoObra -> riscoObra -> faseMacroDeObra) não pode lançar depois de um estado remoto sem `fasesMacro`");
+
+    const faseLida = ctx.app.M.Store.faseMacroDeObra(obraNoStateAtual);
+    assert.equal(faseLida.key, "AGUARDANDO_INICIO", "com o catálogo reidratado, a fase real da obra precisa ser encontrada certinho (não pode cair no fallback _LEGADO_SEM_FASE)");
+
+    // uma segunda sincronização, agora com o remoto já tendo `fasesMacro` de
+    // verdade (não vazio, e diferente da semente — simula um catálogo já
+    // customizado por um admin), continua funcionando normalmente — a
+    // defesa não pisa num valor real vindo da nuvem.
+    const remotoComFasesMacro = JSON.parse(JSON.stringify(ctx.app.M.Store.state));
+    const catalogoCustomizado = remotoComFasesMacro.fasesMacro.map(f=> Object.assign({}, f));
+    catalogoCustomizado.push({key:"FASE_CUSTOM_TESTE", label:"Fase custom de teste", ordem:999, impactaRisco:false});
+    remotoComFasesMacro.fasesMacro = catalogoCustomizado;
+    cb(remotoComFasesMacro, "carimbo-com-fasesmacro");
+    assert.equal(ctx.app.M.Store.state.fasesMacro.some(f=>f.key==="FASE_CUSTOM_TESTE"), true, "quando o remoto TEM fasesMacro de verdade (customizado), a defesa não pode substituir pela semente padrão");
+  }
+
   console.log("Hotfix 3.1 (persistencia Supabase antes do cliente pronto): OK");
   console.log("Hotfix 3.13.1 (state.eventos undefined vindo de estado remoto pre-Fase-6): OK");
+  console.log("Hotfix 3.15.3 (state.fasesMacro undefined vindo de estado remoto pre-Fase-3, crash faseMacroById): OK");
 }
 
 rodarTestesHotfix().catch(err=>{
