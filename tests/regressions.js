@@ -3722,6 +3722,40 @@ console.log("Fase 7.5 — Nova Obra V2 + Edição V2 (Partes A e B): OK");
 }
 console.log("Fase 7.5 — Correções pós-entrega (OS duplicada em rascunho retomado + edição importada preservada): OK");
 
+// ------------------------------------------------------------------
+// FASE 7.5 — HOTFIX PÓS-PUBLICAÇÃO: Act.setObrasFiltroStatus. O botão
+// "Rascunhos" da tela Obras (js/pages/obras.js) sempre chamou
+// Act.setObrasFiltroStatus('RASCUNHO') via onclick, mas a função nunca
+// tinha sido implementada em js/actions.js — descoberto no smoke test em
+// produção (clique não fazia nada; TypeError silencioso no onclick). Este
+// teste garante que a função existe, grava M.UIState.obrasFiltroStatus e
+// dispara um re-render (Act.rerender→M.render) — e que uma futura
+// regressão (função removida/renomeada de novo) quebra a suíte, não só o
+// clique em produção.
+{
+  const app75d = contextoBase();
+  executar(app75d, "js/data.js");
+  app75d.M.UI = { toast(){}, esc:(s)=>String(s==null?"":s), icon:()=>"" };
+  let renders = 0;
+  app75d.M.render = function(){ renders++; };
+  app75d.location = {hash:""};
+  app75d.M.Pages = {};
+  app75d.M.UIState = {};
+  executar(app75d, "js/store.js");
+  executar(app75d, "js/calc.js");
+  executar(app75d, "js/actions.js");
+
+  assert.equal(typeof app75d.Act.setObrasFiltroStatus, "function",
+    "Act.setObrasFiltroStatus precisa existir — é chamada pelo onclick dos botões Ativas/Rascunhos em Obras");
+  app75d.Act.setObrasFiltroStatus("RASCUNHO");
+  assert.equal(app75d.M.UIState.obrasFiltroStatus, "RASCUNHO", "precisa gravar o filtro escolhido em M.UIState.obrasFiltroStatus");
+  assert.equal(renders, 1, "precisa disparar um re-render (Act.rerender→M.render) pra tela refletir a troca de aba");
+  app75d.Act.setObrasFiltroStatus("ATIVAS");
+  assert.equal(app75d.M.UIState.obrasFiltroStatus, "ATIVAS");
+  assert.equal(renders, 2);
+}
+console.log("Fase 7.5 — Hotfix Act.setObrasFiltroStatus (toggle Ativas/Rascunhos): OK");
+
 // ==================================================================
 // FASE 7.5 — DETALHE RÁPIDO (Parte C — Context Drawer) + Partes D/E
 // (Kanban e Hoje/Obra abrindo o MESMO drawer). Precisa de um `document`

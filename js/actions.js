@@ -1198,6 +1198,19 @@
       Act.rerender();
     },
 
+    // FASE 7.5 (Nova Obra V2, item 7) — toggle "Ativas"/"Rascunhos" da tela
+    // Obras (js/pages/obras.js lê M.UIState.obrasFiltroStatus). HOTFIX
+    // pós-publicação: essa função era chamada pelo onclick dos botões mas
+    // nunca tinha sido implementada aqui — o toggle não fazia nada (clique
+    // silenciosamente lançava "Act.setObrasFiltroStatus is not a function").
+    // Achado durante o smoke test em produção; sem isso "Rascunhos" fica
+    // inacessível pela UI (dado continua correto no Store, só a troca de
+    // aba que não acontecia).
+    setObrasFiltroStatus(status){
+      M.UIState.obrasFiltroStatus = status;
+      Act.rerender();
+    },
+
     // ---- persistência: salvar rascunho / ativar ----------------------
     // Mesma defesa em profundidade de sempre (rota + ação — ver comentário
     // histórico de novaObraCriar): mesmo chegando aqui por fora da tela
