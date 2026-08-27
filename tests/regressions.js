@@ -3988,6 +3988,91 @@ console.log("Hotfix 3.15.5 (Act.go sem forçar render quando o hash não muda �
 }
 console.log("Hotfix 3.15.5b (M.Drawer.abrirCompletoPendencia a partir da tela de Pendências já mostra a lista filtrada): OK");
 
+// ------------------------------------------------------------------
+// HOTFIX 3.15.5c — consolidação pós-smoke: os 3 casos formais pedidos pra
+// Act.go como infraestrutura compartilhada de navegação, mais o call-site
+// que o próprio commit do 3.15.5 já citava como exemplo (Act.trocarUsuario)
+// mas que na prática continuava usando `location.hash =` direto e nunca se
+// beneficiou do fix.
+//
+// CASO A — rota atual = destino, estado interno mudou -> tela precisa
+//          refletir o novo estado (coberto acima, no app75g/app75h).
+// CASO B — rota atual != destino -> navegação normal continua funcionando
+//          (coberto acima, no app75g).
+// CASO C — destino é a mesma rota e NADA relevante mudou -> não pode virar
+//          comportamento quebrado (erro, travamento) nem loop.
+// ----
+{
+  const app75i = contextoBase();
+  executar(app75i, "js/data.js");
+  app75i.M.UI = { toast(){}, esc:(s)=>String(s==null?"":s), icon:()=>"" };
+  let renders = 0;
+  app75i.M.render = function(){ renders++; };
+  app75i.location = {hash:"#/hoje"};
+  app75i.M.Pages = {};
+  app75i.M.UIState = {};
+  executar(app75i, "js/store.js");
+  executar(app75i, "js/calc.js");
+  executar(app75i, "js/actions.js");
+
+  // CASO C: chamar Act.go pra mesma rota várias vezes seguidas, sem nenhuma
+  // mudança de estado no meio, não pode travar, não pode lançar exceção, e
+  // não pode entrar em loop (cada chamada é 1 render, nem mais nem menos —
+  // Act.go não se auto-chama, então não há como isso recursar sozinho).
+  renders = 0;
+  let excecao = null;
+  try{
+    for(let i=0;i<5;i++) app75i.Act.go("#/hoje");
+  }catch(e){ excecao = e; }
+  assert.equal(excecao, null, "Caso C: chamar Act.go repetidamente pra mesma rota sem mudar estado não pode lançar exceção");
+  assert.equal(renders, 5, "Caso C: cada chamada de Act.go pra mesma rota renderiza exatamente 1 vez (sem acumular, sem pular, sem loop)");
+  assert.equal(app75i.location.hash, "#/hoje", "Caso C: hash permanece o mesmo, como esperado (não é uma navegação de verdade)");
+}
+console.log("Hotfix 3.15.5c — Caso C (Act.go repetido pra mesma rota sem mudança de estado, sem loop/travamento): OK");
+
+// ------------------------------------------------------------------
+// Consolidação 3.15.5 — Act.trocarUsuario agora navega via Act.go (antes
+// usava location.hash direto e ficava fora do alcance do fix, mesmo sendo
+// citado como exemplo no próprio commit). O seletor de usuário fica no
+// cabeçalho global (main.js) — presente em toda tela, inclusive Hoje. ----
+{
+  const app75j = contextoBase();
+  executar(app75j, "js/data.js");
+  let toasts = [];
+  app75j.M.UI = { toast(msg){ toasts.push(msg); }, esc:(s)=>String(s==null?"":s), icon:()=>"" };
+  let renders = 0;
+  app75j.M.render = function(){ renders++; };
+  app75j.M.Pages = {};
+  app75j.M.UIState = {};
+  executar(app75j, "js/store.js");
+  executar(app75j, "js/calc.js");
+  executar(app75j, "js/actions.js");
+
+  // cenário do bug: já estamos em #/hoje (onde o seletor de usuário vive) e
+  // trocamos de usuário sem navegar pra nenhum outro lugar antes.
+  app75j.location = {hash:"#/hoje"};
+  renders = 0;
+  const nomes = app75j.M.Store.state.equipe && app75j.M.Store.state.equipe.length
+    ? app75j.M.Store.state.equipe.map(c=>c.nome)
+    : [app75j.M.Store.state.usuarioAtual];
+  const outroNome = nomes.find(n=>n!==app75j.M.Store.state.usuarioAtual) || app75j.M.Store.state.usuarioAtual;
+  app75j.Act.trocarUsuario(outroNome);
+  assert.equal(app75j.M.Store.state.usuarioAtual, outroNome, "usuário precisa ter trocado de verdade no estado");
+  assert.equal(app75j.location.hash, "#/hoje", "hash continua #/hoje (é exatamente esse o cenário: já estava lá)");
+  assert.equal(renders, 1, "BUG: trocar de usuário estando já em Hoje (hash não muda) precisa forçar 1 render na mão via Act.go — sem isso o toast aparece mas a tela não reflete o novo usuário até outra ação");
+  assert.ok(toasts.some(t=>String(t).indexOf(outroNome)!==-1), "toast de confirmação da troca precisa ter sido disparado");
+
+  // navegação normal continua funcionando: trocar de usuário a partir de
+  // outra tela navega pra #/hoje do jeito de sempre (hash muda, quem
+  // renderiza é o listener de hashchange — não Act.go duplicando).
+  app75j.location = {hash:"#/obras"};
+  renders = 0;
+  app75j.Act.trocarUsuario(app75j.M.Store.state.usuarioAtual);
+  assert.equal(app75j.location.hash, "#/hoje", "trocar de usuário a partir de outra tela precisa navegar pra #/hoje");
+  assert.equal(renders, 0, "hash MUDOU (#/obras -> #/hoje) — quem renderiza é o listener de hashchange, Act.go não chama M.render() ele mesmo nesse caso");
+}
+console.log("Consolidação 3.15.5 — Act.trocarUsuario via Act.go (estava fora do alcance do fix apesar de citado no commit): OK");
+
 // ==================================================================
 // FASE 7.5 — DETALHE RÁPIDO (Parte C — Context Drawer) + Partes D/E
 // (Kanban e Hoje/Obra abrindo o MESMO drawer). Precisa de um `document`

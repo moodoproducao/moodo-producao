@@ -130,7 +130,19 @@
       location.hash = route;
     },
     rerender(){ M.render(); },
-    trocarUsuario(nome){ M.Store.setUsuarioAtual(nome); UI.toast("Agora navegando como "+nome+"."); location.hash = "#/hoje"; },
+    trocarUsuario(nome){
+      // HOTFIX 3.15.5 (completando o escopo): este call-site já era citado no
+      // próprio commit do fix de Act.go como um exemplo do mesmo bug, mas
+      // continuava usando `location.hash =` direto em vez de `Act.go(...)` —
+      // ou seja, na prática NUNCA se beneficiou da correção. O seletor de
+      // usuário fica no cabeçalho global (main.js), presente em toda tela,
+      // incluindo a própria Hoje — trocar de usuário estando já em Hoje
+      // deixava o toast aparecer mas a tela não refletia o novo usuário
+      // (permissões, atribuições) até outra ação forçar um re-render.
+      M.Store.setUsuarioAtual(nome);
+      UI.toast("Agora navegando como "+nome+".");
+      Act.go("#/hoje");
+    },
     toggleMobileMais(){ M.UIState.mobileMaisAberto = !M.UIState.mobileMaisAberto; Act.rerender(); },
 
     // ---------- equipe (grava direto na tabela colaboradores do Supabase) ----------
@@ -567,7 +579,7 @@
     // item 9 do backlog: atalho da aba Tarefas da obra pra a tela geral, já filtrada.
     verTarefasDaObra(obraId){
       M.UIState.tarefaFiltro = {responsavel:"", status:"", obraId};
-      location.hash = "#/tarefas";
+      Act.go("#/tarefas"); // via Act.go (não location.hash direto): fica seguro mesmo se um dia existir um atalho igual dentro da própria tela de Tarefas
     },
 
     // ---------- assistências ----------
@@ -1127,7 +1139,7 @@
       };
       Act.rerender();
     },
-    novaObraCancelar(){ Act.novaObraRecomecar(); location.hash = "#/obras"; },
+    novaObraCancelar(){ Act.novaObraRecomecar(); Act.go("#/obras"); },
     // setter único pros campos de identificação (comum a import e manual —
     // substitui os antigos novaObraSetIdentificacao/SetResponsavel, que
     // nunca existiram de verdade, ver achado de auditoria no relatório).
@@ -1314,7 +1326,7 @@
       UI.toast("Obra ativada com sucesso!");
       const obraId = w.obraId;
       Act.novaObraRecomecar();
-      location.hash = "#/obra/"+obraId;
+      Act.go("#/obra/"+obraId);
     },
 
     // ---------- calendário ----------
@@ -1465,7 +1477,7 @@
     toggleTvWidget(id){ M.Store.toggleTvWidget(id); },
     restaurarDados(){
       UI.confirm("Isso vai apagar tudo o que foi alterado no protótipo e voltar aos dados de exemplo originais. Continuar?", ()=>{
-        M.Store.reset(); UI.toast("Dados de exemplo restaurados."); location.hash = "#/hoje";
+        M.Store.reset(); UI.toast("Dados de exemplo restaurados."); Act.go("#/hoje");
       });
     },
 
