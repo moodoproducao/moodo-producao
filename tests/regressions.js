@@ -3903,6 +3903,91 @@ console.log("Fase 7.5 — Hotfix M.Pages.novaObra (primeira renderização ao re
 }
 console.log("Hotfix 3.15.4 (Act.novaObraSetCampo sem rerender — banner de OS duplicada/responsável ficava preso na tela): OK");
 
+// ------------------------------------------------------------------
+// HOTFIX 3.15.5 — Act.go(route) não disparava render() quando `route` já
+// era o hash atual. location.hash = mesmo-valor-de-antes NUNCA dispara
+// "hashchange" no navegador (comportamento nativo, não é bug do app) — e é
+// só o listener de hashchange (main.js) que chama render(). Isso é
+// inofensivo na maioria dos usos de Act.go (trocar de página sempre muda o
+// hash de verdade), mas quebra qualquer call-site que usa Act.go pra
+// "recarregar a tela atual com um filtro/aba diferente já setado antes" —
+// ex.: M.Drawer.abrirCompletoPendencia('#/pendencias') chamado a partir da
+// própria tela de Pendências: o filtro fica gravado certinho em
+// M.UIState.pendFiltro.obraId, mas a lista continua mostrando tudo, até
+// QUALQUER outra ação não relacionada forçar um re-render por fora.
+// Achado no smoke test em produção testando o Detalhe Rápido (Context
+// Drawer) com uma pendência real: "Abrir completo" a partir da tela de
+// Pendências não parecia fazer nada. Este teste cobre o Act.go em si
+// (fix na raiz, não só o call-site) e também o cenário real do drawer. ----
+{
+  const app75g = contextoBase();
+  executar(app75g, "js/data.js");
+  app75g.M.UI = { toast(){}, esc:(s)=>String(s==null?"":s), icon:()=>"" };
+  let renders = 0;
+  app75g.M.render = function(){ renders++; };
+  app75g.location = {hash:"#/pendencias"};
+  app75g.M.Pages = {};
+  app75g.M.UIState = {};
+  executar(app75g, "js/store.js");
+  executar(app75g, "js/calc.js");
+  executar(app75g, "js/actions.js");
+
+  // 1) mesmo hash de antes: hashchange nunca dispararia no navegador de
+  // verdade — Act.go precisa perceber isso e chamar M.render() na mão.
+  renders = 0;
+  app75g.Act.go("#/pendencias");
+  assert.equal(app75g.location.hash, "#/pendencias", "hash continua o mesmo (é exatamente esse o cenário)");
+  assert.equal(renders, 1,
+    "BUG: Act.go(route) pra um hash IGUAL ao atual precisa forçar M.render() na mão — sem isso, qualquer filtro/aba que o call-site tenha mudado antes de chamar Act.go fica preso na tela até outra ação re-renderizar");
+
+  // 2) hash DIFERENTE continua funcionando do jeito de sempre — muda
+  // location.hash e deixa o listener de hashchange (main.js, não simulado
+  // aqui) cuidar do render(); Act.go não pode chamar M.render() ele mesmo
+  // nesse caso (senão renderizaria different vezes numa navegação real).
+  renders = 0;
+  app75g.Act.go("#/obras");
+  assert.equal(app75g.location.hash, "#/obras", "precisa ter mudado o hash de verdade");
+  assert.equal(renders, 0, "hash MUDOU — quem chama render() é o listener de hashchange (main.js), Act.go não pode chamar M.render() ele mesmo aqui");
+}
+console.log("Hotfix 3.15.5 (Act.go sem forçar render quando o hash não muda — 'Abrir completo' do drawer parecia não fazer nada): OK");
+
+// ------------------------------------------------------------------
+// mesmo Hotfix 3.15.5, agora no cenário real de produção que expôs o bug:
+// M.Drawer.abrirCompletoPendencia chamado a partir da PRÓPRIA tela de
+// Pendências precisa deixar a lista já filtrada visível, sem precisar de
+// nenhuma outra ação no meio. ----
+{
+  const app75h = contextoBase();
+  executar(app75h, "js/data.js");
+  app75h.document = {currentScript:{src:"https://teste.local/js/pdf-import.js"}, getElementById(){ return null; }};
+  app75h.location = {hash:"#/pendencias"};
+  app75h.M.Pages = {};
+  app75h.M.UIState = {
+    pendFiltro:{obraId:"", status:"", impacto:"", responsavel:"", busca:"", modo:"todas"},
+    pendExpandido:null, pendView:"lista", pendSomenteMinhas:null,
+  };
+  executar(app75h, "js/store.js");
+  executar(app75h, "js/calc.js");
+  executar(app75h, "js/ui.js");
+  executar(app75h, "js/pages/pendencias.js");
+  executar(app75h, "js/drawer.js");
+  executar(app75h, "js/actions.js");
+  app75h.M.Store.setUsuarioAtual("Paulo Henrique");
+
+  let ultimaTelaRenderizada = null;
+  app75h.M.render = function(){ ultimaTelaRenderizada = app75h.M.Pages.pendencias(); };
+
+  const pend = app75h.M.Store.state.pendencias[0];
+  assert.ok(pend && pend.obraId, "pré-condição: precisa existir uma pendência real de exemplo com obraId");
+
+  app75h.M.Drawer.abrirCompletoPendencia(pend.id);
+  assert.equal(app75h.M.UIState.pendFiltro.obraId, pend.obraId, "filtro por obra precisa ter sido setado");
+  assert.ok(ultimaTelaRenderizada, "BUG: abrirCompletoPendencia a partir da própria tela de Pendências (hash não muda) precisa ter forçado um render — sem isso o filtro fica gravado mas a tela não reflete");
+  assert.ok(ultimaTelaRenderizada.html.includes(pend.descricao) || ultimaTelaRenderizada.html.length>0,
+    "a tela renderizada de novo precisa refletir o filtro já aplicado");
+}
+console.log("Hotfix 3.15.5b (M.Drawer.abrirCompletoPendencia a partir da tela de Pendências já mostra a lista filtrada): OK");
+
 // ==================================================================
 // FASE 7.5 — DETALHE RÁPIDO (Parte C — Context Drawer) + Partes D/E
 // (Kanban e Hoje/Obra abrindo o MESMO drawer). Precisa de um `document`

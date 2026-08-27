@@ -111,7 +111,24 @@
   }
 
   const Act = {
-    go(route){ location.hash = route; },
+    go(route){
+      // HOTFIX pós-publicação: quando `route` já é o hash atual, o navegador
+      // NUNCA dispara "hashchange" (é assim que location.hash sempre
+      // funcionou) — e é só o listener de hashchange (main.js) que chama
+      // render(). Isso é inofensivo na maioria dos Act.go(...) (troca de
+      // página de verdade sempre muda o hash), mas quebra os call-sites que
+      // usam Act.go pra "voltar pra tela atual, só que com um filtro/aba
+      // diferente já setado antes" (ex.: M.Drawer.abrirCompletoPendencia
+      // chamando Act.go('#/pendencias') a partir da própria tela de
+      // Pendências) — o estado (filtro, aba) fica gravado certinho, mas a
+      // tela continua mostrando o que já estava, até QUALQUER outra ação
+      // não relacionada forçar um re-render por fora. Achado no smoke test
+      // em produção testando o Detalhe Rápido com uma pendência real.
+      // Forçar o render manualmente quando o hash não muda fecha essa
+      // classe inteira de bug, sem precisar caçar call-site por call-site.
+      if(location.hash === route){ M.render(); return; }
+      location.hash = route;
+    },
     rerender(){ M.render(); },
     trocarUsuario(nome){ M.Store.setUsuarioAtual(nome); UI.toast("Agora navegando como "+nome+"."); location.hash = "#/hoje"; },
     toggleMobileMais(){ M.UIState.mobileMaisAberto = !M.UIState.mobileMaisAberto; Act.rerender(); },
