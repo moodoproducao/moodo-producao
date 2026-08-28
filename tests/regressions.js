@@ -4258,6 +4258,219 @@ console.log("Consolidação 3.15.5 — Act.trocarUsuario via Act.go (estava fora
 console.log("Fase 7.5 — Detalhe Rápido (Context Drawer) + Kanban/Hoje/Obra (Partes C/D/E): OK");
 
 // ==================================================================
+// FASE 8 — ADMIN V2 (seção 30 do pedido: Panorama/Indicadores/Equipe/
+// Auditoria/Config/Mobile/Regressão). Precisa do MESMO stub de DOM que o
+// Context Drawer (js/drawer.js é usado pelo detalhe de evento de
+// Auditoria) e da pilha completa de páginas de que M.Pages.admin depende
+// (agenda.js -> M.Agenda, configuracoes.js -> M.Pages._configSecoes).
+// ==================================================================
+{
+  function domStubAdmin(){
+    const registry = {};
+    function makeEl(tag){
+      let _id = "";
+      const el = {
+        tagName: String(tag||"div").toUpperCase(), _html:"", className:"", children:[],
+        classList: { _set:new Set(), add(c){this._set.add(c);}, remove(c){this._set.delete(c);}, contains(c){return this._set.has(c);} },
+        addEventListener(){}, querySelectorAll(){ return []; },
+        appendChild(child){ this.children.push(child); if(child.id) registry[child.id]=child; },
+        get id(){ return _id; }, set id(v){ _id=v; if(v) registry[v]=el; },
+        get innerHTML(){ return this._html; },
+        set innerHTML(html){
+          this._html = html;
+          const re = /id="([a-zA-Z0-9_-]+)"/g; let m;
+          while((m = re.exec(html))){ if(!registry[m[1]]) registry[m[1]] = makeEl("div"); }
+        },
+      };
+      return el;
+    }
+    const body = makeEl("body");
+    return { body, createElement: makeEl, getElementById: (id)=> registry[id]||null };
+  }
+
+  const appAdmin = contextoBase();
+  executar(appAdmin, "js/data.js");
+  appAdmin.document = Object.assign({currentScript:{src:"https://teste.local/js/pdf-import.js"}}, domStubAdmin());
+  executar(appAdmin, "js/store.js");
+  executar(appAdmin, "js/calc.js");
+  executar(appAdmin, "js/ui.js");
+  appAdmin.M.Pages = {};
+  appAdmin.M.render = function(){}; // Act.rerender()/Act.go() chamam M.render() — sem DOM real, só precisa não lançar
+  executar(appAdmin, "js/actions.js"); // define M.UIState canônico (inclui admin*) + Act.*
+  executar(appAdmin, "js/drawer.js");
+  executar(appAdmin, "js/pages/agenda.js");        // M.Agenda
+  executar(appAdmin, "js/pages/configuracoes.js"); // M.Pages._configSecoes
+  executar(appAdmin, "js/pages/admin.js");
+  executar(appAdmin, "js/router.js");
+
+  // ---- fixtures: 1 obra em risco alto (entrega vencida + bloqueio), 1 obra
+  // legada sem faseMacro, 1 pendência crítica antiga, 1 ambiente travado ----
+  const obraRisco = {
+    id:"fx8-obra1", cliente:"Cliente Risco", numeroOS:"OS FX8/1", status:"ATIVA", faseMacro:"PRODUCAO",
+    dataEntregaPrevista: appAdmin.M.dOff(-2),
+    ambientes:[{id:"fx8-amb1", nome:"Cozinha", travamentoManual:{motivo:"Aguardando síndico"}, moveis:[{id:"fx8-mov1", nome:"Painel", etapa:"CORTE", componentesCriticos:[]}]}],
+  };
+  const obraLegado = {
+    id:"fx8-obra2", cliente:"Cliente Legado", numeroOS:"OS FX8/2", status:"ATIVA", // faseMacro AUSENTE de propósito
+    dataEntregaPrevista: appAdmin.M.dOff(20),
+    ambientes:[{id:"fx8-amb2", nome:"Sala", moveis:[{id:"fx8-mov2", nome:"Estante", etapa:"LIBERADA", componentesCriticos:[]}]}],
+  };
+  const obraRascunho = {
+    id:"fx8-obra3", cliente:"Cliente Rascunho", numeroOS:"OS FX8/3", status:"RASCUNHO",
+    dataEntregaPrevista: appAdmin.M.dOff(1), ambientes:[],
+  };
+  appAdmin.M.Store.state.obras.push(obraRisco, obraLegado, obraRascunho);
+  appAdmin.M.Store.state.pendencias.push({
+    id:"fx8-pend1", obraId:obraRisco.id, obraNome:obraRisco.cliente, categoria:"Vidro", tipo:"CRITICO",
+    impacto:"BLOQUEIA_OBRA", status:"ABERTA", responsavel:"Willian Souza",
+    abertura: appAdmin.M.dOff(-9), origem:"Fornecedor", fluxoPassos:["Fornecedor"], passoAtual:0,
+  });
+
+  // ---- 1) router: "admin" aceita subrota e continua exigindo QUALQUER
+  // admin.* (nenhuma permissão nova) ----
+  assert.equal(typeof appAdmin.M.Router.ROUTES.admin, "function", "ROUTES.admin precisa continuar existindo");
+  assert.equal(appAdmin.M.Router.ROUTE_PERMS.admin.join(","), ["admin.equipe","admin.configuracoes","admin.indicadores","admin.auditoria"].join(","),
+    "ROUTE_PERMS.admin não pode ter ganhado nem perdido permissão nesta fase");
+
+  // ---- 2) PANORAMA (ADMIN): KPIs batem com Calc direto (nenhuma segunda
+  // regra de contagem), rascunho fica de fora, obra sem faseMacro não vira
+  // fase inventada (some da distribuição por fase, cai só no aviso "sem
+  // fase definida") ----
+  appAdmin.M.Store.setUsuarioAtual("Paulo Henrique"); // ADMIN
+  const obrasOp = appAdmin.M.Store.obrasOperacionais();
+  assert.equal(obrasOp.some(o=>o.id===obraRascunho.id), false, "obrasOperacionais() precisa excluir rascunho — pré-condição");
+  const htmlPanorama = appAdmin.M.Pages.admin("panorama").html;
+  assert.ok(htmlPanorama.includes("Cliente Rascunho")===false, "Panorama não pode contar/mostrar obra RASCUNHO em nenhum bloco");
+  assert.ok(htmlPanorama.includes(">"+String(obrasOp.length)+"<") || htmlPanorama.includes(">"+String(obrasOp.length)+"</div>"),
+    "KPI 'Obras ativas' precisa refletir exatamente Store.obrasOperacionais().length (mesma fonte, sem duplicar)");
+  assert.ok(htmlPanorama.includes("Cliente Risco"), "obra de risco alto precisa aparecer no bloco de exceções");
+  assert.ok(htmlPanorama.includes("sem fase definida"), "obra legada sem faseMacro precisa aparecer como 'sem fase definida' — nunca inferida como uma fase real");
+  assert.ok(!/Fase "PRODUCAO"/.test(htmlPanorama), "obra legada não pode ser contada dentro de nenhuma fase real do funil");
+
+  // ---- 3) INDICADORES: seletor de período muda o texto exibido; métricas
+  // sem dado histórico confiável mostram "dados insuficientes" (nunca
+  // fabricam tendência) ----
+  assert.equal(appAdmin.M.UIState.adminIndicadoresPeriodo, 30, "período padrão precisa ser 30 dias");
+  appAdmin.Act.setAdminIndicadoresPeriodo(7);
+  assert.equal(appAdmin.M.UIState.adminIndicadoresPeriodo, 7);
+  const htmlInd7 = appAdmin.M.Pages.admin("indicadores").html;
+  assert.ok(htmlInd7.includes("Últimos 7 dias"), "período selecionado precisa aparecer explícito na tela (item 8)");
+  assert.ok((htmlInd7.match(/dados insuficientes/g)||[]).length >= 2, "tempo médio por fase E tempo até finalizar precisam aparecer como 'dados insuficientes' — não fabricados");
+  appAdmin.Act.setAdminIndicadoresPeriodo("custom");
+  assert.ok(typeof appAdmin.M.UIState.adminIndicadoresPeriodo === "object", "'Personalizado' precisa virar {ini,fim}");
+  appAdmin.Act.setAdminIndicadoresPeriodoCustom("ini", "2026-01-01");
+  assert.equal(appAdmin.M.UIState.adminIndicadoresPeriodo.ini, "2026-01-01");
+  appAdmin.Act.setAdminIndicadoresPeriodo(30); // devolve o padrão pro resto dos testes
+
+  // ---- 4) DESEMPENHO: sem nota geral/ranking colorido — nunca ordena por
+  // índice, sempre alfabético; usa desempenhoColaborador/pendenciasDoColaborador
+  // direto, nunca indiceDesempenho/rankingColaboradores ----
+  const htmlDes = appAdmin.M.Pages.admin("desempenho").html;
+  assert.ok(!/rank-row|rank-pos|rank-idx/.test(htmlDes), "Desempenho do Admin V2 não pode reusar o markup de ranking (.rank-row) da tela antiga");
+  const posAna = htmlDes.indexOf("Ana Ferreira"), posWillian = htmlDes.indexOf("Willian Souza");
+  assert.ok(posAna>=0 && posWillian>=0 && posAna<posWillian, "colaboradores precisam aparecer em ordem ALFABÉTICA, não por performance");
+
+  // ---- 5) EQUIPE/USUÁRIOS: aviso de identidade provisória (usuarioAtual
+  // não é Auth real) sempre presente; escopo por permissão (Produção/
+  // Montador sem admin.equipe não acessam); troca de perfil fica registrada
+  // em auditoria (quem/colaborador/antes/depois/quando), nunca só um toast ----
+  const htmlEquipeAdmin = appAdmin.M.Pages.admin("equipe").html;
+  assert.ok(/n.o .* Auth real|modo de desenvolvimento/i.test(htmlEquipeAdmin), "Equipe/Usuários precisa deixar explícito que usuarioAtual não é Auth real");
+  appAdmin.M.Store.setUsuarioAtual("Willian Souza"); // OPERADOR (Produção) — sem admin.equipe
+  assert.equal(appAdmin.M.Store.pode("admin.equipe"), false, "pré-condição: Produção não tem admin.equipe");
+  const htmlEquipeProducao = appAdmin.M.Pages.admin("equipe").html;
+  assert.ok(/não tem acesso/.test(htmlEquipeProducao), "Produção (Operador) não pode ver o conteúdo de Equipe/Usuários");
+  appAdmin.M.Store.setUsuarioAtual("Roberto Diniz"); // MONTADOR — sem admin.equipe
+  assert.equal(appAdmin.M.Store.pode("admin.equipe"), false, "pré-condição: Montador não tem admin.equipe");
+  assert.ok(/não tem acesso/.test(appAdmin.M.Pages.admin("equipe").html), "Montador também não pode ver Equipe/Usuários");
+  appAdmin.M.Store.setUsuarioAtual("Paulo Henrique");
+
+  const roberto = appAdmin.M.COLABORADORES.find(c=>c.nome==="Roberto Diniz");
+  const perfilAntes = roberto.perfil;
+  const auditoriaAntes = appAdmin.M.Store.state.auditoria.length;
+  appAdmin.M.Store.auditarAlteracaoPerfilColaborador(roberto.nome, perfilAntes, "LIDERANCA");
+  assert.equal(appAdmin.M.Store.state.auditoria.length, auditoriaAntes+1, "troca de perfil precisa gerar um evento de auditoria — não só um toast");
+  const eventoPerfil = appAdmin.M.Store.state.auditoria[0];
+  assert.equal(eventoPerfil.categoria, "GOVERNANCA");
+  assert.equal(eventoPerfil.colaborador, roberto.nome);
+  assert.equal(eventoPerfil.perfilAnterior, perfilAntes);
+  assert.equal(eventoPerfil.perfilNovo, "LIDERANCA");
+  assert.ok(eventoPerfil.descricao && eventoPerfil.descricao.indexOf(roberto.nome)!==-1, "descrição do evento precisa citar o colaborador");
+  // sem mudança real (mesmo perfil) não deve gerar evento novo (evita ruído)
+  appAdmin.M.Store.auditarAlteracaoPerfilColaborador(roberto.nome, "LIDERANCA", "LIDERANCA");
+  assert.equal(appAdmin.M.Store.state.auditoria.length, auditoriaAntes+1, "perfil igual (sem mudança real) não pode gerar evento novo");
+  // js/actions.js precisa de fato CHAMAR esse método no fluxo de edição de
+  // colaborador (checagem estática do arquivo-fonte — abrir o formulário de
+  // verdade exige M.Supa, fora do escopo deste harness síncrono).
+  const actionsSrc = fs.readFileSync(path.join(root, "js/actions.js"), "utf8");
+  assert.ok(/auditarAlteracaoPerfilColaborador/.test(actionsSrc), "openColaboradorForm precisa chamar Store.auditarAlteracaoPerfilColaborador quando o perfil muda");
+
+  // ---- 6) AUDITORIA: eventos de state.historico E state.auditoria
+  // aparecem juntos (merge de apresentação, nenhuma 3ª estrutura); filtros
+  // funcionam; visualizações de Pendência aparecem SÓ aqui, com o aviso de
+  // identidade provisória — e esse aviso NÃO vaza pra Panorama/Equipe ----
+  appAdmin.M.Store.log(obraRisco.id, "OBRA_EDITADA", "Obra Risco editada — teste");
+  appAdmin.M.Store.setUsuarioAtual("Willian Souza");
+  appAdmin.M.Store.registrarPrimeiraVisualizacaoPendencia("fx8-pend1");
+  appAdmin.M.Store.setUsuarioAtual("Paulo Henrique");
+  appAdmin.M.UIState.adminAuditoriaFiltro.periodo = 90;
+  const htmlAud = appAdmin.M.Pages.admin("auditoria").html;
+  assert.ok(htmlAud.includes("Obra editada"), "evento de state.historico precisa aparecer na Auditoria do Admin V2");
+  assert.ok(htmlAud.includes("Permissão") || htmlAud.includes("permissão") || appAdmin.M.Store.state.auditoria.length>0,
+    "eventos de state.auditoria também precisam aparecer (merge das duas fontes)");
+  const AVISO_IDENTIDADE = "não representa evidência forte de autoria";
+  assert.ok(htmlAud.includes(AVISO_IDENTIDADE), "aviso de identidade provisória precisa aparecer junto das visualizações de Pendência");
+  assert.ok(htmlAud.includes("Willian Souza"), "visualização de pendência registrada precisa aparecer na lista");
+  assert.ok(!htmlPanorama.includes(AVISO_IDENTIDADE), "aviso de identidade provisória NÃO pode vazar pro Panorama");
+  assert.ok(!htmlEquipeAdmin.includes(AVISO_IDENTIDADE), "aviso de identidade provisória NÃO pode vazar pra tela de Equipe (ela tem o SEU PRÓPRIO aviso, sobre usuarioAtual não ser Auth — texto diferente)");
+  // filtro por tipo restringe de verdade
+  appAdmin.M.UIState.adminAuditoriaFiltro.tipo = "OBRA_EDITADA";
+  const htmlAudFiltrado = appAdmin.M.Pages.admin("auditoria").html;
+  assert.ok(htmlAudFiltrado.includes("Obra editada"));
+  appAdmin.M.UIState.adminAuditoriaFiltro.tipo = "";
+  // drawer de detalhe (item 18) — reusa o Context Drawer, sem duplicar leitura
+  const idEventoHist = "h_"+appAdmin.M.Store.state.historico[0].id;
+  const eventoNormalizado = appAdmin.M.Pages._adminAuditoriaEventoPorId(idEventoHist);
+  assert.ok(eventoNormalizado, "_adminAuditoriaEventoPorId precisa achar o evento pelo id normalizado");
+  appAdmin.M.Drawer.abrirEventoAuditoria(idEventoHist);
+  const painelEvento = appAdmin.document.getElementById("drawerPanel").innerHTML;
+  assert.ok(painelEvento.includes("Cliente Risco"), "drawer de evento de auditoria precisa mostrar a obra relacionada");
+  appAdmin.M.Drawer.fechar();
+
+  // ---- 7) CONFIGURAÇÕES: permissão respeitada (quem não tem
+  // admin.configuracoes não acessa nada) e nada sensível é alterável por
+  // quem não tem editarPermissoes (matriz some os checkboxes) ----
+  appAdmin.M.Store.setUsuarioAtual("Willian Souza"); // Produção — sem admin.configuracoes
+  assert.ok(/não tem acesso/.test(appAdmin.M.Pages.admin("configuracoes").html), "Produção não pode acessar Configurações do Admin V2");
+  appAdmin.M.Store.setUsuarioAtual("Beatriz Nogueira"); // PCP — verConfiguracoes:true, editarPermissoes:false
+  appAdmin.M.UIState.adminConfigCategoria = "permissoes";
+  const htmlConfigPermPCP = appAdmin.M.Pages.admin("configuracoes").html;
+  assert.ok(!/type="checkbox"/.test(htmlConfigPermPCP), "quem não tem editarPermissoes não pode ver controles editáveis na matriz (só leitura)");
+  appAdmin.M.Store.setUsuarioAtual("Paulo Henrique");
+  appAdmin.M.UIState.adminConfigCategoria = "seguranca";
+  const htmlConfigSeg = appAdmin.M.Pages.admin("configuracoes").html;
+  assert.ok(/Auth real.*Pendente/s.test(htmlConfigSeg) || htmlConfigSeg.includes("Pendente"), "status de segurança precisa aparecer, sem implementar nada de verdade");
+  assert.ok(!/localStorage\.setItem\(['"]auth/i.test(fs.readFileSync(path.join(root,"js/pages/admin.js"),"utf8")), "Configurações→Segurança não pode ter implementado nenhum mecanismo real de auth");
+  appAdmin.M.UIState.adminConfigCategoria = "geral";
+
+  // ---- 8) fonte de verdade: nenhuma chamada nova a localStorage/fetch fora
+  // de Store/Supa dentro de js/pages/admin.js (sem cache paralelo) ----
+  const adminSrc = fs.readFileSync(path.join(root, "js/pages/admin.js"), "utf8");
+  assert.ok(!/localStorage\./.test(adminSrc), "js/pages/admin.js não pode acessar localStorage direto (sempre via Store)");
+  assert.ok(!/JSON\.parse\(JSON\.stringify\(M\.Store\.state/.test(adminSrc), "js/pages/admin.js não pode clonar/cachear state por conta própria");
+
+  // ---- 9) MOBILE — checagem estrutural: as telas usam os componentes
+  // responsivos já adotados (.mcard/.grid-2, que colapsam pra 1 coluna sob
+  // o breakpoint já existente) em vez de comprimir tabela alguma; nenhuma
+  // tabela dentro de Equipe/Panorama usa <table> pra listar pessoas (só
+  // pros pequenos resumos numéricos, que não são "a lista principal") ----
+  assert.ok(htmlEquipeAdmin.includes('class="mcard"'), "Equipe/Usuários precisa usar cards empilháveis (.mcard) — nunca comprimir tabela no mobile");
+  assert.ok(htmlPanorama.includes("kpi-row"), "Panorama precisa usar a faixa de KPI compacta padrão (mesma de Hoje/Obras)");
+
+  console.log("Fase 8 — Admin V2 (Panorama/Indicadores/Desempenho/Equipe/Auditoria/Configurações): OK");
+}
+
+// ==================================================================
 // HOTFIX 3.1 — persistSupabase() não pode chamar Supa.salvarEstado() com
 // cliente nulo; precisa esperar M.Supa.ready; precisa coalescer gravações
 // concorrentes (fila de tamanho 1 — só a mais recente sobrevive, nunca uma

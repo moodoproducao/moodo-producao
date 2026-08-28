@@ -84,6 +84,18 @@
     agendaFiltros: {tipo:"", equipe:"", obraId:"", status:""},
     agendaEventoSelId: null,
     agendaMobileTab: "HOJE",
+    // FASE 8 (Admin V2) — estado efêmero da área administrativa (nunca
+    // persistido, mesmo padrão de auditoriaFiltro/pendFiltro/etc. acima).
+    // adminAuditoriaFiltro é DELIBERADAMENTE separado de auditoriaFiltro
+    // (usado pela rota legada #/auditoria, item 28 — continua existindo como
+    // alias intocado): a Auditoria da Fase 8 tem campos novos (tipo,
+    // entidade, busca, visão "visualizações de pendência") que a tela antiga
+    // não tem — misturar o mesmo objeto acoplaria as duas telas sem motivo.
+    adminIndicadoresPeriodo: 30, // 7 | 30 | 90 | {ini,fim} (personalizado)
+    adminDesempenhoPeriodo: 30,
+    adminEquipeBusca: "",
+    adminAuditoriaFiltro: {periodo:30, usuario:"", tipo:"", obraId:"", entidade:"", busca:"", visao:"eventos"},
+    adminConfigCategoria: "geral",
   };
 
   // ---------- upload de arquivos/fotos (Supabase Storage) ----------
@@ -163,8 +175,14 @@
         if(submitBtn) submitBtn.disabled = true;
         try{
           if(c){
+            const perfilAnterior = c.perfil; // captura ANTES do Object.assign sobrescrever
             const atualizado = await M.Supa.atualizarColaborador(c.id, dados);
             Object.assign(c, atualizado);
+            // FASE 8 (Admin V2, item 13): troca de perfil não pode ficar só no
+            // toast — registra em auditoria (quem/colaborador/antes/depois/quando).
+            if(perfilAnterior !== c.perfil){
+              M.Store.auditarAlteracaoPerfilColaborador(c.nome, perfilAnterior, c.perfil);
+            }
           } else {
             const criado = await M.Supa.criarColaborador(dados);
             M.COLABORADORES.push(criado);
@@ -1447,6 +1465,18 @@
       URL.revokeObjectURL(url);
       UI.toast("Auditoria exportada.");
     },
+
+    // ---------- Admin V2 (Fase 8) ----------
+    setAdminIndicadoresPeriodo(dias){ M.UIState.adminIndicadoresPeriodo = dias==="custom" ? {ini:M.UIState.adminIndicadoresPeriodo&&M.UIState.adminIndicadoresPeriodo.ini||M.dOff(-30), fim:M.todayISO()} : Number(dias); Act.rerender(); },
+    setAdminIndicadoresPeriodoCustom(campo,val){
+      const atual = (M.UIState.adminIndicadoresPeriodo && typeof M.UIState.adminIndicadoresPeriodo==="object") ? M.UIState.adminIndicadoresPeriodo : {ini:M.dOff(-30), fim:M.todayISO()};
+      M.UIState.adminIndicadoresPeriodo = Object.assign({}, atual, {[campo]:val});
+      Act.rerender();
+    },
+    setAdminDesempenhoPeriodo(dias){ M.UIState.adminDesempenhoPeriodo = dias==="custom" ? {ini:M.dOff(-30), fim:M.todayISO()} : Number(dias); Act.rerender(); },
+    setAdminEquipeBusca(v){ M.UIState.adminEquipeBusca = v; Act.rerender(); },
+    setAdminAuditoriaFiltro(campo,val){ M.UIState.adminAuditoriaFiltro[campo] = val; Act.rerender(); },
+    setAdminConfigCategoria(cat){ M.UIState.adminConfigCategoria = cat; Act.rerender(); },
 
     // ---------- configurações ----------
     salvarPesosDesempenho(form){

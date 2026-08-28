@@ -183,7 +183,13 @@
     // por compatibilidade de link antigo, agora apontando pro mesmo
     // M.Pages.calendario() de sempre (nada mudou nele nesta fase).
     "agenda": ()=> M.Pages.agenda(),
-    "admin": ()=> M.Pages.adminHub(),
+    // FASE 8 (Admin V2) — "admin" passa a aceitar subrota interna
+    // (#/admin/panorama, #/admin/indicadores, ...) igual "configuracoes" já
+    // fazia (p[0] = subseção). Sem subrota, entra em Panorama (default). O
+    // hub antigo (M.Pages.adminHub, js/pages/adminHub.js) continua no
+    // arquivo só como referência histórica — deixa de ser chamado por
+    // qualquer rota; M.Pages.admin (novo) é quem responde "#/admin" agora.
+    "admin": (p)=> M.Pages.admin(p[0]),
   };
 
   M.Router = { menuDoPerfil, parseHash, ROUTES, ROUTE_PERMS };

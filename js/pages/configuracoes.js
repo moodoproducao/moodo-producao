@@ -395,11 +395,11 @@
       ["— Produção: ver (quadro)","producao.ver"], ["— TV: configurar","tv.configurar"],
     ];
     const podeEditar = M.Store.pode("editarPermissoes");
-    const valorDe = (perfilKey,acao)=>{
-      const overrides = M.Store.state.permissoes && M.Store.state.permissoes[perfilKey];
-      if(overrides && Object.prototype.hasOwnProperty.call(overrides,acao)) return overrides[acao];
-      return M.perfilDef(perfilKey).pode[acao];
-    };
+    // FASE 8 (Admin V2): valorDe virou um wrapper fino sobre Store.podePerfil
+    // (extraído daqui pra Store — mesma leitura efetiva, com override —
+    // porque Equipe/Usuários e Admin→Permissões da Fase 8 também precisam
+    // dela; não faz sentido duas cópias da mesma regra de override).
+    const valorDe = (perfilKey,acao)=> M.Store.podePerfil(perfilKey, acao);
     return `
       <p class="small muted" style="margin-bottom:12px;">Nesta versão os perfis são fixos (Administrador, PCP/Gestão, Líder, Produção, Montador, Consulta/TV, Gestor, Assistência) — a regra de menor acesso já está ativa na navegação e agora também bloqueia acesso direto por link, não só esconde o menu. ${podeEditar? 'Clique numa caixinha pra ligar/desligar.' : 'Só quem tem "Editar permissões" pode alterar esta tabela.'} As linhas com "—" são as permissões novas por ação (Fase 1) — mais granulares que as de cima, e ainda ajustáveis aqui, perfil por perfil.</p>
       <div class="perm-grid-wrap">
@@ -472,5 +472,19 @@
       ${fn()}
     `;
     return {title:"Configurações", crumb:"Processos, indicadores, TV, permissões e notificações", html};
+  };
+
+  // FASE 8 (Admin V2) — export aditivo das seções internas (nenhuma delas
+  // muda de assinatura nem de comportamento; só passam a ser chamáveis de
+  // fora deste arquivo). Objetivo: js/pages/admin.js reorganiza essas MESMAS
+  // seções em categorias novas (Geral/Operação/Permissões/TV/Segurança) sem
+  // duplicar nem reescrever nenhuma delas — "não duplicar cálculo" vale pra
+  // markup de configuração também, não só pra número. M.Pages.configuracoes
+  // (rota legada #/configuracoes) continua 100% intocada, chamando as
+  // mesmas funções por cima como sempre chamou.
+  M.Pages._configSecoes = {
+    integracoes: secIntegracoes, processos: secProcessos, indicadores: secIndicadores,
+    tv: secTv, permissoes: secPermissoes, notificacoes: secNotificacoes,
+    assistencias: secAssistencias, dados: secDados,
   };
 })();

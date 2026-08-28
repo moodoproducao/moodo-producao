@@ -659,10 +659,20 @@
     // M.PERFIS só se essa chave ainda não existir (estado antigo migrando,
     // ou perfil/ação nova que a semente ainda não tinha quando foi salva).
     pode(acao){
-      const perfil = Store.perfilAtual();
-      const overrides = state.permissoes && state.permissoes[perfil.key];
+      return Store.podePerfil(Store.perfilAtual().key, acao);
+    },
+    // FASE 8 (Admin V2): mesma leitura efetiva de `pode`, mas pra QUALQUER
+    // perfil informado — não só o do usuário atual. Extraído de `pode` (que
+    // agora só chama isto com o próprio perfil) porque a matriz de
+    // permissões de Configurações→Permissões já precisava disso pra montar a
+    // tabela (uma coluna por perfil), e a Fase 8 (Equipe/Usuários "principais
+    // permissões" + Admin→Permissões) precisa da mesma leitura — sem duplicar
+    // a lógica de override numa segunda função.
+    podePerfil(perfilKey, acao){
+      const perfil = M.perfilDef(perfilKey);
+      const overrides = state.permissoes && state.permissoes[perfilKey];
       if(overrides && Object.prototype.hasOwnProperty.call(overrides, acao)) return !!overrides[acao];
-      return !!perfil.pode[acao];
+      return !!(perfil && perfil.pode[acao]);
     },
     setPermissao(perfilKey, acao, valor){
       if(!Store.pode("editarPermissoes")) return {ok:false, motivo:"SEM_PERMISSAO"};
@@ -679,6 +689,20 @@
         descricao:`Permissão "${acao}" do perfil "${M.perfilDef(perfilKey).label}" alterada para ${valor?"permitido":"bloqueado"}.`});
       emit();
       return {ok:true};
+    },
+    // FASE 8 (Admin V2, item 13): registra troca de perfil de colaborador na
+    // auditoria (quem/colaborador/perfil anterior/perfil novo/quando). Existe
+    // como método próprio (em vez de o chamador montar o `Store.audit` direto)
+    // porque `emit()` é fechamento privado deste arquivo — actions.js não tem
+    // como persistir um `Store.audit(...)` sozinho, precisa de um método
+    // público que faça as duas coisas, igual `setPermissao` já faz.
+    auditarAlteracaoPerfilColaborador(nomeColaborador, perfilAnterior, perfilNovo){
+      if(!nomeColaborador || perfilAnterior===perfilNovo) return;
+      const autor = Store.perfilAtual();
+      Store.audit({categoria:"GOVERNANCA", tipo:"ALTERACAO_PROCESSO",
+        descricao:`Perfil de "${nomeColaborador}" alterado de "${(M.perfilDef(perfilAnterior)||{}).label||perfilAnterior}" para "${(M.perfilDef(perfilNovo)||{}).label||perfilNovo}" (por ${state.usuarioAtual||"?"}, perfil ${autor.label}).`,
+        colaborador: nomeColaborador, perfilAnterior, perfilNovo});
+      emit();
     },
     // item 9: obras onde a pessoa tem alguma tarefa/pendência/assistência
     // atribuída — não existe (nem deve existir) um vínculo direto "obra do

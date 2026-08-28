@@ -108,11 +108,66 @@
     `;
   }
 
+  // FASE 8 (Admin V2, item 18) — detalhe de evento de Auditoria. Não duplica
+  // nenhuma leitura: a normalização (merge de state.historico + state.
+  // auditoria numa forma só) mora em js/pages/admin.js (M.Pages.
+  // _adminAuditoriaEventoPorId) — este arquivo só chama essa função e
+  // desenha o resultado, igual renderPendenciaHtml acima só lê
+  // state.pendencias direto. Se admin.js ainda não carregou (ordem de
+  // script), cai no "não encontrado" — nunca quebra.
+  function renderEventoAuditoriaHtml(id){
+    const UI = M.UI, C = M.Calc;
+    const buscar = M.Pages && M.Pages._adminAuditoriaEventoPorId;
+    const e = buscar ? buscar(id) : null;
+    if(!e) return null;
+    const obra = e.obraId ? M.Store.getObra(e.obraId) : null;
+    const antesDepois = [];
+    if(e.extra){
+      if(e.extra.perfilAnterior && e.extra.perfilNovo){
+        antesDepois.push(`Perfil: <b>${UI.esc((M.perfilDef(e.extra.perfilAnterior)||{}).label||e.extra.perfilAnterior)}</b> → <b>${UI.esc((M.perfilDef(e.extra.perfilNovo)||{}).label||e.extra.perfilNovo)}</b>`);
+      }
+      if(e.extra.responsavelAnterior || e.extra.novoResponsavel){
+        antesDepois.push(`Responsável: <b>${UI.esc(e.extra.responsavelAnterior||"—")}</b> → <b>${UI.esc(e.extra.novoResponsavel||"—")}</b>`);
+      }
+      if(e.extra.novoPrazo) antesDepois.push(`Novo prazo: <b>${C.fmtDate(e.extra.novoPrazo)}</b>`);
+    }
+    const acoes = [];
+    if(e.obraId) acoes.push(`<button class="btn sm ghost" onclick="M.Drawer.fechar();Act.go('#/obra/${e.obraId}')">${UI.icon('building',12)} Abrir obra</button>`);
+    if(e.extra && e.extra.pendenciaId) acoes.push(`<button class="btn sm ghost" onclick="M.Drawer.abrirPendencia('${e.extra.pendenciaId}')">${UI.icon('alert',12)} Ver pendência</button>`);
+    if(e.extra && e.extra.assistenciaId) acoes.push(`<button class="btn sm ghost" onclick="M.Drawer.fechar();Act.go('#/assistencia/${e.extra.assistenciaId}')">${UI.icon('lifebuoy',12)} Ver assistência</button>`);
+    return `
+      <div class="drawer-head">
+        <div>
+          <div class="small muted">${e.origem==="AUDITORIA"? UI.esc((e.categoria||"").toLowerCase()) : "histórico"} · ${UI.esc(e.tipoLabel||e.tipo)}</div>
+          <h2 style="font-size:16px;margin-top:4px;">${UI.esc(e.descricao||e.tipoLabel||e.tipo)}</h2>
+        </div>
+        <button class="drawer-close" onclick="M.Drawer.fechar()">✕</button>
+      </div>
+      <div class="drawer-body">
+        ${linha("Autor", e.usuario? UI.person(e.usuario) : "Sistema")}
+        ${linha("Quando", `${C.fmtDate(e.data)}${e.hora? " "+e.hora : ""}`)}
+        ${linha("Obra", obra? `<a href="#/obra/${obra.id}">${UI.esc(obra.cliente)} — ${UI.esc(obra.numeroOS||"")}</a>` : "")}
+        ${linha("Contexto", antesDepois.length? antesDepois.join("<br>") : "")}
+      </div>
+      <div class="drawer-actions">${acoes.join("")}</div>
+    `;
+  }
+
   function renderConteudoAtual(){
     if(!estadoAtual) return null;
     if(estadoAtual.tipo==="pendencia") return renderPendenciaHtml(estadoAtual.id);
+    if(estadoAtual.tipo==="eventoAuditoria") return renderEventoAuditoriaHtml(estadoAtual.id);
     return null; // outros tipos chegam nas próximas fases (item 34-F)
   }
+
+  M.Drawer.abrirEventoAuditoria = function(id){
+    estadoAtual = {tipo:"eventoAuditoria", id};
+    const ov = ensureDom();
+    const html = renderConteudoAtual();
+    if(html==null){ M.Drawer.fechar(); return; }
+    document.getElementById("drawerPanel").innerHTML = html;
+    ov.classList.add("open");
+  };
 
   M.Drawer.abrirPendencia = function(pendId){
     estadoAtual = {tipo:"pendencia", id:pendId};
