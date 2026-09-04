@@ -602,12 +602,42 @@
 
   // ============================================================
   // TV (§21) — só resumo/acesso nesta fase; edição completa é Fase 9.
+  //
+  // HOTFIX (auditoria de navegação pós-Fase 8): o botão "Configuração
+  // resumida (widgets)" navegava pra #/configuracoes/tv — saía do Admin V2
+  // de vez e caía nas 8 abas da tela antiga de Configurações (Integrações/
+  // Processos/Indicadores/Modo TV/Permissões/Notificações/Assistências/
+  // Dados), quebrando a experiência do V2. Correção: em vez de navegar,
+  // renderiza INLINE, aqui dentro, a mesma função que já existe e já está
+  // exportada pra isso — M.Pages._configSecoes.tv() (configuracoes.js) —
+  // que é quem tem os switches ligados a Act.toggleTvWidget de verdade.
+  // Nenhuma lógica nova: nem Store novo, nem rota nova, nem duplicação de
+  // Act.toggleTvWidget — é a MESMA função de sempre, só chamada de outro
+  // lugar. #/configuracoes/tv continua existindo, intacta, só como
+  // compatibilidade técnica — nenhum fluxo novo do V2 aponta mais pra ela.
+  //
+  // Gate desta configuração inline é tv.configurar (a mesma permissão que
+  // já decide se o botão aparecia) — de propósito NÃO usa admin.configuracoes,
+  // pra não criar uma dependência artificial entre as duas permissões (ver
+  // achado da auditoria: elas são editáveis independentemente uma da outra
+  // na matriz de Permissões). Sem tv.configurar: só resumo/preview, igual
+  // sempre foi.
+  //
+  // HOTFIX (contagem "Widgets ativos"): a contagem antiga só olhava as
+  // chaves JÁ SALVAS em state.tvWidgetsAtivos (Object.keys(...).length) —
+  // então com o estado ainda "limpo" (nenhum toggle salvo) mostrava 0,
+  // mesmo com todo widget aparecendo ligado nos switches (que tratam chave
+  // ausente como ativo por padrão). Corrigido reaproveitando
+  // M.Pages._configSecoes.tvWidgetsAtivosEfetivo() — a MESMA função/regra
+  // que os switches usam (configuracoes.js) — em vez de uma segunda leitura
+  // inventada aqui.
   // ============================================================
   function tvResumoHtml(){
-    const widgets = M.Store.state.tvWidgetsAtivos || {};
-    const ativos = Object.keys(widgets).filter(k=>widgets[k]!==false).length;
     const podeConfigurar = M.Store.pode("tv.configurar");
     const quemPodeConfigurar = PERFIS_OFICIAIS.concat(["TV"]).map(k=>M.perfilDef(k)).filter(p=>p && M.Store.podePerfil(p.key,"tv.configurar")).map(p=>p.label);
+    const configSecs = M.Pages._configSecoes;
+    const ativos = (configSecs && configSecs.tvWidgetsAtivosEfetivo) ? configSecs.tvWidgetsAtivosEfetivo().length : 0;
+    const configuracaoInlineHtml = (podeConfigurar && configSecs && configSecs.tv) ? configSecs.tv() : "";
     return `
       <div class="card pad">
         <div class="card-title">${UI.icon('tv',15)} Modo TV — status</div>
@@ -618,10 +648,12 @@
         </tbody></table>
         <div class="flex-gap" style="margin-top:12px;">
           <a class="btn sm" href="#/chao-de-fabrica">${UI.icon('tv',13)} Ver painel (preview)</a>
-          ${podeConfigurar? `<a class="btn sm" href="#/configuracoes/tv">${UI.icon('settings',13)} Configuração resumida (widgets)</a>` : ""}
         </div>
         <p class="small muted" style="margin-top:10px;">Edição completa do Modo TV (layout livre, novo editor) é escopo da Fase 9 — não antecipada aqui.</p>
-      </div>`;
+      </div>
+      ${configuracaoInlineHtml ? `
+      <div class="sec-head" style="margin-top:16px;"><div class="sec-title"><b>Configuração resumida (widgets)</b></div></div>
+      ${configuracaoInlineHtml}` : ""}`;
   }
   function secTv(){
     if(!M.Store.pode("admin.ver")) return semAcessoHtml("a TV");

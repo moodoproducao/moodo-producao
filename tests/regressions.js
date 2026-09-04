@@ -4468,6 +4468,152 @@ console.log("Fase 7.5 — Detalhe Rápido (Context Drawer) + Kanban/Hoje/Obra (P
   assert.ok(htmlPanorama.includes("kpi-row"), "Panorama precisa usar a faixa de KPI compacta padrão (mesma de Hoje/Obras)");
 
   console.log("Fase 8 — Admin V2 (Panorama/Indicadores/Desempenho/Equipe/Auditoria/Configurações): OK");
+
+  // ------------------------------------------------------------------
+  // HOTFIX FASE 8 — auditoria de navegação: Admin → TV → "Configuração
+  // resumida (widgets)" não pode mais navegar pra #/configuracoes/tv (tela
+  // antiga de 8 abas) — tem que renderizar OS MESMOS switches inline, sem
+  // sair do Admin V2. Gate é tv.configurar, sem dependência artificial de
+  // admin.configuracoes. Rota legada continua existindo e continua guardada
+  // pela MESMA permissão de sempre (admin.configuracoes), só não é mais
+  // navegada por nenhum fluxo novo.
+  // ------------------------------------------------------------------
+  function passaNaRotaAdmin(app, key){
+    const perm = app.M.Router.ROUTE_PERMS[key];
+    if(!perm) return true;
+    return Array.isArray(perm) ? perm.some(p=>app.M.Store.pode(p)) : app.M.Store.pode(perm);
+  }
+
+  // ADMIN (Paulo Henrique): tem tv.configurar E admin.configuracoes — vê os
+  // switches, e o HTML não pode mais conter nenhum link pra #/configuracoes.
+  appAdmin.M.Store.setUsuarioAtual("Paulo Henrique");
+  const htmlTvAdmin = appAdmin.M.Pages.admin("tv").html;
+  assert.ok(!/href="#\/configuracoes/.test(htmlTvAdmin), "Admin→TV não pode mais linkar pra #/configuracoes (nenhuma sub-rota) — é o bug reportado na auditoria");
+  assert.ok(/Act\.toggleTvWidget\(/.test(htmlTvAdmin), "quem tem tv.configurar precisa ver os switches funcionais (mesma Act.toggleTvWidget de sempre) INLINE na aba TV");
+  assert.ok(/class="switch/.test(htmlTvAdmin), "switches de widget precisam estar de fato no HTML da aba TV do Admin V2");
+  assert.ok(htmlTvAdmin.includes('href="#/chao-de-fabrica"'), "o preview do painel físico continua linkando normalmente (não fazia parte do bug)");
+
+  // toggle real: liga/desliga o mesmo Store.state.tvWidgetsAtivos de sempre
+  // (nenhum Store novo, nenhuma persistência paralela)
+  const widgetTeste = "corte";
+  const antesToggle = appAdmin.M.Store.state.tvWidgetsAtivos ? appAdmin.M.Store.state.tvWidgetsAtivos[widgetTeste] : undefined;
+  appAdmin.Act.toggleTvWidget(widgetTeste);
+  const depoisToggle = appAdmin.M.Store.state.tvWidgetsAtivos[widgetTeste];
+  assert.ok(depoisToggle !== antesToggle || (antesToggle===undefined && depoisToggle===false), "Act.toggleTvWidget precisa continuar alterando state.tvWidgetsAtivos de verdade (mesmo caminho de sempre)");
+  appAdmin.Act.toggleTvWidget(widgetTeste); // devolve ao estado original
+
+  // Configurações→TV (categoria dentro do Admin V2) herda a mesma correção,
+  // de graça, por chamar a mesma tvResumoHtml() — também não pode linkar
+  // pra fora.
+  appAdmin.M.UIState.adminConfigCategoria = "tv";
+  const htmlConfigTvAdmin = appAdmin.M.Pages.admin("configuracoes").html;
+  assert.ok(!/href="#\/configuracoes\/tv/.test(htmlConfigTvAdmin), "Admin→Configurações→TV também não pode linkar pra #/configuracoes/tv");
+  assert.ok(/Act\.toggleTvWidget\(/.test(htmlConfigTvAdmin), "Admin→Configurações→TV também precisa mostrar os switches inline (mesma função reaproveitada)");
+  appAdmin.M.UIState.adminConfigCategoria = "geral";
+
+  // Sem tv.configurar: só resumo/preview, nunca os switches (comportamento
+  // já existia — a correção não pode ter mudado isso)
+  appAdmin.M.Store.setUsuarioAtual("Beatriz Nogueira"); // PCP: verConfiguracoes:true, mas tv.configurar:false por padrão
+  assert.equal(appAdmin.M.Store.pode("tv.configurar"), false, "pré-condição: PCP não tem tv.configurar por padrão");
+  const htmlTvPCP = appAdmin.M.Pages.admin("tv").html;
+  assert.ok(!/Act\.toggleTvWidget\(/.test(htmlTvPCP), "sem tv.configurar só pode ver o resumo/preview — nunca os switches");
+  assert.ok(!/class="switch/.test(htmlTvPCP), "sem tv.configurar não pode haver nenhum switch no HTML");
+
+  // Nenhuma dependência artificial de admin.configuracoes: dando SÓ
+  // tv.configurar (sem admin.configuracoes) pra um perfil, os switches
+  // continuam aparecendo — e a rota legada continua bloqueada por conta
+  // própria, pela MESMA permissão de sempre. GESTOR é o perfil ideal pra
+  // provar isso: tem admin.ver:true por padrão (então consegue ver a aba TV
+  // de verdade, não cai no "sem acesso" genérico) e admin.configuracoes:
+  // false por padrão — exatamente a combinação que a auditoria queria testar.
+  // GESTOR não tem colaborador atribuído por padrão (Fase 1), então
+  // atribuímos o perfil temporariamente a um colaborador existente só pra
+  // este teste, e revertemos no final.
+  const beatriz = appAdmin.M.COLABORADORES.find(c=>c.nome==="Beatriz Nogueira");
+  const perfilOriginalBeatriz = beatriz.perfil;
+  beatriz.perfil = "GESTOR";
+  appAdmin.M.Store.setUsuarioAtual("Beatriz Nogueira");
+  assert.equal(appAdmin.M.Store.pode("admin.ver"), true, "pré-condição: GESTOR tem admin.ver (consegue ver a aba TV)");
+  assert.equal(appAdmin.M.Store.pode("tv.configurar"), false, "pré-condição: GESTOR não tem tv.configurar por padrão");
+  assert.equal(appAdmin.M.Store.pode("admin.configuracoes"), false, "pré-condição: GESTOR não tem admin.configuracoes por padrão");
+  const htmlTvGestorAntes = appAdmin.M.Pages.admin("tv").html;
+  assert.ok(!/Act\.toggleTvWidget\(/.test(htmlTvGestorAntes), "GESTOR sem tv.configurar ainda vê só o resumo/preview");
+
+  appAdmin.M.Store.setUsuarioAtual("Paulo Henrique"); // precisa de editarPermissoes pra mexer na matriz
+  appAdmin.M.Store.setPermissao("GESTOR", "tv.configurar", true);
+  assert.equal(appAdmin.M.Store.state.permissoes.GESTOR["admin.configuracoes"], false,
+    "pré-condição: não tocamos em admin.configuracoes do GESTOR — continua no valor padrão (false)");
+  appAdmin.M.Store.setUsuarioAtual("Beatriz Nogueira");
+  assert.equal(appAdmin.M.Store.pode("tv.configurar"), true, "GESTOR agora tem tv.configurar (só essa, isolada)");
+  assert.equal(appAdmin.M.Store.pode("admin.configuracoes"), false, "GESTOR continua SEM admin.configuracoes — as duas permissões são independentes");
+  const htmlTvGestorComTv = appAdmin.M.Pages.admin("tv").html;
+  assert.ok(/Act\.toggleTvWidget\(/.test(htmlTvGestorComTv), "com tv.configurar (mesmo sem admin.configuracoes) os switches precisam aparecer — sem dependência artificial entre as duas permissões");
+  assert.equal(passaNaRotaAdmin(appAdmin, "configuracoes"), false, "a rota legada #/configuracoes(/tv) continua bloqueada pra quem não tem admin.configuracoes — a correção não abriu nenhum buraco de permissão");
+  // limpa a permissão/perfil de teste pra não vazar pro resto da suíte
+  appAdmin.M.Store.setUsuarioAtual("Paulo Henrique");
+  appAdmin.M.Store.setPermissao("GESTOR", "tv.configurar", false);
+  beatriz.perfil = perfilOriginalBeatriz;
+  appAdmin.M.Store.setUsuarioAtual("Paulo Henrique");
+
+  // fonte-única: o próprio texto do arquivo não pode ter recriado
+  // Act.toggleTvWidget nem duplicado a lista de widgets — tem que ser
+  // literalmente a mesma função de configuracoes.js, chamada por referência.
+  const adminSrcTv = fs.readFileSync(path.join(root, "js/pages/admin.js"), "utf8");
+  assert.ok(!/toggleTvWidget\s*[:=]\s*function/.test(adminSrcTv), "admin.js não pode ter criado uma segunda implementação de toggleTvWidget");
+  assert.ok(/_configSecoes\.tv\(\)/.test(adminSrcTv), "admin.js precisa chamar M.Pages._configSecoes.tv() por referência, não duplicar o markup dos widgets");
+
+  console.log("Hotfix Fase 8 — Admin→TV: configuração de widgets inline, sem navegar pra #/configuracoes/tv: OK");
+
+  // ------------------------------------------------------------------
+  // HOTFIX FASE 8 (2) — contagem "Widgets ativos" do card de status precisa
+  // usar EXATAMENTE a mesma semântica dos switches (chave ausente/true =
+  // ativo, chave explicitamente false = inativo), reaproveitando o mesmo
+  // helper — nunca uma segunda regra de contagem.
+  // ------------------------------------------------------------------
+  {
+    const TOTAL_WIDGETS = 9; // producao-hoje, corte, usinagem, fitagem, pre-montagem, meta-mensal, wip, atencao-rotativo, entregas
+    appAdmin.M.Store.setUsuarioAtual("Paulo Henrique"); // ADMIN: tv.configurar + admin.ver
+
+    // 1) estado "limpo" (nada salvo ainda) — todo widget é ativo por
+    // default, então a contagem tem que bater com o total, não com 0.
+    appAdmin.M.Store.state.tvWidgetsAtivos = {};
+    let htmlTv = appAdmin.M.Pages.admin("tv").html;
+    assert.ok(htmlTv.includes(`<b>${TOTAL_WIDGETS}</b>`), `com state.tvWidgetsAtivos vazio, o contador precisa mostrar ${TOTAL_WIDGETS} (todos default-on), nunca 0`);
+    const switchesOnVazio = (htmlTv.match(/class="switch on"/g)||[]).length;
+    assert.equal(switchesOnVazio, TOTAL_WIDGETS, "todos os switches renderizados precisam estar 'on' quando nada foi salvo ainda");
+
+    // 2) um widget marcado false — contador cai exatamente 1
+    appAdmin.M.Store.state.tvWidgetsAtivos = {"corte": false};
+    htmlTv = appAdmin.M.Pages.admin("tv").html;
+    assert.ok(htmlTv.includes(`<b>${TOTAL_WIDGETS-1}</b>`), "um widget marcado false precisa derrubar o contador em exatamente 1");
+
+    // 3) widget marcado true explicitamente — continua contado (não é o
+    // "false" que soma, é qualquer coisa != false)
+    appAdmin.M.Store.state.tvWidgetsAtivos = {"corte": false, "usinagem": true};
+    htmlTv = appAdmin.M.Pages.admin("tv").html;
+    assert.ok(htmlTv.includes(`<b>${TOTAL_WIDGETS-1}</b>`), "widget marcado true explicitamente continua contado normalmente (só false tira da contagem)");
+
+    // 4) contador e switches usam a MESMA fonte de verdade: o número de
+    // switches "on" no HTML precisa bater com o número que o card mostra,
+    // pra qualquer combinação de estado.
+    const numeroExibido = Number((htmlTv.match(/Widgets ativos<\/td><td class="right"><b>(\d+)<\/b>/)||[])[1]);
+    const switchesOn = (htmlTv.match(/class="switch on"/g)||[]).length;
+    assert.equal(numeroExibido, switchesOn, "o número do card e a quantidade de switches ligados precisam bater sempre — mesma fonte de verdade, nunca duas regras");
+    assert.equal(numeroExibido, TOTAL_WIDGETS-1);
+
+    // 5) toggle via Act.toggleTvWidget atualiza o contador depois de um
+    // novo render (não fica preso no valor antigo)
+    appAdmin.Act.toggleTvWidget("corte"); // estava false -> volta a ativo
+    const htmlTvDepoisToggle = appAdmin.M.Pages.admin("tv").html;
+    assert.ok(htmlTvDepoisToggle.includes(`<b>${TOTAL_WIDGETS}</b>`), "depois de reativar via Act.toggleTvWidget, o contador precisa refletir isso no próximo render");
+
+    // 6) nenhuma rota muda com nada disso — mesma checagem de sempre
+    assert.ok(!/href="#\/configuracoes/.test(htmlTvDepoisToggle), "a correção da contagem não pode ter reintroduzido nenhum link pra #/configuracoes");
+
+    // limpa o estado de teste
+    appAdmin.M.Store.state.tvWidgetsAtivos = {};
+  }
+  console.log("Hotfix Fase 8 (2) — Admin→TV: contagem de 'Widgets ativos' usa a mesma semântica dos switches: OK");
 }
 
 // ==================================================================

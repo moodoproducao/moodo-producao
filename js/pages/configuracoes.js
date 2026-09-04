@@ -325,28 +325,46 @@
       </div>`;
   }
 
+  // HOTFIX (Fase 8 — contagem de widgets ativos): biblioteca de widgets
+  // movida pro escopo do módulo (era local a secTv()) porque agora também
+  // precisa ser lida por fora, sem duplicar a lista — ver
+  // tvWidgetsAtivosEfetivo() abaixo, reaproveitada pelo card de status do
+  // Admin V2 (js/pages/admin.js) pra contar "Widgets ativos" com a MESMA
+  // semântica dos switches, nunca uma segunda regra.
+  const TV_WIDGETS = [
+    {id:"producao-hoje", nome:"Produção hoje", tipo:"FIXO", tamanho:"GRANDE", cat:"Operação"},
+    {id:"corte", nome:"Corte", tipo:"FIXO", tamanho:"MEDIO", cat:"Operação"},
+    {id:"usinagem", nome:"Usinagem", tipo:"FIXO", tamanho:"MEDIO", cat:"Operação"},
+    {id:"fitagem", nome:"Fitagem", tipo:"FIXO", tamanho:"MEDIO", cat:"Operação"},
+    {id:"pre-montagem", nome:"Pré-montagem", tipo:"FIXO", tamanho:"MEDIO", cat:"Operação"},
+    {id:"meta-mensal", nome:"Meta mensal", tipo:"FIXO", tamanho:"GRANDE", cat:"Gestão"},
+    {id:"wip", nome:"WIP por etapa", tipo:"FIXO", tamanho:"HORIZONTAL", cat:"Gestão"},
+    {id:"atencao-rotativo", nome:"Atenção da equipe", tipo:"ROTATIVO", tamanho:"HORIZONTAL", cat:"Atenção"},
+    {id:"entregas", nome:"Próximas entregas", tipo:"CONDICIONAL", tamanho:"HORIZONTAL", cat:"Logística"},
+  ];
+  // Semântica única de "widget efetivamente ativo" (a mesma que os switches
+  // sempre usaram: `ativos[w.id]!==false`) — chave explicitamente false =
+  // inativo; true ou AUSENTE = ativo (todo widget desta lista já nasce
+  // ativo por padrão; não existe hoje um "default desligado" por widget).
+  // Um único ponto de leitura pros dois lugares que precisam disso: os
+  // switches (aqui) e o contador do card de status (Admin V2).
+  function tvWidgetAtivo(widgetId){
+    const salvos = M.Store.state.tvWidgetsAtivos || {};
+    return salvos[widgetId] !== false;
+  }
+  function tvWidgetsAtivosEfetivo(){
+    return TV_WIDGETS.filter(w=> tvWidgetAtivo(w.id));
+  }
   function secTv(){
-    const widgets = [
-      {id:"producao-hoje", nome:"Produção hoje", tipo:"FIXO", tamanho:"GRANDE", cat:"Operação"},
-      {id:"corte", nome:"Corte", tipo:"FIXO", tamanho:"MEDIO", cat:"Operação"},
-      {id:"usinagem", nome:"Usinagem", tipo:"FIXO", tamanho:"MEDIO", cat:"Operação"},
-      {id:"fitagem", nome:"Fitagem", tipo:"FIXO", tamanho:"MEDIO", cat:"Operação"},
-      {id:"pre-montagem", nome:"Pré-montagem", tipo:"FIXO", tamanho:"MEDIO", cat:"Operação"},
-      {id:"meta-mensal", nome:"Meta mensal", tipo:"FIXO", tamanho:"GRANDE", cat:"Gestão"},
-      {id:"wip", nome:"WIP por etapa", tipo:"FIXO", tamanho:"HORIZONTAL", cat:"Gestão"},
-      {id:"atencao-rotativo", nome:"Atenção da equipe", tipo:"ROTATIVO", tamanho:"HORIZONTAL", cat:"Atenção"},
-      {id:"entregas", nome:"Próximas entregas", tipo:"CONDICIONAL", tamanho:"HORIZONTAL", cat:"Logística"},
-    ];
-    const ativos = M.Store.state.tvWidgetsAtivos || widgets.reduce((o,w)=>(o[w.id]=true,o),{});
     return `
       <div class="help-banner">${UI.icon('tv',13)} Editor simplificado nesta versão do protótipo: ative/desative widgets e ajuste a ordem com as setas. Um editor com arraste-e-solte livre de posição/tamanho é evolução natural quando o Modo TV tiver um backend real por trás.</div>
       <div class="card pad">
         <div class="card-title">Biblioteca de widgets</div>
         <div class="widget-lib">
-          ${widgets.map(w=>`
+          ${TV_WIDGETS.map(w=>`
             <div class="widget-card">
               <div class="winfo"><div class="wname">${w.nome}</div><div class="wtype"><span>${w.cat} · ${w.tipo}</span> <span class="size-pill">${w.tamanho}</span></div></div>
-              <button class="switch ${ativos[w.id]!==false?'on':''}" onclick="Act.toggleTvWidget('${w.id}')"></button>
+              <button class="switch ${tvWidgetAtivo(w.id)?'on':''}" onclick="Act.toggleTvWidget('${w.id}')"></button>
             </div>`).join("")}
         </div>
       </div>`;
@@ -486,5 +504,10 @@
     integracoes: secIntegracoes, processos: secProcessos, indicadores: secIndicadores,
     tv: secTv, permissoes: secPermissoes, notificacoes: secNotificacoes,
     assistencias: secAssistencias, dados: secDados,
+    // HOTFIX (Fase 8 — contagem de widgets ativos): exportado à parte pra
+    // quem só precisa DO NÚMERO (card de status do Admin V2), sem montar o
+    // HTML inteiro da biblioteca de widgets — mesma fonte de verdade que
+    // secTv() usa pros switches, nunca uma segunda regra de contagem.
+    tvWidgetsAtivosEfetivo: tvWidgetsAtivosEfetivo,
   };
 })();
